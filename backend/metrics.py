@@ -2209,3 +2209,107 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
         "n_candles_5m": len(candles_5m),
         "n_candles_1h": len(candles_1h),
     }
+
+
+async def compute_aggressor_ratio_series(
+    symbol: str = None, 
+    window_seconds: int = 1800,  # 30m total window
+    bucket_size: int = 60,       # 1m buckets
+) -> Dict:
+    """
+    Trade aggressor ratio time series: % buy-initiated trades per time bucket.
+    
+    Aggressor = taker side: if side='buy', buyer was aggressor (market buy order).
+    Returns time series of buy% over 30m in 1m buckets.
+    
+    Signal:
+    - >70% buyers → strong buy aggression
+    - <30% buyers → strong sell aggression
+    """
+    import time
+    from storage import get_recent_trades
+    
+    since = time.time() - window_seconds
+    trades = await get_recent_trades(limit=20000, since=since, symbol=symbol)
+    
+    if not trades:
+        return {
+            "series": [], "current_ratio": None,
+            "description": "No data", "signal": "no_data",
+        }
+    
+    # Build buckets
+    buckets = {}
+    for t in trades:
+        b = int(t["ts"] // bucket_size) * bucket_size
+        side = (t.get("side") or "").lower()
+        if b not in buckets:
+            buckets[b] = {"buy": 0, "sell": 0, "total": 0}
+        buckets[b]["total"] += 1
+        if side in ("buy",):
+            buckets[b]["buy"] += 1
+        else:
+            buckets[b]["sell"] += 1
+    
+    sorted_buckets = sorted(buckets.items())
+    series = []
+    for ts, c in sorted_buckets:
+        total = c["total"]
+        buy_ratio = c["buy"] / total if total > 0 else 0.5
+        series.append({
+            "ts": ts,
+            "buy_pct": round(buy_ratio * 100, 2),
+            "sell_pct": round((1 - buy_ratio) * 100, 2),
+            "total": total,
+            "buy": c["buy"],
+            "sell": c["sell"],
+        })
+    
+    if not series:
+        return {
+            "series": [], "current_ratio": None,
+            "description": "No buckets", "signal": "no_data",
+        }
+    
+    # Current ratio from last bucket + recent weighted
+    last = series[-1]
+    current_pct = last["buy_pct"]
+    
+    # Rolling average of last 5 buckets for smoother signal
+    recent = series[-5:]
+    total_trades = sum(b["total"] for b in recent)
+    total_buy = sum(b["buy"] for b in recent)
+    rolling_pct = (total_buy / total_trades * 100) if total_trades > 0 else 50.0
+    
+    if rolling_pct >= 70:
+        signal = "strong_buy_aggression"
+        emoji = "🟢"
+        desc = f"{emoji} Strong buy aggression: {rolling_pct:.1f}% buyers (30m rolling)"
+    elif rolling_pct >= 60:
+        signal = "mild_buy_aggression"
+        emoji = "🟡"
+        desc = f"{emoji} Mild buy aggression: {rolling_pct:.1f}% buyers"
+    elif rolling_pct <= 30:
+        signal = "strong_sell_aggression"
+        emoji = "🔴"
+        desc = f"{emoji} Strong sell aggression: {rolling_pct:.1f}% buyers ({(100 - rolling_pct):.1f}% sellers)"
+    elif rolling_pct <= 40:
+        signal = "mild_sell_aggression"
+        emoji = "🟡"
+        desc = f"{emoji} Mild sell aggression: {rolling_pct:.1f}% buyers"
+    else:
+        signal = "balanced"
+        emoji = "⚪"
+        desc = f"{emoji} Balanced: {rolling_pct:.1f}% buyers"
+    
+    return {
+        "series": series,
+        "current_ratio": round(current_pct, 2),
+        "rolling_buy_pct": round(rolling_pct, 2),
+        "rolling_sell_pct": round(100 - rolling_pct, 2),
+        "signal": signal,
+        "description": desc,
+        "n_buckets": len(series),
+        "window_seconds": window_seconds,
+        "bucket_size": bucket_size,
+    }

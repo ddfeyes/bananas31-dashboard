@@ -53,6 +53,7 @@ from metrics import (
     compute_vpin,
     compute_realized_vs_implied_vol,
     compute_mtf_rsi_divergence,
+    compute_aggressor_ratio_series,
 )
 
 router = APIRouter(prefix="/api")
@@ -453,6 +454,20 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/aggressor-ratio")
+async def aggressor_ratio_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=1800, ge=300, le=14400),
+    bucket: int = Query(default=60, ge=10, le=600),
+):
+    """Trade aggressor ratio time series: % buy vs sell taker side per time bucket."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_aggressor_ratio_series(symbol=target, window_seconds=window, bucket_size=bucket)
     return {"status": "ok", "symbol": target, **data}
 
 

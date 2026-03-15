@@ -929,6 +929,23 @@
       <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
     </div>
 
+    <div id="alert-aggressor" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">⚔️ TRADE AGGRESSOR RATIO (30m)</div>
+      <div id="aggressor-text" style="color:var(--muted)">Loading...</div>
+      <div style="display:flex;gap:8px;margin-top:6px;font-size:11px;align-items:center;">
+        <div style="flex:1;">
+          <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--bg3);">
+            <div id="aggressor-buy-bar" style="height:100%;background:var(--green);transition:width 0.4s;" ></div>
+            <div id="aggressor-sell-bar" style="height:100%;background:var(--red);transition:width 0.4s;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:3px;">
+            <span style="color:var(--green);">🟢 Buy <span id="aggressor-buy-pct">—</span>%</span>
+            <span style="color:var(--red);">Sell <span id="aggressor-sell-pct">—</span>% 🔴</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="alert-mtf-rsi" class="alert-box" style="margin-bottom:12px;">
       <div class="alert-label">📊 MTF RSI DIVERGENCE</div>
       <div id="mtf-rsi-text" style="color:var(--muted)">Loading...</div>
@@ -2735,6 +2752,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshAggressorRatio();
   refreshMtfRsi();
   refreshRealizedVol();
   refreshVpin();
@@ -4690,6 +4708,40 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── Trade Aggressor Ratio ─────────────────────────────────────────────────────
+async function refreshAggressorRatio() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/aggressor-ratio?symbol=${enc}&window=1800&bucket=60`);
+  const box = document.getElementById('alert-aggressor');
+  const textEl = document.getElementById('aggressor-text');
+  const buyBar = document.getElementById('aggressor-buy-bar');
+  const sellBar = document.getElementById('aggressor-sell-bar');
+  const buyPct = document.getElementById('aggressor-buy-pct');
+  const sellPct = document.getElementById('aggressor-sell-pct');
+  if (!data || !textEl) return;
+
+  if (data.rolling_buy_pct !== null && data.rolling_buy_pct !== undefined) {
+    const bp = data.rolling_buy_pct;
+    const sp = data.rolling_sell_pct;
+    const sig = data.signal;
+    const isAlert = sig === 'strong_buy_aggression' || sig === 'strong_sell_aggression';
+    const color = sig.includes('buy') ? 'var(--green)' : sig.includes('sell') ? 'var(--red)' : 'var(--muted)';
+    textEl.style.color = color;
+    textEl.textContent = data.description || '';
+    box.className = isAlert ? 'alert-box active' : 'alert-box';
+    buyBar.style.width = bp + '%';
+    sellBar.style.width = sp + '%';
+    buyPct.textContent = bp.toFixed(1);
+    sellPct.textContent = sp.toFixed(1);
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+  }
+}
+
 // ── Multi-timeframe RSI Divergence ───────────────────────────────────────────
 async function refreshMtfRsi() {
   const sym = activeSymbol || currentSymbol;
@@ -6148,6 +6200,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshAggressorRatio();
+  setInterval(refreshAggressorRatio, 15000);  // every 15s
   refreshMtfRsi();
   setInterval(refreshMtfRsi, 30000);  // every 30s
   refreshRealizedVol();
