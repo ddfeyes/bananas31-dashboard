@@ -2469,7 +2469,9 @@ async function refreshHeatmap() {
 
 // ── Live Trade Tape ───────────────────────────────────────────────────────────
 const tapeEntries = [];
-const TAPE_MAX = 100;
+const TAPE_MAX = 500;
+const TAPE_ROW_HEIGHT = 18; // px per row (approximate)
+const TAPE_BUFFER = 20;     // extra rows above/below visible area
 
 function initTape() {
   // Preload last 50 trades from REST
@@ -2499,19 +2501,18 @@ function renderTape() {
 }
 
 function renderTapeIncremental(t) {
+  // For virtual tape: just re-render top of viewport (scroll is at top normally)
+  // Only full re-render if tape is small; for large tape use virtual render
   const list = document.getElementById('tape-list');
   if (!list) return;
-  const div = document.createElement('div');
-  div.innerHTML = makeTapeRow(t);
-  const row = div.firstElementChild;
-  if (row) {
-    list.insertBefore(row, list.firstChild);
-    // Trim excess rows
-    while (list.childElementCount > TAPE_MAX) {
-      list.removeChild(list.lastChild);
-    }
+  const scrolledDown = list.scrollTop > TAPE_ROW_HEIGHT * 3;
+  if (scrolledDown) {
+    // Don't disturb user's scroll position — just update count
+    updateTapeCount();
+    return;
   }
-  updateTapeCount();
+  // Near top: do virtual render (shows newest rows)
+  renderTape();
 }
 
 function updateTapeCount() {
@@ -2566,17 +2567,45 @@ function setTapeFilter(minUsd) {
   renderTape();
 }
 
-// Override renderTape to respect filter
-const _origRenderTape = renderTape;
+// ── Virtual tape render ───────────────────────────────────────────────────────
+// Override renderTape to support virtualization + filtering
 function renderTape() {
   const list = document.getElementById('tape-list');
   if (!list) return;
   const filtered = tapeMinUsd > 0
     ? tapeEntries.filter(t => (t.price * t.qty) >= tapeMinUsd)
     : tapeEntries;
-  list.innerHTML = filtered.slice().reverse().map(t => makeTapeRow(t)).join('');
+  const rows = filtered.slice().reverse(); // newest first
+  const total = rows.length;
+  const containerH = list.clientHeight || 280;
+  const scrollTop = list.scrollTop;
+
+  const firstVisible = Math.max(0, Math.floor(scrollTop / TAPE_ROW_HEIGHT) - TAPE_BUFFER);
+  const lastVisible  = Math.min(total, Math.ceil((scrollTop + containerH) / TAPE_ROW_HEIGHT) + TAPE_BUFFER);
+
+  const topSpacerH = firstVisible * TAPE_ROW_HEIGHT;
+  const bottomSpacerH = Math.max(0, (total - lastVisible) * TAPE_ROW_HEIGHT);
+
+  const visibleRows = rows.slice(firstVisible, lastVisible);
+  list.innerHTML =
+    `<div style="height:${topSpacerH}px;"></div>` +
+    visibleRows.map(t => makeTapeRow(t)).join('') +
+    `<div style="height:${bottomSpacerH}px;"></div>`;
   updateTapeCount();
 }
+
+// Re-render on scroll for virtual tape
+(function() {
+  let _tapeScrollRaf = null;
+  document.addEventListener('DOMContentLoaded', () => {
+    const list = document.getElementById('tape-list');
+    if (!list) return;
+    list.addEventListener('scroll', () => {
+      if (_tapeScrollRaf) cancelAnimationFrame(_tapeScrollRaf);
+      _tapeScrollRaf = requestAnimationFrame(() => renderTape());
+    }, { passive: true });
+  });
+})();
 
 // ── Alert Sound ──────────────────────────────────────────────────────────────
 let alertSoundEnabled = false;
