@@ -82,6 +82,73 @@ async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Di
     return result
 
 
+def compute_liq_heatmap(
+    liqs: List[dict],
+    time_bucket: int = 300,
+    price_bins: int = 20,
+) -> dict:
+    """Aggregate liquidations into a 2D heatmap grid (pure function, testable).
+
+    Args:
+        liqs:        list of liquidation dicts with ts, price, qty, side, value
+        time_bucket: seconds per time column (default 5 min)
+        price_bins:  number of price rows
+
+    Returns:
+        {
+          "cells": [{ts_bucket, price_bucket, price_mid, total_usd, long_usd, short_usd, count}],
+          "price_min", "price_max", "price_step", "time_bucket"
+        }
+
+    Side semantics: side="sell" = long liquidated; side="buy" = short liquidated.
+    """
+    if not liqs:
+        return {"cells": [], "price_min": 0.0, "price_max": 0.0,
+                "price_step": 0.0, "time_bucket": time_bucket}
+
+    prices = [float(l["price"]) for l in liqs]
+    price_min = min(prices)
+    price_max = max(prices)
+
+    # Guard against zero-range (all same price): expand slightly
+    if price_max == price_min:
+        price_min *= 0.999
+        price_max *= 1.001
+    price_step = (price_max - price_min) / price_bins
+
+    # Aggregate into cells keyed by (ts_bucket, price_bucket_index)
+    cells: dict = {}
+    for l in liqs:
+        ts_b = int(l["ts"] // time_bucket) * time_bucket
+        p_idx = int((float(l["price"]) - price_min) / price_step)
+        p_idx = max(0, min(price_bins - 1, p_idx))  # clamp to [0, price_bins-1]
+
+        key = (ts_b, p_idx)
+        if key not in cells:
+            cells[key] = {"ts_bucket": ts_b, "price_bucket": p_idx,
+                          "price_mid": price_min + (p_idx + 0.5) * price_step,
+                          "total_usd": 0.0, "long_usd": 0.0, "short_usd": 0.0, "count": 0}
+
+        usd = float(l.get("value") or float(l["price"]) * float(l["qty"]))
+        side = (l.get("side") or "").lower()
+
+        cells[key]["total_usd"] += usd
+        cells[key]["count"] += 1
+        if side == "sell":      # sell liquidation = long position forced closed
+            cells[key]["long_usd"] += usd
+        elif side == "buy":     # buy liquidation = short position forced closed
+            cells[key]["short_usd"] += usd
+
+    sorted_cells = sorted(cells.values(), key=lambda c: (c["ts_bucket"], c["price_bucket"]))
+    return {
+        "cells": sorted_cells,
+        "price_min": round(price_min, 8),
+        "price_max": round(price_max, 8),
+        "price_step": round(price_step, 8),
+        "time_bucket": time_bucket,
+    }
+
+
 async def compute_volume_imbalance(window_seconds: int = 60, symbol: str = None) -> Dict:
     """Buy vs sell volume ratio over window."""
     since = time.time() - window_seconds

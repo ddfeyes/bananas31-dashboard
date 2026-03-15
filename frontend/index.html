@@ -1081,6 +1081,15 @@
     <canvas id="chart-liq" style="margin-top:10px;"></canvas>
   </div>
 
+  <!-- Liquidation Magnitude Heatmap -->
+  <div class="card">
+    <h2><span class="card-icon">🔥</span>Liquidation Heatmap (1h)
+      <span id="liq-heatmap-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">x=time (5m buckets) · y=price · bubble size=USD liquidated · red=longs · blue=shorts</div>
+    <canvas id="chart-liq-heatmap" style="height:200px !important;"></canvas>
+  </div>
+
   <!-- Whale Trades -->
   <div class="card" id="card-whales">
     <h2><span class="card-icon">🐳</span>Whale Trades &gt;$50k (1h)
@@ -2064,6 +2073,40 @@ let chartSpread = null;
   });
 })();
 
+// Liquidation Heatmap bubble chart
+let chartLiqHeatmap = null;
+(function initLiqHeatmapChart() {
+  const ctx = document.getElementById('chart-liq-heatmap');
+  if (!ctx) return;
+  chartLiqHeatmap = new Chart(ctx, {
+    type: 'bubble',
+    data: { datasets: [
+      { label: 'Long liq', data: [], backgroundColor: 'rgba(239,83,80,0.55)', borderColor: 'rgba(239,83,80,0.8)', borderWidth: 1 },
+      { label: 'Short liq', data: [], backgroundColor: 'rgba(66,165,245,0.55)', borderColor: 'rgba(66,165,245,0.8)', borderWidth: 1 },
+    ]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', align: 'end', labels: { color: 'rgba(200,200,200,0.7)', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const d = ctx.raw;
+              return `$${(d._usd/1000).toFixed(1)}k @ $${d.y?.toFixed(4)} | ${new Date(d.x*1000).toLocaleTimeString()}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { type: 'linear', ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, callback: v => new Date(v*1000).toLocaleTimeString() }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, callback: v => '$'+v.toFixed(4) }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      },
+    },
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -3024,7 +3067,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3042,6 +3085,7 @@ async function refreshAll() {
     fetchJSON(`/api/trade-count-rate?interval=60&window=1800&symbol=${sym}`),
     fetchJSON(`/api/spread-tracker?window=1800&symbol=${sym}`),
     fetchJSON(`/api/flow-imbalance?window=3600&bucket_size=60&symbol=${sym}`),
+    fetchJSON(`/api/liquidation-heatmap?window=3600&time_bucket=300&price_bins=20&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3253,6 +3297,38 @@ async function refreshAll() {
     charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);
     charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
     charts.liq.update();
+  }
+
+  // ── Liquidation Heatmap ──────────────────────────────────────────────────
+  if (chartLiqHeatmap && liqHeatmap?.cells?.length) {
+    const cells = liqHeatmap.cells;
+    const maxUsd = Math.max(...cells.map(c => c.total_usd), 1);
+
+    // Separate long (red) and short (blue) bubbles
+    const longCells  = cells.filter(c => c.long_usd  > 0);
+    const shortCells = cells.filter(c => c.short_usd > 0);
+
+    // Bubble radius scaled by sqrt(USD) — sqrt gives perceptually proportional area
+    const scale = 20 / Math.sqrt(maxUsd);
+    const toPoint = (c, usd) => ({
+      x: c.ts_bucket,
+      y: c.price_mid,
+      r: Math.max(2, Math.sqrt(usd) * scale),
+      _usd: usd,
+    });
+
+    chartLiqHeatmap.data.datasets[0].data = longCells.map(c => toPoint(c, c.long_usd));
+    chartLiqHeatmap.data.datasets[1].data = shortCells.map(c => toPoint(c, c.short_usd));
+    chartLiqHeatmap.update('none');
+
+    const totalUsd = cells.reduce((s, c) => s + c.total_usd, 0);
+    const longUsd  = cells.reduce((s, c) => s + c.long_usd, 0);
+    const shortUsd = cells.reduce((s, c) => s + c.short_usd, 0);
+    const infoEl = document.getElementById('liq-heatmap-info');
+    if (infoEl) {
+      infoEl.textContent = `total: $${(totalUsd/1000).toFixed(1)}k · longs: $${(longUsd/1000).toFixed(1)}k · shorts: $${(shortUsd/1000).toFixed(1)}k`;
+      infoEl.style.color = longUsd > shortUsd ? 'var(--red)' : 'var(--accent)';
+    }
   }
 
   // Whale Trades card

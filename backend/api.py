@@ -32,6 +32,7 @@ from storage import (
 from metrics import (
     _cvd_delta,
     compute_cvd,
+    compute_liq_heatmap,
     compute_volume_imbalance,
     compute_oi_momentum,
     classify_market_phase,
@@ -3294,4 +3295,32 @@ async def vwap_band_endpoint(
         "description": desc,
         "window_seconds": window,
         "bucket_size": bucket,
+    }
+
+
+@router.get("/liquidation-heatmap")
+async def liquidation_heatmap(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=3600, ge=300, le=86400, description="Lookback window in seconds"),
+    time_bucket: int = Query(default=300, ge=30, le=3600, description="Time column width in seconds"),
+    price_bins: int = Query(default=20, ge=5, le=100, description="Number of price rows"),
+):
+    """
+    Liquidation magnitude heatmap: 2D grid of (time, price) cells.
+
+    Each cell: total USD liquidated in that time+price zone, split by
+    long_usd (sell-side liquidations) and short_usd (buy-side liquidations).
+    """
+    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    liqs = await get_recent_liquidations(limit=10000, since=time.time() - window, symbol=target)
+    heatmap = compute_liq_heatmap(liqs, time_bucket=time_bucket, price_bins=price_bins)
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "window_seconds": window,
+        **heatmap,
     }
