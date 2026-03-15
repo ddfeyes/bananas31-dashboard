@@ -684,6 +684,31 @@ async def multi_summary():
     return {"status": "ok", "symbols": results}
 
 
+@router.get("/health")
+async def health_check():
+    """Backend health: DB size, record counts, uptime."""
+    import os
+    from storage import DB_PATH
+    try:
+        db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        async with __import__('aiosqlite').connect(DB_PATH) as db:
+            counts = {}
+            for table in ["trades", "open_interest", "funding_rate", "liquidations", "orderbook_snapshots", "alert_history"]:
+                async with db.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+                    row = await cur.fetchone()
+                    counts[table] = row[0] if row else 0
+        syms = get_symbols()
+        return {
+            "status": "ok",
+            "db_size_mb": round(db_size / 1024 / 1024, 2),
+            "record_counts": counts,
+            "symbols": syms,
+            "symbol_count": len(syms),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.get("/stats")
 async def symbol_stats(symbol: Optional[str] = None):
     """24h price stats: open, high, low, close, volume, change%."""

@@ -684,6 +684,7 @@
   <div class="card">
     <h2>
       <span class="card-icon">📟</span>Live Trade Tape
+      <span id="tape-cvd" style="margin-left:8px;font-size:10px;font-weight:600;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0;"></span>
       <span id="tape-count" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
     </h2>
     <div id="tape-list" style="max-height:300px; overflow-y:auto; font-size:11px; font-family:'Menlo','Monaco','Consolas',monospace;"></div>
@@ -1676,6 +1677,18 @@ function renderTapeIncremental(t) {
 function updateTapeCount() {
   const el = document.getElementById('tape-count');
   if (el) el.textContent = `${tapeEntries.length} trades`;
+  // Update running CVD for tape window
+  const cvdEl = document.getElementById('tape-cvd');
+  if (cvdEl && tapeEntries.length > 0) {
+    let runningCvd = 0;
+    for (const t of tapeEntries) {
+      const side = (t.side || '').toLowerCase();
+      runningCvd += side === 'buy' ? t.qty : -t.qty;
+    }
+    const color = runningCvd > 0 ? 'var(--green)' : runningCvd < 0 ? 'var(--red)' : 'var(--muted)';
+    cvdEl.style.color = color;
+    cvdEl.textContent = `CVD: ${runningCvd > 0 ? '+' : ''}${fmtK(runningCvd)}`;
+  }
 }
 
 function makeTapeRow(t) {
