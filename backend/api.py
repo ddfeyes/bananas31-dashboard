@@ -30,6 +30,7 @@ from storage import (
     get_spread_stats,
 )
 from metrics import (
+    _cvd_delta,
     compute_cvd,
     compute_volume_imbalance,
     compute_oi_momentum,
@@ -3027,7 +3028,6 @@ async def cdv_oscillator_endpoint(
         b = int(t["ts"] // bucket) * bucket
         p = float(t.get("price") or 0)
         q = float(t.get("qty") or 0)
-        side = (t.get("side") or "").lower()
         if p <= 0:
             continue
         if b not in buckets:
@@ -3035,8 +3035,7 @@ async def cdv_oscillator_endpoint(
         bc = buckets[b]
         bc["prices"].append(p)
         bc["close"] = p
-        usd = p * q
-        bc["cvd_usd"] += usd if side == "buy" else -usd
+        bc["cvd_usd"] += _cvd_delta(t, use_usd=True)
 
     sorted_b = sorted(buckets.items())
     if len(sorted_b) < 3:

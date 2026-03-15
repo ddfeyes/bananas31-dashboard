@@ -13,15 +13,50 @@ from storage import (
 )
 
 
-async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Dict]:
-    """Cumulative Volume Delta over the last window."""
-    since = time.time() - window_seconds
-    trades = await get_trades_for_cvd(since, symbol=symbol)
+# ── CVD helpers ───────────────────────────────────────────────────────────────
 
+def _cvd_delta(trade: dict, use_usd: bool = False) -> float:
+    """Signed volume delta for a single trade.
+
+    Uses ``is_buyer_aggressor`` (authoritative taker-side field) with graceful
+    fallback to ``side`` string for legacy rows that predate the field.
+
+    Args:
+        trade:    dict with at minimum ``qty`` and optionally ``is_buyer_aggressor``,
+                  ``side``, ``price``.
+        use_usd:  if True return ``price * qty`` (USD notional); otherwise ``qty``
+                  (base currency, default for CVD charts).
+
+    Returns:
+        +vol if buyer initiated, -vol if seller initiated, 0 if unknown.
+    """
+    is_buyer_agg = trade.get("is_buyer_aggressor")
+
+    if is_buyer_agg is not None:
+        buyer_initiated = bool(is_buyer_agg)
+    else:
+        side = (trade.get("side") or "").lower()
+        if side == "buy":
+            buyer_initiated = True
+        elif side == "sell":
+            buyer_initiated = False
+        else:
+            return 0.0  # unknown — do not corrupt CVD with noise
+
+    vol = float(trade.get("price", 0)) * float(trade["qty"]) if use_usd else float(trade["qty"])
+    return vol if buyer_initiated else -vol
+
+
+def compute_cvd_from_trades(trades: List[dict]) -> List[dict]:
+    """Pure CVD accumulation over an ordered list of trade dicts.
+
+    Extracted from compute_cvd() so it can be unit-tested without a DB.
+    Returns list of {ts, price, cvd, delta}.
+    """
     cvd = 0.0
     result = []
     for t in trades:
-        delta = t["qty"] if t["side"] in ("buy", "Buy") else -t["qty"]
+        delta = _cvd_delta(t)
         cvd += delta
         result.append({
             "ts": t["ts"],
@@ -29,6 +64,15 @@ async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Di
             "cvd": round(cvd, 6),
             "delta": round(delta, 6),
         })
+    return result
+
+
+async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Dict]:
+    """Cumulative Volume Delta over the last window."""
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since, symbol=symbol)
+
+    result = compute_cvd_from_trades(trades)
 
     # Downsample to ~300 points for frontend
     if len(result) > 300:
@@ -43,8 +87,8 @@ async def compute_volume_imbalance(window_seconds: int = 60, symbol: str = None)
     since = time.time() - window_seconds
     trades = await get_trades_for_cvd(since, symbol=symbol)
 
-    buy_vol = sum(t["qty"] for t in trades if t["side"] in ("buy", "Buy"))
-    sell_vol = sum(t["qty"] for t in trades if t["side"] in ("sell", "Sell"))
+    buy_vol = sum(t["qty"] for t in trades if _cvd_delta(t) > 0)
+    sell_vol = sum(t["qty"] for t in trades if _cvd_delta(t) < 0)
     total = buy_vol + sell_vol
 
     imbalance = (buy_vol - sell_vol) / total if total > 0 else 0
@@ -362,10 +406,7 @@ async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None)
     second_half = trades[mid:]
 
     def cvd_of(ts_list):
-        c = 0.0
-        for t in ts_list:
-            c += t["qty"] if t["side"] in ("buy", "Buy") else -t["qty"]
-        return c
+        return sum(_cvd_delta(t) for t in ts_list)
 
     cvd1 = cvd_of(first_half)
     cvd2 = cvd_of(second_half)
@@ -618,10 +659,7 @@ async def detect_cvd_momentum(window_seconds: int = 60, symbol: str = None) -> D
     late_trades  = trades[half:]
 
     def cvd_of(ts_list):
-        c = 0.0
-        for t in ts_list:
-            c += t["price"] * t["qty"] if t["side"] in ("buy", "Buy") else -(t["price"] * t["qty"])
-        return c
+        return sum(_cvd_delta(t, use_usd=True) for t in ts_list)
 
     total_vol_usd = sum(t["price"] * t["qty"] for t in trades)
     early_cvd = cvd_of(early_trades)
@@ -1792,8 +1830,7 @@ async def compute_vpin(symbol: str = None, window_seconds: int = 1800, n_buckets
 
     for t in trades:
         qty = t["qty"]
-        side = t.get("side", "").lower()
-        is_buy = side in ("buy",)
+        is_buy = _cvd_delta(t) > 0
 
         remaining = qty
         while remaining > 0:

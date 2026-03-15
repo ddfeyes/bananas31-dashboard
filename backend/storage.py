@@ -51,9 +51,16 @@ async def init_db():
                 price REAL NOT NULL,
                 qty REAL NOT NULL,
                 side TEXT NOT NULL,
-                trade_id TEXT
+                trade_id TEXT,
+                is_buyer_aggressor INTEGER
             )
         """)
+        # Migration: add is_buyer_aggressor to existing DBs that predate this column.
+        # NULL values fall back to side-based derivation in _cvd_delta().
+        try:
+            await db.execute("ALTER TABLE trades ADD COLUMN is_buyer_aggressor INTEGER")
+        except Exception:
+            pass  # column already exists
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS open_interest (
@@ -279,13 +286,23 @@ async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None
     }
 
 
-async def insert_trade(exchange: str, symbol: str, price: float, qty: float, side: str, trade_id: str = None):
+async def insert_trade(
+    exchange: str, symbol: str, price: float, qty: float, side: str,
+    trade_id: str = None, is_buyer_aggressor: bool = None,
+):
+    """Insert a trade. is_buyer_aggressor=True means buyer was the taker (aggressor).
+
+    Derived from exchange-specific fields at collection time:
+      - Binance aggTrade: is_buyer_aggressor = not is_buyer_maker  (m field)
+      - Bybit publicTrade: is_buyer_aggressor = (S == "Buy")
+    """
     ts = time.time()
+    agg = int(is_buyer_aggressor) if is_buyer_aggressor is not None else None
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO trades (ts, exchange, symbol, price, qty, side, trade_id)
-            VALUES (?,?,?,?,?,?,?)
-        """, (ts, exchange, symbol, price, qty, side, trade_id))
+            INSERT INTO trades (ts, exchange, symbol, price, qty, side, trade_id, is_buyer_aggressor)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (ts, exchange, symbol, price, qty, side, trade_id, agg))
         await db.commit()
 
 
@@ -612,7 +629,7 @@ async def get_ohlcv(
 
 async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
     params: list = [since]
-    q = "SELECT ts, price, qty, side FROM trades WHERE ts > ?"
+    q = "SELECT ts, price, qty, side, is_buyer_aggressor FROM trades WHERE ts > ?"
     if symbol:
         q += " AND symbol = ?"
         params.append(symbol)

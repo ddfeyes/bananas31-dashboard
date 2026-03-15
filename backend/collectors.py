@@ -84,9 +84,11 @@ async def _handle_binance_trade(data: dict, symbol: str):
     price = float(data.get("p", 0))
     qty = float(data.get("q", 0))
     is_buyer_maker = data.get("m", False)
+    # Binance aggTrade: m=True → buyer is maker (passive) → seller is aggressor
+    is_buyer_aggressor = not is_buyer_maker
     side = "sell" if is_buyer_maker else "buy"
     trade_id = str(data.get("a", ""))
-    await insert_trade("binance", symbol, price, qty, side, trade_id)
+    await insert_trade("binance", symbol, price, qty, side, trade_id, is_buyer_aggressor=is_buyer_aggressor)
     value_usd = price * qty
     if value_usd >= WHALE_THRESHOLD_USD:
         await insert_whale_trade(symbol, price, qty, side, round(value_usd, 2), "binance")
@@ -192,10 +194,13 @@ async def _handle_bybit_trades(data: list, symbol: str):
     for t in data if isinstance(data, list) else [data]:
         price = float(t.get("p", 0))
         qty = float(t.get("v", 0))
-        side = t.get("S", "").lower()
+        raw_side = t.get("S", "")
+        # Bybit publicTrade: S="Buy" means buyer is taker (aggressor)
+        is_buyer_aggressor = raw_side == "Buy"
+        side = raw_side.lower()
         trade_id = str(t.get("i", ""))
         if price and qty:
-            await insert_trade("bybit", symbol, price, qty, side, trade_id)
+            await insert_trade("bybit", symbol, price, qty, side, trade_id, is_buyer_aggressor=is_buyer_aggressor)
             value_usd = price * qty
             if value_usd >= WHALE_THRESHOLD_USD:
                 await insert_whale_trade(symbol, price, qty, side, round(value_usd, 2), "bybit")
