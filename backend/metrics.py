@@ -1280,3 +1280,146 @@ async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
         "description": description,
         "mcap_error": mcap_error,
     }
+
+
+async def predict_liquidation_cascade(
+    symbol: str = None,
+    oi_window: int = 120,
+    oi_threshold_pct: float = 2.0,
+    sr_proximity_pct: float = 0.5,
+) -> Dict:
+    """
+    Pre-cascade warning: OI rising fast AND price approaching key S/R level.
+    Logic:
+    1. OI change > oi_threshold_pct in last oi_window seconds → high leverage buildup
+    2. Price within sr_proximity_pct% of a key support/resistance level → approaching trigger
+    3. If both conditions met → cascade risk HIGH
+    Also considers: current liquidation activity + funding direction
+    """
+    import asyncio as _asyncio
+
+    # Gather: OI momentum, latest OI, latest price, liquidations
+    oi_mom_task = compute_oi_momentum(window_seconds=oi_window, symbol=symbol)
+    liq_task    = detect_liquidation_cascade(window_seconds=60, symbol=symbol)
+    funding_task = get_funding_history(limit=2, symbol=symbol)
+    ob_task     = get_latest_orderbook(symbol=symbol, limit=1)
+
+    oi_mom, recent_liq, funding, ob = await _asyncio.gather(
+        oi_mom_task, liq_task, funding_task, ob_task,
+        return_exceptions=True
+    )
+
+    # Current price
+    price = None
+    if isinstance(ob, list) and ob:
+        price = ob[0].get("mid_price") or ob[0].get("best_bid")
+
+    # OI momentum
+    oi_pct = 0.0
+    oi_direction = None
+    if isinstance(oi_mom, dict):
+        oi_pct = abs(oi_mom.get("pct_change", 0) or 0)
+        oi_direction = oi_mom.get("direction")
+
+    oi_building = oi_pct >= oi_threshold_pct
+
+    # Funding direction (positive = longs paying, squeeze risk for longs)
+    funding_direction = None
+    avg_funding = 0.0
+    if isinstance(funding, list) and funding:
+        rates = [r["rate"] for r in funding if r.get("rate") is not None]
+        avg_funding = sum(rates) / len(rates) if rates else 0
+        funding_direction = "long_pay" if avg_funding > 0 else "short_pay"
+
+    # Price proximity to S/R — compute simple S/R from OI history + price
+    # Use price levels from recent OI + orderbook walls as proxy S/R
+    near_key_level = False
+    closest_level = None
+    closest_dist_pct = None
+
+    if price and isinstance(ob, list) and ob:
+        raw_bids = []
+        raw_asks = []
+        try:
+            import json as _json
+            bids_raw = ob[0].get("bids")
+            asks_raw = ob[0].get("asks")
+            if isinstance(bids_raw, str):
+                raw_bids = _json.loads(bids_raw)
+            elif isinstance(bids_raw, list):
+                raw_bids = bids_raw
+            if isinstance(asks_raw, str):
+                raw_asks = _json.loads(asks_raw)
+            elif isinstance(asks_raw, list):
+                raw_asks = raw_asks
+        except Exception:
+            pass
+
+        # Find large bid/ask walls (> 3x average size) as key levels
+        if raw_bids and raw_asks:
+            all_levels = []
+            bid_qtys = [float(q) for _, q in raw_bids[:20]]
+            ask_qtys = [float(q) for _, q in raw_asks[:20]]
+            avg_bid = sum(bid_qtys) / len(bid_qtys) if bid_qtys else 0
+            avg_ask = sum(ask_qtys) / len(ask_qtys) if ask_qtys else 0
+
+            for p, q in raw_bids[:20]:
+                if float(q) > avg_bid * 2.5:
+                    all_levels.append(float(p))
+            for p, q in raw_asks[:20]:
+                if float(q) > avg_ask * 2.5:
+                    all_levels.append(float(p))
+
+            if all_levels and price:
+                dists = [(abs(lv - price) / price * 100, lv) for lv in all_levels]
+                dists.sort()
+                if dists:
+                    closest_dist_pct, closest_level = dists[0]
+                    near_key_level = closest_dist_pct <= sr_proximity_pct
+
+    # Already cascading?
+    already_cascading = isinstance(recent_liq, dict) and recent_liq.get("cascade")
+
+    # Composite risk
+    risk_factors = []
+    if oi_building:
+        risk_factors.append(f"OI +{oi_pct:.1f}% ({oi_direction or '?'})")
+    if near_key_level:
+        risk_factors.append(f"price {closest_dist_pct:.3f}% from wall @ {closest_level:.7f}")
+    if already_cascading:
+        risk_factors.append("active cascade")
+    if abs(avg_funding) > 0.001:
+        risk_factors.append(f"funding {avg_funding*100:+.4f}%")
+
+    high_risk = oi_building and near_key_level
+    if already_cascading:
+        level = "cascading"
+        description = f"🚨 CASCADE ACTIVE: {'; '.join(risk_factors)}"
+    elif high_risk:
+        level = "high"
+        description = f"⚠️ Cascade risk HIGH: {'; '.join(risk_factors)}"
+    elif oi_building:
+        level = "building"
+        description = f"🟡 OI building ({oi_pct:.1f}%), not yet near key level"
+    elif near_key_level:
+        level = "watch"
+        description = f"👁 Near key level ({closest_dist_pct:.3f}%), OI stable"
+    else:
+        level = "low"
+        description = "Cascade risk low — OI stable, price not near walls"
+
+    return {
+        "level": level,
+        "high_risk": high_risk or already_cascading,
+        "oi_building": oi_building,
+        "oi_pct_change": round(oi_pct, 4),
+        "oi_direction": oi_direction,
+        "near_key_level": near_key_level,
+        "closest_level": round(closest_level, 8) if closest_level else None,
+        "closest_dist_pct": round(closest_dist_pct, 4) if closest_dist_pct is not None else None,
+        "avg_funding": round(avg_funding, 8),
+        "funding_direction": funding_direction,
+        "already_cascading": already_cascading,
+        "description": description,
+        "risk_factors": risk_factors,
+    }

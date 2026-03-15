@@ -42,6 +42,7 @@ from metrics import (
     detect_funding_arbitrage,
     compute_vwap_deviation,
     fetch_oi_mcap_ratio,
+    predict_liquidation_cascade,
 )
 
 router = APIRouter(prefix="/api")
@@ -244,6 +245,25 @@ async def funding_extreme(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/cascade-predictor")
+async def cascade_predictor_endpoint(
+    symbol: Optional[str] = None,
+    oi_window: int = Query(default=120, le=600),
+    oi_threshold: float = Query(default=2.0),
+    sr_proximity: float = Query(default=0.5),
+):
+    """Liquidation cascade predictor: OI buildup + price near key level → warning."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await predict_liquidation_cascade(
+        symbol=target,
+        oi_window=oi_window,
+        oi_threshold_pct=oi_threshold,
+        sr_proximity_pct=sr_proximity,
+    )
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/oi-mcap")
 async def oi_mcap_endpoint(symbol: Optional[str] = None):
     """Open Interest / Market Cap ratio — leverage risk signal."""
@@ -433,9 +453,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     detect_funding_extreme(symbol=symbol, threshold_pct=0.1),
                     detect_funding_arbitrage(symbol=symbol, threshold_bps=5.0),
                     compute_vwap_deviation(window_seconds=3600, symbol=symbol),
+                    predict_liquidation_cascade(symbol=symbol, oi_window=120, oi_threshold_pct=2.0, sr_proximity_pct=0.5),
                     return_exceptions=True,
                 )
-                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result, vwap_dev_result = alert_tasks
+                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result, vwap_dev_result, cascade_pred_result = alert_tasks
 
                 fired_alerts = []
                 if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
@@ -454,6 +475,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 # VWAP deviation: alert only on strong deviation
                 if isinstance(vwap_dev_result, dict) and vwap_dev_result.get("strength") == "strong":
                     fired_alerts.append(("vwap_deviation", "medium", vwap_dev_result.get("description", ""), vwap_dev_result))
+                # Cascade predictor: alert on high_risk
+                if isinstance(cascade_pred_result, dict) and cascade_pred_result.get("high_risk"):
+                    sev = "critical" if cascade_pred_result.get("level") == "cascading" else "high"
+                    fired_alerts.append(("cascade_predictor", sev, cascade_pred_result.get("description", ""), cascade_pred_result))
 
                 # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
                 cross_sym_result = None
@@ -493,7 +518,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
 
                 # Deduplicate: only save if no same-type alert in last 60s
                 # funding_extreme uses 300s cooldown (fires constantly otherwise)
-                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120}
+                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120, "cascade_predictor": 90}
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
@@ -530,6 +555,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "cross_symbol_oi_spike": cross_sym_result if isinstance(cross_sym_result, dict) else None,
                     "funding_arb": funding_arb_result if isinstance(funding_arb_result, dict) else None,
                     "vwap_deviation": vwap_dev_result if isinstance(vwap_dev_result, dict) else None,
+                    "cascade_predictor": cascade_pred_result if isinstance(cascade_pred_result, dict) else None,
                     "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))

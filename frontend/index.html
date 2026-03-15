@@ -715,6 +715,12 @@
       <div id="cross-symbol-oi-symbols" style="font-size:11px;margin-top:4px;"></div>
     </div>
 
+    <div id="alert-cascade-predictor" class="alert-box">
+      <div class="alert-label">🧨 CASCADE PREDICTOR</div>
+      <div id="cascade-pred-text" style="color:var(--muted)">Loading...</div>
+      <div id="cascade-pred-factors" style="font-size:10px;margin-top:3px;color:var(--muted);"></div>
+    </div>
+
     <div id="alert-oi-mcap" class="alert-box">
       <div class="alert-label">📊 OI / MARKET CAP</div>
       <div id="oi-mcap-text" style="color:var(--muted)">Loading...</div>
@@ -823,6 +829,7 @@
       <button class="ah-filter-btn" data-type="funding_extreme" onclick="setAlertHistoryFilter('funding_extreme',this)">Funding Extreme</button>
       <button class="ah-filter-btn" data-type="funding_arb" onclick="setAlertHistoryFilter('funding_arb',this)">Funding Arb</button>
       <button class="ah-filter-btn" data-type="vwap_deviation" onclick="setAlertHistoryFilter('vwap_deviation',this)">VWAP Dev</button>
+      <button class="ah-filter-btn" data-type="cascade_predictor" onclick="setAlertHistoryFilter('cascade_predictor',this)">Cascade Pred</button>
       <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
       <button class="ah-filter-btn" data-type="cross_symbol_oi_spike" onclick="setAlertHistoryFilter('cross_symbol_oi_spike',this)">Cross-Symbol OI</button>
     </div>
@@ -1666,6 +1673,26 @@ function updateSummary(summary) {
       feText.textContent = fe.description || 'Normal';
       feBox.className = 'alert-box';
     }
+  }
+
+  // ── Cascade predictor ────────────────────────────────────────────────────
+  if (summary.cascade_predictor) {
+    const cp = summary.cascade_predictor;
+    const cpBox     = document.getElementById('alert-cascade-predictor');
+    const cpText    = document.getElementById('cascade-pred-text');
+    const cpFactors = document.getElementById('cascade-pred-factors');
+    const levelColors = {
+      cascading: 'var(--red)',
+      high:      'var(--accent)',
+      building:  '#f0c040',
+      watch:     'var(--muted)',
+      low:       'var(--muted)',
+    };
+    const color = levelColors[cp.level] || 'var(--muted)';
+    cpText.style.color = color;
+    cpText.textContent = cp.description || cp.level || 'OK';
+    cpBox.className = (cp.high_risk) ? 'alert-box active-red' : (cp.level === 'building' || cp.level === 'watch') ? 'alert-box active' : 'alert-box';
+    cpFactors.textContent = cp.risk_factors?.length ? cp.risk_factors.join(' | ') : '';
   }
 
   // ── VWAP deviation signal ─────────────────────────────────────────────────
