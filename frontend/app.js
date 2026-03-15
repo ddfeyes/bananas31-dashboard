@@ -4,7 +4,11 @@
 const API = window.location.protocol + '//' + window.location.hostname + ':8765/api';
 const WS  = 'ws://' + window.location.hostname + ':8765';
 
+<<<<<<< HEAD
 const REFRESH_MS   = 15000;   // poll interval
+=======
+const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 const TRADE_MAX    = 100;    // max rows in tape
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
@@ -16,8 +20,15 @@ let priceChart   = null;   // TradingView Lightweight Charts instance
 let oiChart      = null;   // Chart.js
 let cvdChart     = null;   // Chart.js
 let fundingChart = null;   // Chart.js
+<<<<<<< HEAD
 let spreadChart     = null;   // Chart.js
 let adaptiveVpChart = null;   // Chart.js — adaptive volume profile
+=======
+let spreadChart        = null;   // Chart.js
+let aggressorChart     = null;   // Chart.js
+let volumeProfileChart = null;   // Chart.js
+let regimeTimelineChart = null;  // Chart.js
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 let wsAlerts     = null;
 let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
@@ -297,14 +308,33 @@ function initSpreadChart() {
   });
 }
 
+<<<<<<< HEAD
 function initAdaptiveVpChart() {
   const canvas = document.getElementById('adaptive-vp-canvas');
   if (!canvas || !window.Chart) return;
   adaptiveVpChart = new Chart(canvas, {
+=======
+function initAggressorChart() {
+  const canvas = document.getElementById('aggressor-ratio-canvas');
+  if (!canvas || !window.Chart) return;
+  const opts = _chartDefaults('#00e082');
+  opts.scales.x.stacked = true;
+  opts.scales.y = {
+    stacked: true,
+    min: 0, max: 100,
+    ticks: { color: '#6b7280', font: { size: 9 }, callback: v => v + '%' },
+    grid: { color: 'rgba(255,255,255,0.04)' },
+  };
+  opts.plugins.tooltip.callbacks = {
+    label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%`,
+  };
+  aggressorChart = new Chart(canvas, {
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
     type: 'bar',
     data: {
       labels: [],
       datasets: [
+<<<<<<< HEAD
         { label: 'Buy',  data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
         { label: 'Sell', data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
       ],
@@ -405,6 +435,69 @@ async function renderAdaptiveVolumeProfile() {
   adaptiveVpChart.data.datasets[1].data                = sellVols;
   adaptiveVpChart.data.datasets[1].backgroundColor     = sellColors;
   adaptiveVpChart.update('none');
+=======
+        { label: 'Buy%',  data: [], backgroundColor: 'rgba(0,224,130,0.6)', borderWidth: 0, stack: 'ratio' },
+        { label: 'Sell%', data: [], backgroundColor: 'rgba(255,77,79,0.6)',  borderWidth: 0, stack: 'ratio' },
+      ],
+    },
+    options: opts,
+  });
+}
+
+function initVolumeProfileChart() {
+  const canvas = document.getElementById('volume-profile-canvas');
+  if (!canvas || !window.Chart) return;
+  const opts = _chartDefaults('#4ea8de');
+  opts.indexAxis = 'y';
+  opts.scales.x = {
+    stacked: true,
+    ticks: { color: '#6b7280', font: { size: 9 }, callback: v => fmtK(v) },
+    grid: { color: 'rgba(255,255,255,0.04)' },
+  };
+  opts.scales.y = {
+    ticks: { color: '#6b7280', font: { size: 8 }, maxTicksLimit: 10 },
+    grid: { color: 'rgba(255,255,255,0.04)' },
+  };
+  opts.plugins.tooltip.callbacks = {
+    label: ctx => ` ${ctx.dataset.label}: ${fmtK(ctx.raw)}`,
+  };
+  volumeProfileChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy Vol',  data: [], backgroundColor: 'rgba(0,224,130,0.5)', borderWidth: 0, stack: 'vp' },
+        { label: 'Sell Vol', data: [], backgroundColor: 'rgba(255,77,79,0.5)',  borderWidth: 0, stack: 'vp' },
+      ],
+    },
+    options: opts,
+  });
+}
+
+function initRegimeTimelineChart() {
+  const canvas = document.getElementById('regime-timeline-canvas');
+  if (!canvas || !window.Chart) return;
+  const opts = _chartDefaults('#ab7df8');
+  opts.scales.y = {
+    min: -1.2, max: 1.2,
+    ticks: {
+      color: '#6b7280', font: { size: 8 },
+      callback: v => ({ '-1': 'Markdown', '-0.5': 'Distrib', '0': 'Ranging', '0.5': 'Accum', '1': 'Markup' }[String(v)] || ''),
+    },
+    grid: { color: 'rgba(255,255,255,0.04)' },
+  };
+  opts.plugins.tooltip.callbacks = {
+    label: ctx => ` ${ctx.label}`,
+  };
+  regimeTimelineChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{ label: 'Phase', data: [], backgroundColor: [], borderWidth: 0, barPercentage: 1.0, categoryPercentage: 1.0 }],
+    },
+    options: opts,
+  });
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 }
 
 function resetCharts() {
@@ -427,7 +520,13 @@ function resetCharts() {
   clearChart(cvdChart);
   clearChart(fundingChart);
   clearChart(spreadChart);
+<<<<<<< HEAD
   clearChart(adaptiveVpChart);
+=======
+  clearChart(aggressorChart);
+  clearChart(volumeProfileChart);
+  clearChart(regimeTimelineChart);
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 
   document.getElementById('trade-tape').innerHTML = '';
   document.getElementById('cvd-metrics').innerHTML = '';
@@ -435,8 +534,15 @@ function resetCharts() {
   document.getElementById('spread-metrics').innerHTML = '';
   document.getElementById('vol-imbalance-content').innerHTML = '';
   document.getElementById('oi-metrics').innerHTML = '';
+<<<<<<< HEAD
   const avpMetrics = document.getElementById('adaptive-vp-metrics');
   if (avpMetrics) avpMetrics.innerHTML = '';
+=======
+  const vpMetrics = document.getElementById('volume-profile-metrics');
+  if (vpMetrics) vpMetrics.innerHTML = '';
+  const arMetrics = document.getElementById('aggressor-ratio-metrics');
+  if (arMetrics) arMetrics.innerHTML = '';
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 }
 
 // ── Render: Price Chart (OHLCV) ───────────────────────────────────────────────
@@ -1151,46 +1257,55 @@ async function renderMarketRegime() {
   const badge = document.getElementById('market-regime-badge');
   if (!el) return;
 
-  const regime  = data.regime || '—';
-  const conf    = data.confidence != null ? (parseFloat(data.confidence) * 100).toFixed(0) + '%' : '—';
-  const metrics = data.metrics || {};
-  const vol     = metrics.volatility     != null ? parseFloat(metrics.volatility).toFixed(4)     : '—';
-  const trend   = metrics.trend_strength != null ? parseFloat(metrics.trend_strength).toFixed(3)  : '—';
-  const range   = metrics.range_ratio    != null ? parseFloat(metrics.range_ratio).toFixed(3)     : '—';
+  const regime = data.regime || '—';
+  const phase  = data.phase  || '—';
+  const score  = data.score  != null ? parseFloat(data.score).toFixed(1) : '—';
+  const conf   = data.phase_confidence != null ? (parseFloat(data.phase_confidence) * 100).toFixed(0) + '%' : '—';
+  const action = data.action || '—';
+  const weights = data.weights || {};
 
-  const regimeColors = { trending: 'var(--blue)', ranging: 'var(--yellow)', choppy: 'var(--red)' };
-  const color = regimeColors[(regime || '').toLowerCase()] || 'var(--fg)';
+  const regimeColors = { Bull: 'var(--green)', Bear: 'var(--red)', Neutral: 'var(--yellow)' };
+  const color = regimeColors[regime] || 'var(--fg)';
+  const scoreColor = parseFloat(data.score) > 0 ? 'var(--green)' : parseFloat(data.score) < 0 ? 'var(--red)' : 'var(--muted)';
 
   if (badge) {
     badge.textContent = regime;
     badge.className   = 'card-badge ' + (
-      regime.toLowerCase() === 'trending' ? 'badge-blue' :
-      regime.toLowerCase() === 'ranging'  ? 'badge-yellow' :
-      'badge-red'
+      regime === 'Bull' ? 'badge-green' :
+      regime === 'Bear' ? 'badge-red' :
+      'badge-yellow'
     );
     badge.style.display = 'inline-block';
   }
 
+  const wParts = Object.entries(weights)
+    .filter(([, v]) => v !== 0)
+    .map(([k, v]) => {
+      const vc = v > 0 ? 'var(--green)' : 'var(--red)';
+      return `<span style="color:var(--muted)">${k} <span style="color:${vc}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span></span>`;
+    }).join(' · ');
+
   el.innerHTML = `
-    <div class="phase-name" style="color:${color}">${regime}</div>
+    <div class="phase-name" style="color:${color};font-size:16px">${regime}</div>
     <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Phase</div>
+        <div class="metric-value" style="color:${color};font-size:13px">${phase}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Score</div>
+        <div class="metric-value" style="color:${scoreColor}">${score}</div>
+      </div>
       <div class="metric-box">
         <div class="metric-label">Confidence</div>
         <div class="metric-value" style="color:${color}">${conf}</div>
       </div>
       <div class="metric-box">
-        <div class="metric-label">Volatility</div>
-        <div class="metric-value" style="font-size:13px">${vol}</div>
-      </div>
-      <div class="metric-box">
-        <div class="metric-label">Trend</div>
-        <div class="metric-value" style="font-size:13px">${trend}</div>
-      </div>
-      <div class="metric-box">
-        <div class="metric-label">Range Ratio</div>
-        <div class="metric-value" style="font-size:13px">${range}</div>
+        <div class="metric-label">Action</div>
+        <div class="metric-value" style="font-size:11px;color:var(--muted)">${action}</div>
       </div>
     </div>
+    ${wParts ? `<div style="font-size:9px;color:var(--muted);margin-top:4px;line-height:1.6">${wParts}</div>` : ''}
   `;
 }
 
@@ -1238,60 +1353,139 @@ async function renderMomentum() {
   `;
 }
 
+// ── Render: Regime Timeline ────────────────────────────────────────────────────
+async function renderRegimeTimeline() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/phase-history?symbol=${sym}&limit=30`);
+  if (!data?.data?.length || !regimeTimelineChart) return;
+
+  const phaseScore = { Markup: 1, Accumulation: 0.5, Ranging: 0, Distribution: -0.5, Markdown: -1 };
+  const phaseColor = {
+    Markup:       'rgba(78,168,222,0.85)',
+    Accumulation: 'rgba(0,224,130,0.85)',
+    Ranging:      'rgba(240,192,64,0.75)',
+    Distribution: 'rgba(255,140,50,0.85)',
+    Markdown:     'rgba(255,77,79,0.85)',
+  };
+
+  const src = data.data.slice().sort((a, b) => a.ts - b.ts);
+  regimeTimelineChart.data.labels = src.map(d => d.phase || '?');
+  regimeTimelineChart.data.datasets[0].data = src.map(d => phaseScore[d.phase] ?? 0);
+  regimeTimelineChart.data.datasets[0].backgroundColor = src.map(d => phaseColor[d.phase] || 'rgba(107,114,128,0.6)');
+  regimeTimelineChart.update('none');
+}
+
 // ── Render: Correlations ──────────────────────────────────────────────────────
 async function renderCorrelations() {
-  const data = await apiFetch('/correlations?window=3600');
+  const data = await apiFetch('/correlations');
   const el = document.getElementById('correlations-content');
   if (!el) return;
 
-  if (!data?.matrix || !Object.keys(data.matrix).length) {
-    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+  if (!data?.matrix) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
     return;
   }
 
-  function corrColor(v) {
-    if (v == null || isNaN(v)) return 'hsl(0,0%,25%)';
-    const c = Math.max(-1, Math.min(1, v));
-    if (c >= 0) {
-      const h = Math.round(120 * c);
-      const s = Math.round(70 * c);
-      return `hsl(${h},${s}%,40%)`;
-    }
-    const s = Math.round(70 * Math.abs(c));
-    return `hsl(0,${s}%,40%)`;
+  const syms = data.symbols || Object.keys(data.matrix);
+  const short = s => s.replace('USDT', '');
+
+  function corrBg(v) {
+    if (v === 1)   return 'rgba(78,168,222,0.2)';
+    if (v > 0.7)   return 'rgba(0,224,130,0.3)';
+    if (v > 0.4)   return 'rgba(0,224,130,0.15)';
+    if (v > -0.1)  return 'rgba(107,114,128,0.08)';
+    if (v > -0.4)  return 'rgba(255,77,79,0.15)';
+    return 'rgba(255,77,79,0.3)';
   }
 
-  const symbols = Object.keys(data.matrix);
-  const headerCells = symbols.map(s =>
-    `<th style="padding:2px 4px;font-size:9px;color:var(--muted);text-transform:uppercase;">${s.replace('USDT','')}</th>`
-  ).join('');
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:10px;">';
+  html += '<tr><th style="color:var(--muted);padding:2px 4px"></th>';
+  syms.forEach(s => {
+    html += `<th style="color:var(--muted);padding:2px 6px;text-align:center">${short(s)}</th>`;
+  });
+  html += '</tr>';
+  syms.forEach(row => {
+    html += `<tr><td style="color:var(--muted);padding:3px 4px;white-space:nowrap">${short(row)}</td>`;
+    syms.forEach(col => {
+      const v = data.matrix[row]?.[col];
+      const vStr = v != null ? v.toFixed(2) : '—';
+      const bg = v != null ? corrBg(v) : 'transparent';
+      const fg = v === 1 ? 'var(--blue)' : (v != null && Math.abs(v) > 0.4 ? 'var(--fg)' : 'var(--muted)');
+      html += `<td style="background:${bg};color:${fg};padding:3px 6px;text-align:center;border-radius:3px">${vStr}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  if (data.data_points != null) {
+    html += `<div style="font-size:9px;color:var(--muted);margin-top:4px;text-align:right">${data.data_points} candles · ${Math.round((data.window || 3600) / 3600)}h</div>`;
+  }
+  el.innerHTML = html;
+}
 
-  const bodyRows = symbols.map(rowSym => {
-    const cells = symbols.map(colSym => {
-      const v  = (data.matrix[rowSym] || {})[colSym];
-      const bg = corrColor(v);
-      const txt = v != null ? parseFloat(v).toFixed(2) : '—';
-      return `<td style="background:${bg};color:#fff;text-align:center;padding:3px 4px;font-size:10px;">${txt}</td>`;
-    }).join('');
-    return `<tr>
-      <td style="padding:2px 6px;font-size:9px;color:var(--muted);white-space:nowrap;">${rowSym.replace('USDT','')}</td>
-      ${cells}
-    </tr>`;
-  }).join('');
+// ── Render: Volume Profile ─────────────────────────────────────────────────────
+async function renderVolumeProfile() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/volume-profile?symbol=${sym}&window=3600`);
+  const metricsEl = document.getElementById('volume-profile-metrics');
 
-  el.innerHTML = `
-    <div style="overflow-x:auto;">
-      <table style="border-collapse:collapse;width:100%;">
-        <thead>
-          <tr>
-            <th style="padding:2px 6px;font-size:9px;color:var(--muted);"></th>
-            ${headerCells}
-          </tr>
-        </thead>
-        <tbody>${bodyRows}</tbody>
-      </table>
-    </div>
-  `;
+  if (!data?.bins?.length) {
+    if (metricsEl) metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
+    return;
+  }
+
+  if (metricsEl) {
+    metricsEl.innerHTML = `
+      <span style="color:var(--muted)">POC <span style="color:var(--fg);font-weight:700">${fmtPrice(data.poc)}</span></span>
+      <span style="color:var(--muted)">VAH <span style="color:var(--green)">${fmtPrice(data.vah)}</span></span>
+      <span style="color:var(--muted)">VAL <span style="color:var(--red)">${fmtPrice(data.val)}</span></span>
+      <span style="color:var(--muted)">Vol <span style="color:var(--fg)">${fmtK(data.total_volume)}</span></span>
+      <span style="color:var(--muted)">VA <span style="color:var(--yellow)">${(data.value_area_pct || 70).toFixed(1)}%</span></span>
+    `;
+  }
+
+  if (!volumeProfileChart) return;
+
+  // Top 20 bins by volume, re-sorted by price (low→high for y-axis)
+  const bins = [...data.bins]
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 20)
+    .sort((a, b) => a.price - b.price);
+
+  volumeProfileChart.data.labels = bins.map(b => fmtPrice(b.price));
+  volumeProfileChart.data.datasets[0].data = bins.map(b => b.buy_vol || 0);
+  volumeProfileChart.data.datasets[1].data = bins.map(b => b.sell_vol || 0);
+  volumeProfileChart.update('none');
+}
+
+// ── Render: Aggressor Ratio ────────────────────────────────────────────────────
+async function renderAggressorRatio() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/aggressor-ratio?symbol=${sym}&window=1800&bucket=60`);
+  const metricsEl = document.getElementById('aggressor-ratio-metrics');
+
+  if (!data?.series?.length) {
+    if (metricsEl) metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
+    return;
+  }
+
+  if (metricsEl) {
+    const buyPct = data.rolling_buy_pct?.toFixed(1) ?? '—';
+    const sellPct = data.rolling_sell_pct?.toFixed(1) ?? '—';
+    const buyColor = parseFloat(buyPct) > 55 ? 'var(--green)' : parseFloat(buyPct) < 45 ? 'var(--red)' : 'var(--muted)';
+    metricsEl.innerHTML = `
+      <span style="color:var(--muted)">Buy <span style="color:var(--green);font-weight:700">${buyPct}%</span></span>
+      <span style="color:var(--muted)">Sell <span style="color:var(--red)">${sellPct}%</span></span>
+      <span style="color:var(--muted)">Signal <span style="color:${buyColor}">${data.signal || '—'}</span></span>
+    `;
+  }
+
+  if (!aggressorChart) return;
+
+  const src = data.series;
+  aggressorChart.data.labels = src.map(d => fmtTime(d.ts));
+  aggressorChart.data.datasets[0].data = src.map(d => d.buy_pct);
+  aggressorChart.data.datasets[1].data = src.map(d => d.sell_pct);
+  aggressorChart.update('none');
 }
 
 // ── Render: VPIN ──────────────────────────────────────────────────────────────
@@ -1474,7 +1668,10 @@ async function refresh() {
     renderVwapDeviation(),
     renderMarketRegime(),
     renderMomentum(),
+    renderRegimeTimeline(),
     renderCorrelations(),
+    renderVolumeProfile(),
+    renderAggressorRatio(),
     renderVpin(),
     renderAdaptiveVolumeProfile(),
     renderAggressorRatio(),
@@ -1490,8 +1687,21 @@ async function init() {
   initCvdChart();
   initFundingChart();
   initSpreadChart();
+<<<<<<< HEAD
   initAdaptiveVpChart();
+=======
+  initAggressorChart();
+  initVolumeProfileChart();
+  initRegimeTimelineChart();
+>>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
   connectAlerts();
+
+  // After 10s replace any still-Loading cards with "No data available"
+  setTimeout(() => {
+    document.querySelectorAll('.text-muted').forEach(el => {
+      if (el.textContent.trim() === 'Loading…') el.textContent = 'No data available';
+    });
+  }, 10000);
 
   await loadSymbols();
   await refresh();

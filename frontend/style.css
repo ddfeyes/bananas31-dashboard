@@ -543,6 +543,39 @@ html, body {
   #alerts-feed { max-height: 160px; }
 }
 
+/* ── New Chart Containers ─────────────────────────────────────────────────── */
+#regime-timeline-container {
+  height: 80px;
+  position: relative;
+  margin-top: 4px;
+}
+
+#volume-profile-container {
+  height: 200px;
+  position: relative;
+}
+
+#volume-profile-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 10px;
+}
+
+#aggressor-ratio-container {
+  height: 120px;
+  position: relative;
+}
+
+#aggressor-ratio-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 10px;
+}
+
 /* ── Utilities ────────────────────────────────────────────────────────────── */
 .text-green  { color: var(--green); }
 .text-red    { color: var(--red); }
