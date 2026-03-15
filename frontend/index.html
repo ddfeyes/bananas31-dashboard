@@ -821,7 +821,8 @@
       <button onclick="setTapeFilter(1000)" id="tf-1k"    class="tape-filter" style="font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;">$1k+</button>
       <button onclick="setTapeFilter(10000)"  id="tf-10k"   class="tape-filter" style="font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;">$10k+</button>
       <button onclick="setTapeFilter(50000)"  id="tf-50k"   class="tape-filter" style="font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;">$50k+</button>
-      <button onclick="toggleAlertSound()" id="btn-sound" style="margin-left:auto;font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;" title="Alert sound">🔇</button>
+      <button onclick="toggleAlertSound()" id="btn-sound" style="margin-left:auto;font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;" title="Toggle alert sound">🔇</button>
+      <button onclick="testAlertSounds()" style="font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;" title="Test all alert sounds">🎵</button>
     </div>
     <div id="tape-list" style="max-height:280px; overflow-y:auto; font-size:11px; font-family:'Menlo','Monaco','Consolas',monospace;"></div>
   </div>
@@ -2437,7 +2438,7 @@ async function refreshAll() {
     const wasCascade = lcBox.classList.contains('active-red') || lcBox.classList.contains('active-green');
     if (liqcas.cascade) {
       activeAlerts++;
-      if (!wasCascade) playAlertBeep(660, 0.3, 0.4);
+      if (!wasCascade) playAlertSound('cascade');
       const cascadeColor = liqcas.dominant === 'longs' ? 'var(--red)' : 'var(--green)';
       lcEl.style.color = cascadeColor;
       lcEl.textContent = liqcas.description || 'Cascade detected';
@@ -2457,6 +2458,7 @@ async function refreshAll() {
       activeAlerts++;
       spikeEl.style.color = 'var(--accent)';
       spikeEl.textContent = '🚨 ' + (oisp.description || 'OI spike detected');
+      if (!spikeBox.classList.contains('active')) playAlertSound('high');
       spikeBox.className = 'alert-box active';
     } else {
       spikeEl.style.color = 'var(--muted)';
@@ -2705,9 +2707,15 @@ function initTape() {
   });
 }
 
+const _lastWhaleTs = { ts: 0 };
 function pushTrade(t, autoScroll = true) {
   tapeEntries.push(t);
   if (tapeEntries.length > TAPE_MAX) tapeEntries.shift();
+  // Play whale sound for very large trades (>$200k), low sound for >$50k
+  if (alertSoundEnabled && t.value_usd != null && t.ts > _lastWhaleTs.ts) {
+    if (t.value_usd >= 200000) { playAlertSound('whale'); _lastWhaleTs.ts = t.ts; }
+    else if (t.value_usd >= 50000) { playAlertSound('low'); _lastWhaleTs.ts = t.ts; }
+  }
   if (autoScroll) renderTapeIncremental(t);
 }
 
@@ -2835,20 +2843,98 @@ function toggleAlertSound() {
   if (btn) btn.textContent = alertSoundEnabled ? '🔔' : '🔇';
 }
 
+function testAlertSounds() {
+  const wasEnabled = alertSoundEnabled;
+  alertSoundEnabled = true;
+  const seq = [
+    ['low',     'low (click)',     0],
+    ['medium',  'medium (ding)',   600],
+    ['high',    'high (buzz)',     1300],
+    ['info',    'info (chime)',    2200],
+    ['whale',   'whale (thud)',    3200],
+    ['cascade', 'cascade (alarm)', 4200],
+    ['price',   'price (alert)',   5100],
+  ];
+  seq.forEach(([sev, , delay]) => setTimeout(() => playAlertSound(sev), delay));
+  setTimeout(() => { alertSoundEnabled = wasEnabled; }, 6000);
+}
+
+function _getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+
+// Core tone generator
+function _playTone(freq, duration, vol, type = 'sine', rampTo = 0.001) {
+  try {
+    const ctx = _getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(rampTo, ctx.currentTime + duration);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  } catch {}
+}
+
+// Alert sound library — distinct sounds per severity
+const AlertSounds = {
+  // high: aggressive buzz — sawtooth chord, two pulses
+  high(vol = 0.5) {
+    _playTone(220, 0.08, vol, 'sawtooth');
+    setTimeout(() => _playTone(220, 0.12, vol, 'sawtooth'), 100);
+    setTimeout(() => _playTone(330, 0.18, vol * 0.8, 'sawtooth'), 200);
+  },
+  // medium: double-ding — two clean sine tones
+  medium(vol = 0.35) {
+    _playTone(880, 0.15, vol, 'sine');
+    setTimeout(() => _playTone(1100, 0.12, vol * 0.7, 'sine'), 180);
+  },
+  // low: single soft click — short triangle blip
+  low(vol = 0.2) {
+    _playTone(660, 0.06, vol, 'triangle');
+  },
+  // info: gentle ascending chime
+  info(vol = 0.25) {
+    _playTone(523, 0.1, vol, 'sine');
+    setTimeout(() => _playTone(659, 0.1, vol * 0.8, 'sine'), 120);
+    setTimeout(() => _playTone(784, 0.15, vol * 0.6, 'sine'), 240);
+  },
+  // whale: deep thud — low frequency square pulse
+  whale(vol = 0.45) {
+    _playTone(80, 0.2, vol, 'square');
+    setTimeout(() => _playTone(120, 0.15, vol * 0.5, 'sine'), 80);
+  },
+  // liquidation cascade: rapid descending buzz
+  cascade(vol = 0.5) {
+    [440, 370, 310, 260].forEach((f, i) => {
+      setTimeout(() => _playTone(f, 0.07, vol * (1 - i * 0.1), 'sawtooth'), i * 60);
+    });
+  },
+  // price alert: sharp ding pair
+  price(vol = 0.4) {
+    _playTone(1047, 0.12, vol, 'sine');
+    setTimeout(() => _playTone(1319, 0.18, vol * 0.8, 'sine'), 140);
+  },
+};
+
+// Route sound by severity string ('high'|'medium'|'low'|'info'|'whale'|'cascade'|'price')
+function playAlertSound(severity = 'medium', vol) {
+  if (!alertSoundEnabled) return;
+  (AlertSounds[severity] || AlertSounds.medium)(vol);
+}
+
+// Backward-compat wrapper — freq param kept for old callers, maps to severity
 function playAlertBeep(freq = 880, duration = 0.15, vol = 0.3) {
   if (!alertSoundEnabled) return;
-  try {
-    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = _audioCtx.createOscillator();
-    const gain = _audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(_audioCtx.destination);
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(vol, _audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + duration);
-    osc.start();
-    osc.stop(_audioCtx.currentTime + duration);
-  } catch {}
+  // Map frequency to severity heuristic
+  if (freq <= 440) playAlertSound('low', vol);
+  else if (freq >= 1000) playAlertSound('high', vol);
+  else playAlertSound('medium', vol);
 }
 
 // Feed tape from WS summary
@@ -4139,8 +4225,8 @@ function checkPriceAlerts(price) {
       priceAlertLog.unshift(msg);
       if (logEl) logEl.innerHTML = priceAlertLog.slice(0, 10).map(m =>
         `<div style="padding:2px 0;border-bottom:1px solid var(--border);color:var(--accent);">${m}</div>`).join('');
-      // Play beep if sound enabled
-      playAlertBeep(880, 0.4, 0.3);
+      // Play price alert sound
+      playAlertSound('price');
       // Flash header
       document.getElementById('price-alert-status').style.color = 'var(--green)';
     }
@@ -4150,7 +4236,7 @@ function checkPriceAlerts(price) {
       priceAlertLog.unshift(msg);
       if (logEl) logEl.innerHTML = priceAlertLog.slice(0, 10).map(m =>
         `<div style="padding:2px 0;border-bottom:1px solid var(--border);color:var(--red);">${m}</div>`).join('');
-      playAlertBeep(440, 0.4, 0.3);
+      playAlertSound('price');
       document.getElementById('price-alert-status').style.color = 'var(--red)';
     }
     // Reset fired flags if price moves away (hysteresis 0.1%)
