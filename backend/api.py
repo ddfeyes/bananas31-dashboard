@@ -18,6 +18,7 @@ from storage import (
     get_ohlcv,
     insert_alert,
     get_alert_history,
+    get_whale_trades,
 )
 from metrics import (
     compute_cvd,
@@ -287,6 +288,30 @@ async def large_trades(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_large_trades(window_seconds=window, min_usd=min_usd, symbol=target)
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/whale-history")
+async def whale_history(
+    limit: int = Query(default=100, le=500),
+    since: Optional[float] = None,
+    symbol: Optional[str] = None,
+    min_usd: float = Query(default=50000, le=10000000),
+    window: int = Query(default=3600, description="Seconds back to fetch if since not specified"),
+):
+    """Fetch persisted whale trades (single trade > min_usd USD)."""
+    if since is None:
+        since = time.time() - window
+    trades = await get_whale_trades(limit=limit, since=since, symbol=symbol, min_usd=min_usd)
+    buy_vol = sum(t["value_usd"] for t in trades if t["side"] in ("buy", "Buy"))
+    sell_vol = sum(t["value_usd"] for t in trades if t["side"] not in ("buy", "Buy"))
+    return {
+        "status": "ok",
+        "count": len(trades),
+        "trades": trades,
+        "total_buy_usd": round(buy_vol, 2),
+        "total_sell_usd": round(sell_vol, 2),
+        "whale_threshold_usd": min_usd,
+    }
 
 
 @router.websocket("/ws/{symbol}")

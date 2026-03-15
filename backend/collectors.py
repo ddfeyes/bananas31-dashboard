@@ -9,7 +9,7 @@ from typing import List
 import websockets
 
 from storage import (
-    insert_orderbook, insert_trade, insert_liquidation
+    insert_orderbook, insert_trade, insert_liquidation, insert_whale_trade
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,8 @@ async def _handle_binance_orderbook(data: dict, symbol: str):
     await insert_orderbook("binance", symbol, bids, asks)
 
 
+WHALE_THRESHOLD_USD = 50_000
+
 async def _handle_binance_trade(data: dict, symbol: str):
     price = float(data.get("p", 0))
     qty = float(data.get("q", 0))
@@ -85,6 +87,9 @@ async def _handle_binance_trade(data: dict, symbol: str):
     side = "sell" if is_buyer_maker else "buy"
     trade_id = str(data.get("a", ""))
     await insert_trade("binance", symbol, price, qty, side, trade_id)
+    value_usd = price * qty
+    if value_usd >= WHALE_THRESHOLD_USD:
+        await insert_whale_trade(symbol, price, qty, side, round(value_usd, 2), "binance")
 
 
 async def _handle_binance_liquidation(data: dict, symbol: str):
@@ -191,6 +196,9 @@ async def _handle_bybit_trades(data: list, symbol: str):
         trade_id = str(t.get("i", ""))
         if price and qty:
             await insert_trade("bybit", symbol, price, qty, side, trade_id)
+            value_usd = price * qty
+            if value_usd >= WHALE_THRESHOLD_USD:
+                await insert_whale_trade(symbol, price, qty, side, round(value_usd, 2), "bybit")
 
 
 async def _handle_bybit_liquidation(data: dict, symbol: str):

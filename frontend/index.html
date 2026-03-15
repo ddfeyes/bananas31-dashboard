@@ -733,6 +733,14 @@
     <canvas id="chart-liq" style="margin-top:10px;"></canvas>
   </div>
 
+  <!-- Whale Trades -->
+  <div class="card" id="card-whales">
+    <h2><span class="card-icon">🐳</span>Whale Trades &gt;$50k (1h)
+      <span id="whale-summary" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div id="whale-list" style="max-height:220px;overflow-y:auto;font-size:11px;"></div>
+  </div>
+
   <!-- Correlation Matrix + Momentum -->
   <div class="card" id="card-correlations">
     <h2><span class="card-icon">🔗</span>Price Correlations (1h)
@@ -1771,7 +1779,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -1782,6 +1790,7 @@ async function refreshAll() {
     fetchJSON(`/api/oi-spike?window=300&threshold=3&symbol=${sym}`),
     fetchJSON(`/api/liq-cascade?window=60&threshold_usd=50000&symbol=${sym}`),
     fetchJSON(`/api/volume-spike?window=30&baseline=300&symbol=${sym}`),
+    fetchJSON(`/api/whale-history?window=3600&min_usd=50000&limit=50&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -1842,6 +1851,36 @@ async function refreshAll() {
     charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);
     charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
     charts.liq.update();
+  }
+
+  // Whale Trades card
+  if (whales) {
+    const wEl = document.getElementById('whale-list');
+    const wSum = document.getElementById('whale-summary');
+    const wList = (whales.trades || []).slice(0, 30);
+    if (wSum) {
+      const buyFmt = '$' + fmtK(whales.total_buy_usd || 0);
+      const sellFmt = '$' + fmtK(whales.total_sell_usd || 0);
+      wSum.textContent = `${whales.count} trades • 🟢 ${buyFmt} / 🔴 ${sellFmt}`;
+    }
+    if (wEl) {
+      wEl.innerHTML = wList.length
+        ? wList.map(w => {
+            const isBuy = w.side && w.side.toLowerCase().includes('buy');
+            const col = isBuy ? 'var(--green)' : 'var(--red)';
+            const label = isBuy ? '🐋 BUY' : '🐋 SELL';
+            const sizeClass = w.value_usd >= 200000 ? 'font-weight:700;font-size:12px;' : '';
+            return `<div style="display:flex;gap:10px;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);${sizeClass}">
+              <span style="color:${col};min-width:60px;">${label}</span>
+              <span style="color:var(--muted);min-width:55px;font-size:10px;">${w.exchange}</span>
+              <span style="font-variant-numeric:tabular-nums;min-width:70px;">$${fmt(w.price, 4)}</span>
+              <span style="min-width:55px;">${fmtK(w.qty)}</span>
+              <span style="color:var(--yellow);font-weight:600;min-width:70px;">$${fmtK(w.value_usd)}</span>
+              <span style="color:var(--muted);font-size:10px;">${fmtTs(w.ts)}</span>
+            </div>`;
+          }).join('')
+        : '<div style="color:var(--muted);text-align:center;padding:20px 0">No whale trades yet (>$50k)</div>';
+    }
   }
 
   // Count active alerts

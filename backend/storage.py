@@ -115,6 +115,21 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_ts ON alert_history(ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_sym ON alert_history(symbol, ts)")
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS whale_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                qty REAL NOT NULL,
+                side TEXT NOT NULL,
+                value_usd REAL NOT NULL,
+                exchange TEXT DEFAULT 'binance'
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_whale_ts ON whale_trades(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_whale_sym ON whale_trades(symbol, ts)")
+
         await db.commit()
 
 
@@ -568,3 +583,32 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     async with aiosqlite.connect(DB_PATH) as db2:
         await db2.execute("VACUUM")
         await db2.execute("ANALYZE")
+
+
+async def insert_whale_trade(symbol: str, price: float, qty: float, side: str, value_usd: float, exchange: str = "binance"):
+    """Log a whale trade (value > threshold) to persistent storage."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO whale_trades (ts, symbol, price, qty, side, value_usd, exchange) VALUES (?,?,?,?,?,?,?)",
+            (time.time(), symbol, price, qty, side, value_usd, exchange)
+        )
+        await db.commit()
+
+
+async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = None, min_usd: float = 50000) -> list:
+    """Fetch recent whale trades, optionally filtered by symbol and time window."""
+    params = [min_usd]
+    q = "SELECT * FROM whale_trades WHERE value_usd >= ?"
+    if since:
+        q += " AND ts > ?"
+        params.append(since)
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
