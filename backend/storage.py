@@ -550,6 +550,11 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     async with aiosqlite.connect(DB_PATH) as db:
         for table in ["trades", "open_interest", "funding_rate", "liquidations"]:
             await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
-        # Keep orderbook more recent (1 hour)
-        await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 3600,))
+        # Keep orderbook only last 30 minutes (enough for heatmap)
+        await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 1800,))
+        # Keep alert history 30 days
+        await db.execute("DELETE FROM alert_history WHERE ts < ?", (time.time() - 86400 * 30,))
         await db.commit()
+        # Reclaim space
+        await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await db.execute("ANALYZE")

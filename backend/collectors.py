@@ -64,7 +64,15 @@ async def binance_collector(symbol: str):
             await asyncio.sleep(RECONNECT_DELAY)
 
 
+# Throttle orderbook inserts to 1/s per symbol per exchange
+_ob_last_insert: dict = {}  # key: "exchange:symbol" -> ts
+
 async def _handle_binance_orderbook(data: dict, symbol: str):
+    key = f"binance:{symbol}"
+    now = time.time()
+    if now - _ob_last_insert.get(key, 0) < 1.0:
+        return
+    _ob_last_insert[key] = now
     bids = data.get("b", [])
     asks = data.get("a", [])
     await insert_orderbook("binance", symbol, bids, asks)
@@ -168,7 +176,11 @@ async def _handle_bybit_orderbook(data: dict, msg_type: str, symbol: str):
                   key=lambda x: float(x[0]))[:20]
 
     if bids and asks:
-        await insert_orderbook("bybit", symbol, bids, asks)
+        key = f"bybit:{symbol}"
+        now = time.time()
+        if now - _ob_last_insert.get(key, 0) >= 1.0:
+            _ob_last_insert[key] = now
+            await insert_orderbook("bybit", symbol, bids, asks)
 
 
 async def _handle_bybit_trades(data: list, symbol: str):
