@@ -1,4 +1,5 @@
 """FastAPI REST endpoints — multi-symbol."""
+
 import asyncio
 import json
 import math
@@ -66,6 +67,7 @@ router = APIRouter(prefix="/api")
 
 # ── WebSocket connection manager ─────────────────────────────────────────────
 
+
 class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, Set[WebSocket]] = {}  # symbol -> set of ws
@@ -97,6 +99,7 @@ manager = ConnectionManager()
 
 class AlertManager:
     """Fan-out alert events to /ws/alerts subscribers."""
+
     def __init__(self):
         self._clients: Set[WebSocket] = set()
 
@@ -160,6 +163,7 @@ async def stats_summary():
     """24h aggregate stats for all symbols."""
     import aiosqlite
     from storage import DB_PATH
+
     since_24h = time.time() - 86400
     result = {}
     async with aiosqlite.connect(DB_PATH) as db:
@@ -175,7 +179,7 @@ async def stats_summary():
                       MAX(price) as price_high,
                       AVG(price) as price_avg
                FROM trades WHERE ts >= ? GROUP BY symbol""",
-            (since_24h,)
+            (since_24h,),
         ) as cur:
             for r in await cur.fetchall():
                 sym = r["symbol"]
@@ -191,7 +195,9 @@ async def stats_summary():
                 bv = r["buy_vol"] or 0
                 sv = r["sell_vol"] or 0
                 total = bv + sv
-                result[sym]["cvd_ratio_24h"] = round((bv - sv) / total, 4) if total > 0 else 0
+                result[sym]["cvd_ratio_24h"] = (
+                    round((bv - sv) / total, 4) if total > 0 else 0
+                )
         # Liquidations aggregates
         async with db.execute(
             """SELECT symbol,
@@ -200,7 +206,7 @@ async def stats_summary():
                       SUM(CASE WHEN side='buy' THEN value ELSE 0 END) as long_liqs,
                       SUM(CASE WHEN side='sell' THEN value ELSE 0 END) as short_liqs
                FROM liquidations WHERE ts >= ? GROUP BY symbol""",
-            (since_24h,)
+            (since_24h,),
         ) as cur:
             for r in await cur.fetchall():
                 sym = r["symbol"]
@@ -211,24 +217,20 @@ async def stats_summary():
                 result[sym]["long_liqs_usd_24h"] = round(r["long_liqs"] or 0, 2)
                 result[sym]["short_liqs_usd_24h"] = round(r["short_liqs"] or 0, 2)
         # Latest OI
-        async with db.execute(
-            """SELECT symbol, oi_value as oi_latest
+        async with db.execute("""SELECT symbol, oi_value as oi_latest
                FROM open_interest
                WHERE ts = (SELECT MAX(ts) FROM open_interest o2 WHERE o2.symbol = open_interest.symbol)
-               GROUP BY symbol"""
-        ) as cur:
+               GROUP BY symbol""") as cur:
             for r in await cur.fetchall():
                 sym = r["symbol"]
                 if sym not in result:
                     result[sym] = {}
                 result[sym]["oi_latest"] = r["oi_latest"]
         # Funding latest
-        async with db.execute(
-            """SELECT symbol, rate as funding_latest
+        async with db.execute("""SELECT symbol, rate as funding_latest
                FROM funding_rate
                WHERE ts = (SELECT MAX(ts) FROM funding_rate f2 WHERE f2.symbol = funding_rate.symbol)
-               GROUP BY symbol"""
-        ) as cur:
+               GROUP BY symbol""") as cur:
             for r in await cur.fetchall():
                 sym = r["symbol"]
                 if sym not in result:
@@ -238,7 +240,7 @@ async def stats_summary():
         async with db.execute(
             """SELECT symbol, COUNT(*) as whale_count, SUM(value_usd) as whale_vol
                FROM whale_trades WHERE ts >= ? GROUP BY symbol""",
-            (since_24h,)
+            (since_24h,),
         ) as cur:
             for r in await cur.fetchall():
                 sym = r["symbol"]
@@ -254,7 +256,7 @@ async def stats_summary():
 async def orderbook_latest(
     exchange: Optional[str] = None,
     symbol: Optional[str] = None,
-    limit: int = Query(default=1, le=20)
+    limit: int = Query(default=1, le=20),
 ):
     data = await get_latest_orderbook(exchange=exchange, symbol=symbol, limit=limit)
     return {"status": "ok", "data": data, "count": len(data)}
@@ -311,6 +313,18 @@ async def cvd_history(
     return {"status": "ok", "data": data, "count": len(data)}
 
 
+@router.get("/volume-imbalance")
+async def volume_imbalance_endpoint(
+    window: int = Query(default=60, le=3600),
+    symbol: Optional[str] = None,
+):
+    """Buy vs sell volume imbalance over last `window` seconds."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_imbalance(window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/volume-profile")
 async def volume_profile(
     window: int = Query(default=3600, le=86400),
@@ -332,9 +346,16 @@ async def market_depth(symbol: Optional[str] = None):
     target = symbol if symbol and symbol in syms else syms[0]
     ob = await get_latest_orderbook(symbol=target, limit=1)
     if not ob:
-        return {"status": "ok", "symbol": target, "bids": [], "asks": [], "mid_price": None}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "bids": [],
+            "asks": [],
+            "mid_price": None,
+        }
 
     import json as _json
+
     row = ob[0]
     try:
         raw_bids = _json.loads(row.get("bids", "[]"))
@@ -345,15 +366,23 @@ async def market_depth(symbol: Optional[str] = None):
     # Build cumulative depth
     cum_bid = 0.0
     depth_bids = []
-    for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_bids], key=lambda x: x[0], reverse=True):
+    for p, q in sorted(
+        [[float(x[0]), float(x[1])] for x in raw_bids], key=lambda x: x[0], reverse=True
+    ):
         cum_bid += q
-        depth_bids.append({"price": p, "qty": round(q, 6), "cum_qty": round(cum_bid, 6)})
+        depth_bids.append(
+            {"price": p, "qty": round(q, 6), "cum_qty": round(cum_bid, 6)}
+        )
 
     cum_ask = 0.0
     depth_asks = []
-    for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]):
+    for p, q in sorted(
+        [[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]
+    ):
         cum_ask += q
-        depth_asks.append({"price": p, "qty": round(q, 6), "cum_qty": round(cum_ask, 6)})
+        depth_asks.append(
+            {"price": p, "qty": round(q, 6), "cum_qty": round(cum_ask, 6)}
+        )
 
     return {
         "status": "ok",
@@ -373,7 +402,9 @@ async def liq_cascade(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await detect_liquidation_cascade(window_seconds=window, threshold_usd=threshold_usd, symbol=target)
+    data = await detect_liquidation_cascade(
+        window_seconds=window, threshold_usd=threshold_usd, symbol=target
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -385,7 +416,9 @@ async def oi_spike(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await detect_oi_spike(window_seconds=window, threshold_pct=threshold, symbol=target)
+    data = await detect_oi_spike(
+        window_seconds=window, threshold_pct=threshold, symbol=target
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -472,6 +505,7 @@ async def ob_pressure_gradient_endpoint(
 ):
     """Order book pressure gradient: rate of change of bid/ask imbalance."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_ob_pressure_gradient(
@@ -489,11 +523,11 @@ async def kalman_price_endpoint(
 ):
     """Kalman filter smoothed price series + noise metrics."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_kalman_price(
-        symbol=target, window_seconds=window,
-        process_noise=q, measurement_noise=r
+        symbol=target, window_seconds=window, process_noise=q, measurement_noise=r
     )
     return {"status": "ok", "symbol": target, **data}
 
@@ -506,9 +540,12 @@ async def aggressor_ratio_endpoint(
 ):
     """Trade aggressor ratio time series: % buy vs sell taker side per time bucket."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_aggressor_ratio_series(symbol=target, window_seconds=window, bucket_size=bucket)
+    data = await compute_aggressor_ratio_series(
+        symbol=target, window_seconds=window, bucket_size=bucket
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -519,6 +556,7 @@ async def mtf_rsi_divergence_endpoint(
 ):
     """Multi-timeframe RSI divergence detector (5m and 1h)."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_mtf_rsi_divergence(symbol=target, rsi_period=period)
@@ -533,9 +571,12 @@ async def realized_implied_vol_endpoint(
 ):
     """Realized vs ATR-implied volatility comparison."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_realized_vs_implied_vol(symbol=target, window_seconds=window, candle_size=candle)
+    data = await compute_realized_vs_implied_vol(
+        symbol=target, window_seconds=window, candle_size=candle
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -547,6 +588,7 @@ async def vpin_endpoint(
 ):
     """VPIN order flow toxicity approximation."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_vpin(symbol=target, window_seconds=window, n_buckets=buckets)
@@ -561,9 +603,12 @@ async def oi_concentration_endpoint(
 ):
     """OI concentration: % of OI change in densest price range bucket."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_oi_concentration(symbol=target, window_seconds=window, n_buckets=buckets)
+    data = await compute_oi_concentration(
+        symbol=target, window_seconds=window, n_buckets=buckets
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -574,9 +619,12 @@ async def funding_divergence_endpoint(
 ):
     """Funding rate divergence: focus symbol vs average of peers."""
     from collectors import get_symbols
+
     syms = get_symbols()
     target = focus if focus and focus in syms else syms[0]
-    data = await detect_funding_divergence(focus_symbol=target, divergence_multiplier=multiplier)
+    data = await detect_funding_divergence(
+        focus_symbol=target, divergence_multiplier=multiplier
+    )
     return {"status": "ok", **data}
 
 
@@ -618,6 +666,7 @@ async def volume_spike(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     from metrics import detect_volume_spike as _dvs
+
     data = await _dvs(window_seconds=window, baseline_seconds=baseline, symbol=target)
     return {"status": "ok", "symbol": target, **data}
 
@@ -630,7 +679,9 @@ async def large_trades(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await detect_large_trades(window_seconds=window, min_usd=min_usd, symbol=target)
+    data = await detect_large_trades(
+        window_seconds=window, min_usd=min_usd, symbol=target
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -640,12 +691,16 @@ async def whale_history(
     since: Optional[float] = None,
     symbol: Optional[str] = None,
     min_usd: float = Query(default=50000, le=10000000),
-    window: int = Query(default=3600, description="Seconds back to fetch if since not specified"),
+    window: int = Query(
+        default=3600, description="Seconds back to fetch if since not specified"
+    ),
 ):
     """Fetch persisted whale trades (single trade > min_usd USD)."""
     if since is None:
         since = time.time() - window
-    trades = await get_whale_trades(limit=limit, since=since, symbol=symbol, min_usd=min_usd)
+    trades = await get_whale_trades(
+        limit=limit, since=since, symbol=symbol, min_usd=min_usd
+    )
     buy_vol = sum(t["value_usd"] for t in trades if t["side"] in ("buy", "Buy"))
     sell_vol = sum(t["value_usd"] for t in trades if t["side"] not in ("buy", "Buy"))
     return {
@@ -679,7 +734,9 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 vol_task = compute_volume_imbalance(window_seconds=60, symbol=symbol)
                 oi_task = compute_oi_momentum(window_seconds=300, symbol=symbol)
 
-                phase, vol_imb, oi_mom = await asyncio.gather(phase_task, vol_task, oi_task)
+                phase, vol_imb, oi_mom = await asyncio.gather(
+                    phase_task, vol_task, oi_task
+                )
 
                 # Regime is expensive, compute every 5 ticks (~5s)
                 if _tick_count % 5 == 1:
@@ -695,7 +752,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 next_funding_ts = None
                 for row in funding:
                     latest_funding[row["exchange"]] = row["rate"]
-                    if row.get("next_funding_ts") and (next_funding_ts is None or row["next_funding_ts"] > next_funding_ts):
+                    if row.get("next_funding_ts") and (
+                        next_funding_ts is None
+                        or row["next_funding_ts"] > next_funding_ts
+                    ):
                         next_funding_ts = row["next_funding_ts"]
 
                 # Parse raw orderbook for depth
@@ -708,12 +768,18 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                         pass
 
                 cum_bid, depth_bids = 0.0, []
-                for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_bids], key=lambda x: x[0], reverse=True):
+                for p, q in sorted(
+                    [[float(x[0]), float(x[1])] for x in raw_bids],
+                    key=lambda x: x[0],
+                    reverse=True,
+                ):
                     cum_bid += q
                     depth_bids.append([round(float(p), 8), round(cum_bid, 6)])
 
                 cum_ask, depth_asks = 0.0, []
-                for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]):
+                for p, q in sorted(
+                    [[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]
+                ):
                     cum_ask += q
                     depth_asks.append([round(float(p), 8), round(cum_ask, 6)])
 
@@ -723,68 +789,178 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 )
                 # Serialize: only fields needed by tape
                 tape_trades = [
-                    {"ts": t["ts"], "price": t["price"], "qty": t["qty"], "side": t["side"]}
+                    {
+                        "ts": t["ts"],
+                        "price": t["price"],
+                        "qty": t["qty"],
+                        "side": t["side"],
+                    }
                     for t in recent_trades
                 ]
 
                 # Check & persist alerts (every WS tick, but only save on trigger)
                 alert_tasks = await asyncio.gather(
                     detect_delta_divergence(window_seconds=300, symbol=symbol),
-                    detect_oi_spike(window_seconds=300, threshold_pct=3.0, symbol=symbol),
-                    detect_liquidation_cascade(window_seconds=60, threshold_usd=50000, symbol=symbol),
-                    detect_volume_spike(window_seconds=30, baseline_seconds=300, symbol=symbol),
+                    detect_oi_spike(
+                        window_seconds=300, threshold_pct=3.0, symbol=symbol
+                    ),
+                    detect_liquidation_cascade(
+                        window_seconds=60, threshold_usd=50000, symbol=symbol
+                    ),
+                    detect_volume_spike(
+                        window_seconds=30, baseline_seconds=300, symbol=symbol
+                    ),
                     detect_funding_extreme(symbol=symbol, threshold_pct=0.1),
                     detect_funding_arbitrage(symbol=symbol, threshold_bps=5.0),
                     compute_vwap_deviation(window_seconds=3600, symbol=symbol),
-                    predict_liquidation_cascade(symbol=symbol, oi_window=120, oi_threshold_pct=2.0, sr_proximity_pct=0.5),
+                    predict_liquidation_cascade(
+                        symbol=symbol,
+                        oi_window=120,
+                        oi_threshold_pct=2.0,
+                        sr_proximity_pct=0.5,
+                    ),
                     return_exceptions=True,
                 )
-                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result, vwap_dev_result, cascade_pred_result = alert_tasks
+                (
+                    div_result,
+                    oi_result,
+                    liq_result,
+                    vol_result,
+                    funding_ex_result,
+                    funding_arb_result,
+                    vwap_dev_result,
+                    cascade_pred_result,
+                ) = alert_tasks
 
                 fired_alerts = []
-                if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
+                if isinstance(div_result, dict) and div_result.get(
+                    "divergence"
+                ) not in ("none", None):
                     sev = "high" if div_result.get("severity", 0) > 0.5 else "medium"
-                    fired_alerts.append(("delta_divergence", sev, div_result.get("description", ""), div_result))
+                    fired_alerts.append(
+                        (
+                            "delta_divergence",
+                            sev,
+                            div_result.get("description", ""),
+                            div_result,
+                        )
+                    )
                 if isinstance(oi_result, dict) and oi_result.get("spike"):
-                    fired_alerts.append(("oi_spike", "high", oi_result.get("description", ""), oi_result))
+                    fired_alerts.append(
+                        (
+                            "oi_spike",
+                            "high",
+                            oi_result.get("description", ""),
+                            oi_result,
+                        )
+                    )
                 if isinstance(liq_result, dict) and liq_result.get("cascade"):
-                    fired_alerts.append(("liq_cascade", "critical", liq_result.get("description", ""), liq_result))
+                    fired_alerts.append(
+                        (
+                            "liq_cascade",
+                            "critical",
+                            liq_result.get("description", ""),
+                            liq_result,
+                        )
+                    )
                 if isinstance(vol_result, dict) and vol_result.get("spike"):
-                    fired_alerts.append(("volume_spike", "medium", vol_result.get("description", ""), vol_result))
-                if isinstance(funding_ex_result, dict) and funding_ex_result.get("extreme"):
-                    fired_alerts.append(("funding_extreme", "high", funding_ex_result.get("description", ""), funding_ex_result))
-                if isinstance(funding_arb_result, dict) and funding_arb_result.get("arb"):
-                    fired_alerts.append(("funding_arb", "medium", funding_arb_result.get("description", ""), funding_arb_result))
+                    fired_alerts.append(
+                        (
+                            "volume_spike",
+                            "medium",
+                            vol_result.get("description", ""),
+                            vol_result,
+                        )
+                    )
+                if isinstance(funding_ex_result, dict) and funding_ex_result.get(
+                    "extreme"
+                ):
+                    fired_alerts.append(
+                        (
+                            "funding_extreme",
+                            "high",
+                            funding_ex_result.get("description", ""),
+                            funding_ex_result,
+                        )
+                    )
+                if isinstance(funding_arb_result, dict) and funding_arb_result.get(
+                    "arb"
+                ):
+                    fired_alerts.append(
+                        (
+                            "funding_arb",
+                            "medium",
+                            funding_arb_result.get("description", ""),
+                            funding_arb_result,
+                        )
+                    )
                 # VWAP deviation: alert only on strong deviation
-                if isinstance(vwap_dev_result, dict) and vwap_dev_result.get("strength") == "strong":
-                    fired_alerts.append(("vwap_deviation", "medium", vwap_dev_result.get("description", ""), vwap_dev_result))
+                if (
+                    isinstance(vwap_dev_result, dict)
+                    and vwap_dev_result.get("strength") == "strong"
+                ):
+                    fired_alerts.append(
+                        (
+                            "vwap_deviation",
+                            "medium",
+                            vwap_dev_result.get("description", ""),
+                            vwap_dev_result,
+                        )
+                    )
                 # Cascade predictor: alert on high_risk
-                if isinstance(cascade_pred_result, dict) and cascade_pred_result.get("high_risk"):
-                    sev = "critical" if cascade_pred_result.get("level") == "cascading" else "high"
-                    fired_alerts.append(("cascade_predictor", sev, cascade_pred_result.get("description", ""), cascade_pred_result))
+                if isinstance(cascade_pred_result, dict) and cascade_pred_result.get(
+                    "high_risk"
+                ):
+                    sev = (
+                        "critical"
+                        if cascade_pred_result.get("level") == "cascading"
+                        else "high"
+                    )
+                    fired_alerts.append(
+                        (
+                            "cascade_predictor",
+                            sev,
+                            cascade_pred_result.get("description", ""),
+                            cascade_pred_result,
+                        )
+                    )
 
                 # Spread widening alert (check every tick, 0.5% threshold)
                 try:
-                    if ob and ob[0].get("best_bid") and ob[0].get("best_ask") and ob[0].get("mid_price"):
+                    if (
+                        ob
+                        and ob[0].get("best_bid")
+                        and ob[0].get("best_ask")
+                        and ob[0].get("mid_price")
+                    ):
                         _bid = ob[0]["best_bid"]
                         _ask = ob[0]["best_ask"]
                         _mid = ob[0]["mid_price"]
                         _spread_pct = (_ask - _bid) / _mid * 100 if _mid > 0 else 0
                         SPREAD_ALERT_THRESHOLD = 0.5  # %
                         if _spread_pct > SPREAD_ALERT_THRESHOLD:
-                            fired_alerts.append((
-                                "spread_alert",
-                                "high",
-                                f"Spread widened to {_spread_pct:.4f}% ({_spread_pct*100:.2f} bps) — threshold {SPREAD_ALERT_THRESHOLD}%",
-                                {"spread_pct": round(_spread_pct, 6), "spread_bps": round(_spread_pct * 100, 4),
-                                 "bid": _bid, "ask": _ask, "mid": _mid},
-                            ))
+                            fired_alerts.append(
+                                (
+                                    "spread_alert",
+                                    "high",
+                                    f"Spread widened to {_spread_pct:.4f}% ({_spread_pct*100:.2f} bps) — threshold {SPREAD_ALERT_THRESHOLD}%",
+                                    {
+                                        "spread_pct": round(_spread_pct, 6),
+                                        "spread_bps": round(_spread_pct * 100, 4),
+                                        "bid": _bid,
+                                        "ask": _ask,
+                                        "mid": _mid,
+                                    },
+                                )
+                            )
                 except Exception:
                     pass
 
                 # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
                 cross_sym_result = None
-                if symbol == get_symbols()[0]:  # only run once per tick cycle from primary symbol
+                if (
+                    symbol == get_symbols()[0]
+                ):  # only run once per tick cycle from primary symbol
                     try:
                         all_syms = get_symbols()
                         cross_sym_result = await detect_cross_symbol_oi_spike(
@@ -793,13 +969,17 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                             threshold_pct=2.5,
                             min_correlated=2,
                         )
-                        if isinstance(cross_sym_result, dict) and cross_sym_result.get("correlated"):
-                            fired_alerts.append((
-                                "cross_symbol_oi_spike",
-                                "high",
-                                cross_sym_result.get("description", ""),
-                                cross_sym_result,
-                            ))
+                        if isinstance(cross_sym_result, dict) and cross_sym_result.get(
+                            "correlated"
+                        ):
+                            fired_alerts.append(
+                                (
+                                    "cross_symbol_oi_spike",
+                                    "high",
+                                    cross_sym_result.get("description", ""),
+                                    cross_sym_result,
+                                )
+                            )
                     except Exception:
                         pass
 
@@ -810,17 +990,32 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 cur_phase = phase.get("phase") if isinstance(phase, dict) else None
                 if cur_phase and prev_phase and cur_phase != prev_phase:
                     phase_desc = f"Phase change: {prev_phase} → {cur_phase} (conf: {phase.get('confidence', 0):.0%})"
-                    fired_alerts.append(("phase_change", "medium", phase_desc, {
-                        "from": prev_phase, "to": cur_phase,
-                        "confidence": phase.get("confidence"),
-                        "signals": phase.get("signals"),
-                    }))
+                    fired_alerts.append(
+                        (
+                            "phase_change",
+                            "medium",
+                            phase_desc,
+                            {
+                                "from": prev_phase,
+                                "to": cur_phase,
+                                "confidence": phase.get("confidence"),
+                                "signals": phase.get("signals"),
+                            },
+                        )
+                    )
                 if cur_phase:
                     ws._last_phase[symbol] = cur_phase
 
                 # Deduplicate: only save if no same-type alert in last 60s
                 # funding_extreme uses 300s cooldown (fires constantly otherwise)
-                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120, "cascade_predictor": 90, "spread_alert": 60}
+                cooldowns = {
+                    "funding_extreme": 300,
+                    "phase_change": 120,
+                    "funding_arb": 180,
+                    "vwap_deviation": 120,
+                    "cascade_predictor": 90,
+                    "spread_alert": 60,
+                }
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
@@ -829,14 +1024,16 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     if time.time() - last > cooldown:
                         await insert_alert(symbol, a_type, sev, desc, data)
                         ws._last_alert_ts[a_type] = time.time()
-                        await alert_manager.broadcast({
-                            "type": "alert",
-                            "ts": time.time(),
-                            "symbol": symbol,
-                            "alert_type": a_type,
-                            "severity": sev,
-                            "description": desc,
-                        })
+                        await alert_manager.broadcast(
+                            {
+                                "type": "alert",
+                                "ts": time.time(),
+                                "symbol": symbol,
+                                "alert_type": a_type,
+                                "severity": sev,
+                                "description": desc,
+                            }
+                        )
 
                 msg = {
                     "type": "summary",
@@ -850,22 +1047,43 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "oi_momentum": oi_mom,
                     "funding_rates": latest_funding,
                     "next_funding_ts": next_funding_ts,
-                    "funding_extreme": funding_ex_result if isinstance(funding_ex_result, dict) else None,
+                    "funding_extreme": (
+                        funding_ex_result
+                        if isinstance(funding_ex_result, dict)
+                        else None
+                    ),
                     "depth_bids": depth_bids,
                     "depth_asks": depth_asks,
                     "ob_bids": raw_bids[:10],
                     "ob_asks": raw_asks[:10],
                     "recent_trades": tape_trades,
-                    "active_alerts": [{"type": a, "severity": s, "description": d} for a, s, d, _ in fired_alerts],
+                    "active_alerts": [
+                        {"type": a, "severity": s, "description": d}
+                        for a, s, d, _ in fired_alerts
+                    ],
                     # Inline alert details so frontend can update without REST polling
                     "oi_spike": oi_result if isinstance(oi_result, dict) else None,
                     "vol_spike": vol_result if isinstance(vol_result, dict) else None,
                     "liq_cascade": liq_result if isinstance(liq_result, dict) else None,
-                    "delta_divergence": div_result if isinstance(div_result, dict) else None,
-                    "cross_symbol_oi_spike": cross_sym_result if isinstance(cross_sym_result, dict) else None,
-                    "funding_arb": funding_arb_result if isinstance(funding_arb_result, dict) else None,
-                    "vwap_deviation": vwap_dev_result if isinstance(vwap_dev_result, dict) else None,
-                    "cascade_predictor": cascade_pred_result if isinstance(cascade_pred_result, dict) else None,
+                    "delta_divergence": (
+                        div_result if isinstance(div_result, dict) else None
+                    ),
+                    "cross_symbol_oi_spike": (
+                        cross_sym_result if isinstance(cross_sym_result, dict) else None
+                    ),
+                    "funding_arb": (
+                        funding_arb_result
+                        if isinstance(funding_arb_result, dict)
+                        else None
+                    ),
+                    "vwap_deviation": (
+                        vwap_dev_result if isinstance(vwap_dev_result, dict) else None
+                    ),
+                    "cascade_predictor": (
+                        cascade_pred_result
+                        if isinstance(cascade_pred_result, dict)
+                        else None
+                    ),
                     "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))
@@ -915,7 +1133,9 @@ async def alert_history_endpoint(
     since: Optional[float] = None,
 ):
     """Return persisted alert history."""
-    data = await get_alert_history(limit=limit, since=since, symbol=symbol, alert_type=alert_type)
+    data = await get_alert_history(
+        limit=limit, since=since, symbol=symbol, alert_type=alert_type
+    )
     return {"status": "ok", "data": data, "count": len(data)}
 
 
@@ -962,7 +1182,12 @@ async def export_csv(
         rows = await get_alert_history(symbol=target, limit=10000)
         fields = ["ts", "symbol", "alert_type", "severity", "description"]
     else:
-        return JSONResponse({"error": "Unknown metric. Use: trades|oi|funding|liquidations|cvd|whales|patterns|phases|alerts"}, status_code=400)
+        return JSONResponse(
+            {
+                "error": "Unknown metric. Use: trades|oi|funding|liquidations|cvd|whales|patterns|phases|alerts"
+            },
+            status_code=400,
+        )
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
@@ -974,7 +1199,7 @@ async def export_csv(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
@@ -995,7 +1220,9 @@ async def orderbook_heatmap(
     target = symbol if symbol and symbol in syms else syms[0]
     since = time.time() - minutes * 60
 
-    snapshots = await get_orderbook_snapshots_for_heatmap(target, since, sample_interval=10)
+    snapshots = await get_orderbook_snapshots_for_heatmap(
+        target, since, sample_interval=10
+    )
 
     if not snapshots:
         return {
@@ -1012,10 +1239,19 @@ async def orderbook_heatmap(
     RANGE_PCT = 0.005  # ±0.5%
 
     # Use latest mid_price as reference
-    ref_mid = next((s["mid_price"] for s in reversed(snapshots) if s["mid_price"]), None)
+    ref_mid = next(
+        (s["mid_price"] for s in reversed(snapshots) if s["mid_price"]), None
+    )
     if not ref_mid:
-        return {"status": "ok", "symbol": target, "mid_price": None,
-                "timestamps": [], "bid_cumsum": [], "ask_cumsum": [], "price_levels": []}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "mid_price": None,
+            "timestamps": [],
+            "bid_cumsum": [],
+            "ask_cumsum": [],
+            "price_levels": [],
+        }
 
     ref_mid = float(ref_mid)
     price_low = ref_mid * (1 - RANGE_PCT)
@@ -1084,8 +1320,8 @@ async def orderbook_heatmap(
         "symbol": target,
         "mid_price": ref_mid,
         "timestamps": timestamps,
-        "bid_cumsum": bid_cumsum,    # list[time][bin]
-        "ask_cumsum": ask_cumsum,    # list[time][bin]
+        "bid_cumsum": bid_cumsum,  # list[time][bin]
+        "ask_cumsum": ask_cumsum,  # list[time][bin]
         "price_levels": price_levels,
     }
 
@@ -1109,23 +1345,37 @@ async def trade_flow_heatmap(
 
     trades = await get_recent_trades(limit=50000, since=since, symbol=target)
     if not trades:
-        return {"status": "ok", "symbol": target, "timestamps": [], "price_levels": [],
-                "buy_vol": [], "sell_vol": [], "mid_price": None}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "timestamps": [],
+            "price_levels": [],
+            "buy_vol": [],
+            "sell_vol": [],
+            "mid_price": None,
+        }
 
     prices = [t["price"] for t in trades if t.get("price")]
     if not prices:
-        return {"status": "ok", "symbol": target, "timestamps": [], "price_levels": [],
-                "buy_vol": [], "sell_vol": [], "mid_price": None}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "timestamps": [],
+            "price_levels": [],
+            "buy_vol": [],
+            "sell_vol": [],
+            "mid_price": None,
+        }
 
-    p_low  = min(prices)
+    p_low = min(prices)
     p_high = max(prices)
-    p_rng  = p_high - p_low
+    p_rng = p_high - p_low
     if p_rng < 1e-12:
         p_rng = p_low * 0.01
 
     bin_size = p_rng / bins
     ts_start = since
-    ts_end   = time.time()
+    ts_end = time.time()
     ts_range = ts_end - ts_start
     bucket_size = ts_range / time_buckets
 
@@ -1133,26 +1383,28 @@ async def trade_flow_heatmap(
     price_levels = [round(p_low + (i + 0.5) * bin_size, 8) for i in range(bins)]
 
     # Initialize grids: [time_bucket][price_bin]
-    buy_grid  = [[0.0] * bins for _ in range(time_buckets)]
+    buy_grid = [[0.0] * bins for _ in range(time_buckets)]
     sell_grid = [[0.0] * bins for _ in range(time_buckets)]
 
     for t in trades:
-        ts   = t.get("ts", 0)
-        p    = t.get("price", 0)
-        qty  = t.get("qty", 0)
+        ts = t.get("ts", 0)
+        p = t.get("price", 0)
+        qty = t.get("qty", 0)
         side = t.get("side", "")
-        val  = p * qty  # USD value
+        val = p * qty  # USD value
 
         t_idx = min(int((ts - ts_start) / bucket_size), time_buckets - 1)
         p_idx = min(int((p - p_low) / bin_size), bins - 1)
 
         if side == "buy":
-            buy_grid[t_idx][p_idx]  += val
+            buy_grid[t_idx][p_idx] += val
         else:
             sell_grid[t_idx][p_idx] += val
 
     # Timestamps for x-axis labels
-    timestamps = [round(ts_start + (i + 0.5) * bucket_size) for i in range(time_buckets)]
+    timestamps = [
+        round(ts_start + (i + 0.5) * bucket_size) for i in range(time_buckets)
+    ]
     mid_price = prices[-1] if prices else None
 
     return {
@@ -1168,29 +1420,50 @@ async def trade_flow_heatmap(
 
 @router.get("/ohlcv")
 async def ohlcv(
-    interval: int = Query(default=60, ge=10, le=3600, description="Candle interval in seconds"),
-    window: int = Query(default=3600, le=86400, description="Lookback window in seconds"),
+    interval: int = Query(
+        default=60, ge=10, le=3600, description="Candle interval in seconds"
+    ),
+    window: int = Query(
+        default=3600, le=86400, description="Lookback window in seconds"
+    ),
     symbol: Optional[str] = None,
 ):
     """OHLCV candles from trade data."""
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await get_ohlcv(interval_seconds=interval, window_seconds=window, symbol=target)
-    return {"status": "ok", "symbol": target, "interval": interval, "data": data, "count": len(data)}
+    data = await get_ohlcv(
+        interval_seconds=interval, window_seconds=window, symbol=target
+    )
+    return {
+        "status": "ok",
+        "symbol": target,
+        "interval": interval,
+        "data": data,
+        "count": len(data),
+    }
 
 
 async def _sym_summary(sym: str) -> dict:
     """Gather all quick stats for one symbol in parallel."""
     try:
-        ob_task       = get_latest_orderbook(symbol=sym, limit=1)
-        cvd_task      = compute_cvd(window_seconds=300, symbol=sym)
-        funding_task  = get_funding_history(limit=2, symbol=sym)
-        oi_task       = compute_oi_momentum(window_seconds=300, symbol=sym)
-        candles_task  = get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=sym)
-        candles_1h_task = get_ohlcv(interval_seconds=300, window_seconds=3600, symbol=sym)
+        ob_task = get_latest_orderbook(symbol=sym, limit=1)
+        cvd_task = compute_cvd(window_seconds=300, symbol=sym)
+        funding_task = get_funding_history(limit=2, symbol=sym)
+        oi_task = compute_oi_momentum(window_seconds=300, symbol=sym)
+        candles_task = get_ohlcv(
+            interval_seconds=3600, window_seconds=86400, symbol=sym
+        )
+        candles_1h_task = get_ohlcv(
+            interval_seconds=300, window_seconds=3600, symbol=sym
+        )
 
         ob, cvd_data, funding, oi_mom, candles_24h, candles_1h = await asyncio.gather(
-            ob_task, cvd_task, funding_task, oi_task, candles_task, candles_1h_task,
+            ob_task,
+            cvd_task,
+            funding_task,
+            oi_task,
+            candles_task,
+            candles_1h_task,
             return_exceptions=True,
         )
 
@@ -1208,16 +1481,16 @@ async def _sym_summary(sym: str) -> dict:
         oi_pct = oi_mom.get("avg_pct_change", 0) if isinstance(oi_mom, dict) else 0
 
         change_24h = 0.0
-        change_1h  = 0.0
+        change_1h = 0.0
         high_24h = None
         low_24h = None
         if isinstance(candles_24h, list) and candles_24h:
-            open_24h  = candles_24h[0]["open"]
+            open_24h = candles_24h[0]["open"]
             close_24h = candles_24h[-1]["close"]
             if open_24h:
                 change_24h = (close_24h - open_24h) / open_24h * 100
             high_24h = max(c["high"] for c in candles_24h)
-            low_24h  = min(c["low"]  for c in candles_24h)
+            low_24h = min(c["low"] for c in candles_24h)
         if isinstance(candles_1h, list) and len(candles_1h) >= 2:
             o1h = candles_1h[0]["open"]
             c1h = candles_1h[-1]["close"]
@@ -1242,7 +1515,9 @@ async def _sym_summary(sym: str) -> dict:
 async def multi_summary():
     """Quick stats for all tracked symbols — for overview bar."""
     syms = get_symbols()
-    summaries = await asyncio.gather(*[_sym_summary(sym) for sym in syms], return_exceptions=True)
+    summaries = await asyncio.gather(
+        *[_sym_summary(sym) for sym in syms], return_exceptions=True
+    )
     results = {}
     for sym, summary in zip(syms, summaries):
         results[sym] = summary if isinstance(summary, dict) else {"error": str(summary)}
@@ -1288,7 +1563,13 @@ async def oi_delta_candles(
             oi_change = 0.0
         else:
             continue
-        result.append({"ts": bucket, "oi_change": round(oi_change, 2), "oi_end": round(vals[-1], 2)})
+        result.append(
+            {
+                "ts": bucket,
+                "oi_change": round(oi_change, 2),
+                "oi_end": round(vals[-1], 2),
+            }
+        )
 
     return {"status": "ok", "symbol": target, "interval": interval, "candles": result}
 
@@ -1332,7 +1613,13 @@ async def trade_count_rate(
         result.append({"ts": b, "trades_count": count, "trades_per_min": tpm})
         b += interval
 
-    return {"status": "ok", "symbol": target, "interval": interval, "window": window, "buckets": result}
+    return {
+        "status": "ok",
+        "symbol": target,
+        "interval": interval,
+        "window": window,
+        "buckets": result,
+    }
 
 
 @router.get("/spread-history")
@@ -1375,7 +1662,14 @@ async def spread_history(
         sp = r["spread"] or 0
         sp_pct = round((sp / mid) * 100, 4) if mid > 0 else 0
         sp_bps = round(sp_pct * 100, 2)
-        data.append({"ts": r["ts"], "spread": round(sp, 6), "spread_pct": sp_pct, "spread_bps": sp_bps})
+        data.append(
+            {
+                "ts": r["ts"],
+                "spread": round(sp, 6),
+                "spread_pct": sp_pct,
+                "spread_bps": sp_bps,
+            }
+        )
 
     # Alert: current spread vs 30min average
     alert = None
@@ -1396,12 +1690,20 @@ async def spread_history(
 
 # ─── Spread Tracker ──────────────────────────────────────────────────────────
 
+
 @router.get("/spread-tracker")
 async def spread_tracker(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=1800, ge=300, le=7200, description="History window in seconds (default 30min)"),
+    window: int = Query(
+        default=1800,
+        ge=300,
+        le=7200,
+        description="History window in seconds (default 30min)",
+    ),
     exchange: Optional[str] = Query(default=None),
-    threshold_pct: float = Query(default=0.5, description="Alert threshold for spread % (default 0.5%)"),
+    threshold_pct: float = Query(
+        default=0.5, description="Alert threshold for spread % (default 0.5%)"
+    ),
 ):
     """
     Bid-ask spread tracker: current spread + historical series + alert status.
@@ -1410,19 +1712,26 @@ async def spread_tracker(
     - Returns alert when spread_pct > threshold_pct OR current > 2x avg
     """
     from storage import get_spread_history, get_spread_stats, DB_PATH
+
     syms = [symbol.upper()] if symbol else get_symbols()
     result = {}
 
     for sym in syms:
         stats = await get_spread_stats(sym, window=window, exchange=exchange)
-        history = await get_spread_history(sym, window=window, exchange=exchange, limit=1000)
+        history = await get_spread_history(
+            sym, window=window, exchange=exchange, limit=1000
+        )
 
         # Override alert threshold if custom
         alert = stats.get("alert")
         current_pct = stats.get("current_pct")
         current_bps = stats.get("current_bps")
         avg_bps = stats.get("avg_bps", 0)
-        if current_pct is not None and current_pct > threshold_pct and (alert is None or alert.get("level") != "high"):
+        if (
+            current_pct is not None
+            and current_pct > threshold_pct
+            and (alert is None or alert.get("level") != "high")
+        ):
             alert = {
                 "level": "high",
                 "reason": "spread_pct_threshold",
@@ -1436,8 +1745,13 @@ async def spread_tracker(
             "alert": alert,
             "threshold_pct": threshold_pct,
             "history": [
-                {"ts": r["ts"], "spread_pct": r["spread_pct"], "spread_bps": r["spread_bps"],
-                 "bid_vol": r.get("bid_vol"), "ask_vol": r.get("ask_vol")}
+                {
+                    "ts": r["ts"],
+                    "spread_pct": r["spread_pct"],
+                    "spread_bps": r["spread_bps"],
+                    "bid_vol": r.get("bid_vol"),
+                    "ask_vol": r.get("ask_vol"),
+                }
                 for r in history
             ],
         }
@@ -1455,7 +1769,10 @@ async def momentum_table():
     async def sym_momentum(sym: str):
         try:
             windows = [3600, 14400, 86400]  # 1h, 4h, 24h
-            tasks = [get_ohlcv(interval_seconds=300, window_seconds=w, symbol=sym) for w in windows]
+            tasks = [
+                get_ohlcv(interval_seconds=300, window_seconds=w, symbol=sym)
+                for w in windows
+            ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             pcts = {}
             for w, candles in zip(["1h", "4h", "24h"], results):
@@ -1484,7 +1801,10 @@ async def price_correlations(window: int = Query(default=3600, le=86400)):
         return {"status": "ok", "matrix": {}, "window": window}
 
     # Fetch 1-min candles for all symbols in parallel
-    candle_tasks = [get_ohlcv(interval_seconds=60, window_seconds=window, symbol=sym) for sym in syms]
+    candle_tasks = [
+        get_ohlcv(interval_seconds=60, window_seconds=window, symbol=sym)
+        for sym in syms
+    ]
     all_candles = await asyncio.gather(*candle_tasks, return_exceptions=True)
 
     # Build time-indexed price series
@@ -1501,7 +1821,12 @@ async def price_correlations(window: int = Query(default=3600, le=86400)):
     sorted_ts = sorted(all_ts)
 
     if len(sorted_ts) < 5:
-        return {"status": "ok", "matrix": {}, "window": window, "note": "Insufficient data"}
+        return {
+            "status": "ok",
+            "matrix": {},
+            "window": window,
+            "note": "Insufficient data",
+        }
 
     # Build aligned price arrays
     aligned = {sym: [price_series[sym][ts] for ts in sorted_ts] for sym in price_series}
@@ -1544,6 +1869,7 @@ async def max_drawdown_endpoint(
 ):
     """Peak-to-trough max drawdown over the last window_seconds."""
     from metrics import compute_max_drawdown
+
     # Always fetch all symbols so frontend can look up by name
     data = await compute_max_drawdown(window_seconds=window, symbol=None)
     # If a specific symbol was requested and we got no data for it, try with filter
@@ -1559,11 +1885,19 @@ async def health_check():
     """Backend health: DB size, record counts, uptime."""
     import os
     from storage import DB_PATH
+
     try:
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
-        async with __import__('aiosqlite').connect(DB_PATH) as db:
+        async with __import__("aiosqlite").connect(DB_PATH) as db:
             counts = {}
-            for table in ["trades", "open_interest", "funding_rate", "liquidations", "orderbook_snapshots", "alert_history"]:
+            for table in [
+                "trades",
+                "open_interest",
+                "funding_rate",
+                "liquidations",
+                "orderbook_snapshots",
+                "alert_history",
+            ]:
                 async with db.execute(f"SELECT COUNT(*) FROM {table}") as cur:
                     row = await cur.fetchone()
                     counts[table] = row[0] if row else 0
@@ -1592,9 +1926,9 @@ async def pattern_live(symbol: Optional[str] = None):
 async def pattern_all():
     """Live pattern for all tracked symbols."""
     syms = get_symbols()
-    results = await asyncio.gather(*[
-        detect_accumulation_distribution_pattern(symbol=s) for s in syms
-    ])
+    results = await asyncio.gather(
+        *[detect_accumulation_distribution_pattern(symbol=s) for s in syms]
+    )
     return {"status": "ok", "symbols": {s: r for s, r in zip(syms, results)}}
 
 
@@ -1606,7 +1940,9 @@ async def pattern_history_endpoint(
     since: Optional[float] = None,
 ):
     """Return persisted pattern detection history."""
-    data = await get_pattern_history(limit=limit, since=since, symbol=symbol, pattern_type=pattern_type)
+    data = await get_pattern_history(
+        limit=limit, since=since, symbol=symbol, pattern_type=pattern_type
+    )
     return {"status": "ok", "data": data, "count": len(data)}
 
 
@@ -1623,11 +1959,14 @@ async def phase_history_endpoint(
     If since is not provided, defaults to last window_hours.
     """
     import time as _time
+
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     if since is None:
         since = _time.time() - window_hours * 3600
-    data = await get_phase_snapshots(symbol=target, since=since, until=until, limit=limit)
+    data = await get_phase_snapshots(
+        symbol=target, since=since, until=until, limit=limit
+    )
     return {"status": "ok", "symbol": target, "data": data, "count": len(data)}
 
 
@@ -1638,7 +1977,9 @@ async def symbol_stats(symbol: Optional[str] = None):
     target = symbol if symbol and symbol in syms else syms[0]
 
     # Get 24h candles
-    candles = await get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=target)
+    candles = await get_ohlcv(
+        interval_seconds=3600, window_seconds=86400, symbol=target
+    )
     if not candles:
         return {"status": "ok", "symbol": target, "stats": None}
 
@@ -1664,7 +2005,7 @@ async def symbol_stats(symbol: Optional[str] = None):
             "buy_volume": round(buy_volume, 2),
             "sell_volume": round(sell_volume, 2),
             "candles": len(candles),
-        }
+        },
     }
 
 
@@ -1686,11 +2027,51 @@ async def trade_size_distribution(
         return {"status": "ok", "symbol": target, "buckets": []}
 
     buckets = [
-        {"label": "<$100",     "min": 0,       "max": 100,    "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
-        {"label": "$100-1k",   "min": 100,     "max": 1000,   "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
-        {"label": "$1k-10k",   "min": 1000,    "max": 10000,  "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
-        {"label": "$10k-100k", "min": 10000,   "max": 100000, "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
-        {"label": ">$100k",    "min": 100000,  "max": 1e18,   "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+        {
+            "label": "<$100",
+            "min": 0,
+            "max": 100,
+            "buy_count": 0,
+            "sell_count": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+        },
+        {
+            "label": "$100-1k",
+            "min": 100,
+            "max": 1000,
+            "buy_count": 0,
+            "sell_count": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+        },
+        {
+            "label": "$1k-10k",
+            "min": 1000,
+            "max": 10000,
+            "buy_count": 0,
+            "sell_count": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+        },
+        {
+            "label": "$10k-100k",
+            "min": 10000,
+            "max": 100000,
+            "buy_count": 0,
+            "sell_count": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+        },
+        {
+            "label": ">$100k",
+            "min": 100000,
+            "max": 1e18,
+            "buy_count": 0,
+            "sell_count": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+        },
     ]
 
     for t in trades:
@@ -1707,7 +2088,7 @@ async def trade_size_distribution(
                 break
 
     for b in buckets:
-        b["buy_usd"]  = round(b["buy_usd"], 2)
+        b["buy_usd"] = round(b["buy_usd"], 2)
         b["sell_usd"] = round(b["sell_usd"], 2)
         b["total_usd"] = round(b["buy_usd"] + b["sell_usd"], 2)
         b["total_count"] = b["buy_count"] + b["sell_count"]
@@ -1719,7 +2100,11 @@ async def trade_size_distribution(
 async def support_resistance(
     symbol: Optional[str] = None,
     window: int = Query(default=3600, le=86400),
-    sensitivity: float = Query(default=0.003, le=0.05, description="Min price diff to count as new level (as fraction)")
+    sensitivity: float = Query(
+        default=0.003,
+        le=0.05,
+        description="Min price diff to count as new level (as fraction)",
+    ),
 ):
     """
     Auto-detect support/resistance levels from local price extrema in trade data.
@@ -1733,25 +2118,33 @@ async def support_resistance(
     if len(candles) < 10:
         return {"status": "ok", "symbol": target, "levels": []}
 
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
     closes = [c["close"] for c in candles]
 
     def find_peaks(series, is_max: bool):
         peaks = []
         for i in range(2, len(series) - 2):
             if is_max:
-                if series[i] > series[i-1] and series[i] > series[i-2] and \
-                   series[i] > series[i+1] and series[i] > series[i+2]:
+                if (
+                    series[i] > series[i - 1]
+                    and series[i] > series[i - 2]
+                    and series[i] > series[i + 1]
+                    and series[i] > series[i + 2]
+                ):
                     peaks.append(series[i])
             else:
-                if series[i] < series[i-1] and series[i] < series[i-2] and \
-                   series[i] < series[i+1] and series[i] < series[i+2]:
+                if (
+                    series[i] < series[i - 1]
+                    and series[i] < series[i - 2]
+                    and series[i] < series[i + 1]
+                    and series[i] < series[i + 2]
+                ):
                     peaks.append(series[i])
         return peaks
 
     resistance_peaks = find_peaks(highs, is_max=True)
-    support_troughs  = find_peaks(lows, is_max=False)
+    support_troughs = find_peaks(lows, is_max=False)
 
     current_price = closes[-1] if closes else 0
 
@@ -1770,17 +2163,39 @@ async def support_resistance(
                 cur_cluster = [p]
         clusters.append(cur_cluster)
         # Return center price + touch count
-        return [{"price": round(sum(c)/len(c), 8), "touches": len(c)} for c in clusters]
+        return [
+            {"price": round(sum(c) / len(c), 8), "touches": len(c)} for c in clusters
+        ]
 
     resistance_levels = cluster(resistance_peaks, sensitivity)
-    support_levels    = cluster(support_troughs, sensitivity)
+    support_levels = cluster(support_troughs, sensitivity)
 
     # Sort by touches (strength) and annotate type
     all_levels = []
     for r in resistance_levels:
-        all_levels.append({**r, "type": "resistance", "distance_pct": round((r["price"] - current_price) / current_price * 100, 4) if current_price else 0})
+        all_levels.append(
+            {
+                **r,
+                "type": "resistance",
+                "distance_pct": (
+                    round((r["price"] - current_price) / current_price * 100, 4)
+                    if current_price
+                    else 0
+                ),
+            }
+        )
     for s in support_levels:
-        all_levels.append({**s, "type": "support", "distance_pct": round((s["price"] - current_price) / current_price * 100, 4) if current_price else 0})
+        all_levels.append(
+            {
+                **s,
+                "type": "support",
+                "distance_pct": (
+                    round((s["price"] - current_price) / current_price * 100, 4)
+                    if current_price
+                    else 0
+                ),
+            }
+        )
 
     # Sort by proximity to current price
     all_levels.sort(key=lambda x: abs(x["distance_pct"]))
@@ -1812,24 +2227,26 @@ async def microstructure(
         return {"status": "ok", "symbol": target, "data": None}
 
     total = len(trades)
-    buy_trades  = [t for t in trades if t["side"] in ("buy", "Buy")]
+    buy_trades = [t for t in trades if t["side"] in ("buy", "Buy")]
     sell_trades = [t for t in trades if t["side"] not in ("buy", "Buy")]
 
-    buy_count  = len(buy_trades)
+    buy_count = len(buy_trades)
     sell_count = len(sell_trades)
-    buy_vol    = sum(t["qty"] * t["price"] for t in buy_trades)
-    sell_vol   = sum(t["qty"] * t["price"] for t in sell_trades)
+    buy_vol = sum(t["qty"] * t["price"] for t in buy_trades)
+    sell_vol = sum(t["qty"] * t["price"] for t in sell_trades)
 
     avg_trade_usd = (buy_vol + sell_vol) / total if total > 0 else 0
-    avg_buy_usd   = buy_vol / buy_count  if buy_count > 0 else 0
-    avg_sell_usd  = sell_vol / sell_count if sell_count > 0 else 0
+    avg_buy_usd = buy_vol / buy_count if buy_count > 0 else 0
+    avg_sell_usd = sell_vol / sell_count if sell_count > 0 else 0
 
     trades_per_min = total / (window / 60) if window > 0 else 0
-    aggressor_ratio = buy_count / total if total > 0 else 0.5  # >0.5 = buyer aggressor dominant
+    aggressor_ratio = (
+        buy_count / total if total > 0 else 0.5
+    )  # >0.5 = buyer aggressor dominant
 
     # Large trades (>$5k) breakdown
     large_threshold = 5000
-    large_buy  = sum(1 for t in buy_trades  if t["qty"] * t["price"] >= large_threshold)
+    large_buy = sum(1 for t in buy_trades if t["qty"] * t["price"] >= large_threshold)
     large_sell = sum(1 for t in sell_trades if t["qty"] * t["price"] >= large_threshold)
     large_total = large_buy + large_sell
 
@@ -1852,7 +2269,7 @@ async def microstructure(
             "large_threshold_usd": large_threshold,
             "buy_usd": round(buy_vol, 2),
             "sell_usd": round(sell_vol, 2),
-        }
+        },
     }
 
 
@@ -1869,14 +2286,21 @@ async def pivot_levels(symbol: Optional[str] = None):
     target = symbol if symbol and symbol in syms else syms[0]
 
     # Try to get previous day candles; fall back to all available data
-    candles_48h = await get_ohlcv(interval_seconds=3600, window_seconds=48 * 3600, symbol=target)
+    candles_48h = await get_ohlcv(
+        interval_seconds=3600, window_seconds=48 * 3600, symbol=target
+    )
     if not candles_48h:
-        return {"status": "ok", "symbol": target, "pivots": None, "note": "Insufficient data"}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "pivots": None,
+            "note": "Insufficient data",
+        }
 
     # Previous day = candles from 48h ago to 24h ago (or all if not enough)
     now = time.time()
     cutoff_start = now - 48 * 3600
-    cutoff_end   = now - 24 * 3600
+    cutoff_end = now - 24 * 3600
     prev_day = [c for c in candles_48h if cutoff_start <= c["ts"] <= cutoff_end]
     if not prev_day:
         # Fallback: use first half or all candles if < 4h
@@ -1884,7 +2308,7 @@ async def pivot_levels(symbol: Optional[str] = None):
         prev_day = candles_48h[:half] if len(candles_48h) >= 4 else candles_48h
 
     ph = max(c["high"] for c in prev_day)
-    pl = min(c["low"]  for c in prev_day)
+    pl = min(c["low"] for c in prev_day)
     pc = prev_day[-1]["close"]
 
     pp = (ph + pl + pc) / 3
@@ -1895,15 +2319,20 @@ async def pivot_levels(symbol: Optional[str] = None):
     r3 = ph + 2 * (pp - pl)
     s3 = pl - 2 * (ph - pp)
 
-    def rnd(v): return round(v, 8)
+    def rnd(v):
+        return round(v, 8)
 
     return {
         "status": "ok",
         "symbol": target,
         "pivots": {
             "pp": rnd(pp),
-            "r1": rnd(r1), "r2": rnd(r2), "r3": rnd(r3),
-            "s1": rnd(s1), "s2": rnd(s2), "s3": rnd(s3),
+            "r1": rnd(r1),
+            "r2": rnd(r2),
+            "r3": rnd(r3),
+            "s1": rnd(s1),
+            "s2": rnd(s2),
+            "s3": rnd(s3),
         },
         "prev_day": {"high": rnd(ph), "low": rnd(pl), "close": rnd(pc)},
     }
@@ -1931,27 +2360,37 @@ async def session_stats(symbol: Optional[str] = None):
     # Session H/L/VWAP
     if candles_1h:
         s_high = max(c["high"] for c in candles_1h)
-        s_low  = min(c["low"]  for c in candles_1h)
+        s_low = min(c["low"] for c in candles_1h)
         s_open = candles_1h[0]["open"]
         s_close = candles_1h[-1]["close"]
         s_change = ((s_close - s_open) / s_open * 100) if s_open else 0
         # VWAP from candles
-        cum_pv = sum(((c["high"] + c["low"] + c["close"]) / 3) * c["volume"] for c in candles_1h)
-        cum_v  = sum(c["volume"] for c in candles_1h)
+        cum_pv = sum(
+            ((c["high"] + c["low"] + c["close"]) / 3) * c["volume"] for c in candles_1h
+        )
+        cum_v = sum(c["volume"] for c in candles_1h)
         vwap = cum_pv / cum_v if cum_v > 0 else None
     else:
         s_high = s_low = s_open = s_close = vwap = None
         s_change = 0
 
     # Buy/sell breakdown
-    buy_vol = sum(t["qty"] * t["price"] for t in trades_1h if t["side"] in ("buy", "Buy"))
-    sell_vol = sum(t["qty"] * t["price"] for t in trades_1h if t["side"] not in ("buy", "Buy"))
+    buy_vol = sum(
+        t["qty"] * t["price"] for t in trades_1h if t["side"] in ("buy", "Buy")
+    )
+    sell_vol = sum(
+        t["qty"] * t["price"] for t in trades_1h if t["side"] not in ("buy", "Buy")
+    )
     total_vol = buy_vol + sell_vol
     buy_pct = (buy_vol / total_vol * 100) if total_vol > 0 else 50
 
     # Liquidation totals
-    liq_long  = sum(l["value"] or 0 for l in liqs_1h if l["side"] != "buy")  # long liq = sell side
-    liq_short = sum(l["value"] or 0 for l in liqs_1h if l["side"] == "buy")  # short liq = buy side
+    liq_long = sum(
+        l["value"] or 0 for l in liqs_1h if l["side"] != "buy"
+    )  # long liq = sell side
+    liq_short = sum(
+        l["value"] or 0 for l in liqs_1h if l["side"] == "buy"
+    )  # short liq = buy side
     liq_total = liq_long + liq_short
 
     return {
@@ -1972,7 +2411,7 @@ async def session_stats(symbol: Optional[str] = None):
             "liq_total_usd": round(liq_total, 2),
             "liq_long_usd": round(liq_long, 2),
             "liq_short_usd": round(liq_short, 2),
-        }
+        },
     }
 
 
@@ -1985,17 +2424,29 @@ async def atr_endpoint(
     """ATR(n) for the given symbol, using 1-min (or specified) candles."""
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    candles = await get_ohlcv(interval_seconds=interval, window_seconds=period * interval * 3, symbol=target)
+    candles = await get_ohlcv(
+        interval_seconds=interval, window_seconds=period * interval * 3, symbol=target
+    )
     if len(candles) < period + 1:
-        return {"status": "ok", "symbol": target, "atr": None, "atr_pct": None, "period": period}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "atr": None,
+            "atr_pct": None,
+            "period": period,
+        }
 
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
     closes = [c["close"] for c in candles]
 
     trs = []
     for i in range(1, len(candles)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
         trs.append(tr)
 
     # Wilder smoothed ATR
@@ -2023,6 +2474,7 @@ async def metrics_summary(symbol: Optional[str] = None):
     target = symbol if symbol and symbol in syms else syms[0]
 
     import asyncio
+
     phase_task = classify_market_phase(symbol=target)
     vol_task = compute_volume_imbalance(window_seconds=60, symbol=target)
     oi_task = compute_oi_momentum(window_seconds=300, symbol=target)
@@ -2061,7 +2513,7 @@ async def funding_heatmap(
     buckets: int = Query(24, ge=6, le=72),
 ):
     """Funding rate extremes heatmap: symbol × time bucket grid.
-    
+
     Returns a 2D grid where each cell = average funding rate for
     (symbol, time_bucket). Used to spot funding rate extremes over time.
     """
@@ -2117,7 +2569,10 @@ async def funding_heatmap(
         if rates:
             max_abs = max(abs(r) for r in rates)
             latest = rates[-1] if rates else 0
-            extremes[sym] = {"max_abs": round(max_abs * 100, 6), "latest": round(latest * 100, 6)}
+            extremes[sym] = {
+                "max_abs": round(max_abs * 100, 6),
+                "latest": round(latest * 100, 6),
+            }
         else:
             extremes[sym] = {"max_abs": 0.0, "latest": 0.0}
 
@@ -2138,11 +2593,16 @@ async def funding_heatmap(
 
 # ── Liquidation Pressure Score ────────────────────────────────────────────────
 
+
 @router.get("/liq-pressure")
 async def liq_pressure(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=300, ge=30, le=3600, description="Window seconds for OI velocity"),
-    liq_window: int = Query(default=120, ge=30, le=1800, description="Window seconds for liq volume"),
+    window: int = Query(
+        default=300, ge=30, le=3600, description="Window seconds for OI velocity"
+    ),
+    liq_window: int = Query(
+        default=120, ge=30, le=1800, description="Window seconds for liq volume"
+    ),
 ):
     """
     Liquidation Pressure Score (0-100):
@@ -2155,20 +2615,29 @@ async def liq_pressure(
 
     for sym in symbols:
         # 1) Liquidation volume score (0-50 points)
-        liq_data = await get_recent_liquidations(limit=1000, since=now - liq_window, symbol=sym)
+        liq_data = await get_recent_liquidations(
+            limit=1000, since=now - liq_window, symbol=sym
+        )
         liq_usd = sum(r.get("value", 0) or 0 for r in liq_data)
 
         # Normalize: $0 → 0pts, $100k → 25pts, $500k → 50pts (logarithmic)
         import math
+
         if liq_usd <= 0:
             liq_score = 0.0
         else:
             # log scale: ln(liq_usd/1000) / ln(500) * 50, clamp 0-50
-            liq_score = min(50.0, max(0.0, math.log(liq_usd / 1000 + 1) / math.log(501) * 50))
+            liq_score = min(
+                50.0, max(0.0, math.log(liq_usd / 1000 + 1) / math.log(501) * 50)
+            )
 
         # Long vs short breakdown
-        long_liq = sum(r.get("value", 0) or 0 for r in liq_data if r.get("side") == "sell")
-        short_liq = sum(r.get("value", 0) or 0 for r in liq_data if r.get("side") == "buy")
+        long_liq = sum(
+            r.get("value", 0) or 0 for r in liq_data if r.get("side") == "sell"
+        )
+        short_liq = sum(
+            r.get("value", 0) or 0 for r in liq_data if r.get("side") == "buy"
+        )
 
         # 2) OI velocity score (0-50 points)
         oi_mom = await compute_oi_momentum(window_seconds=window, symbol=sym)
@@ -2212,11 +2681,22 @@ async def liq_pressure(
 
 # ── Price Velocity Indicator ──────────────────────────────────────────────────
 
+
 @router.get("/price-velocity")
 async def price_velocity(
     symbol: Optional[str] = Query(default=None),
-    short_window: int = Query(default=10, ge=5, le=60, description="Short window (seconds) for instant velocity"),
-    long_window: int = Query(default=60, ge=15, le=300, description="Long window (seconds) for trend velocity"),
+    short_window: int = Query(
+        default=10,
+        ge=5,
+        le=60,
+        description="Short window (seconds) for instant velocity",
+    ),
+    long_window: int = Query(
+        default=60,
+        ge=15,
+        le=300,
+        description="Long window (seconds) for trend velocity",
+    ),
 ):
     """
     Price velocity: rate of price change in $/second (and %/second).
@@ -2229,7 +2709,9 @@ async def price_velocity(
 
     for sym in symbols:
         # Fetch trades for long window
-        trades = await get_recent_trades(limit=2000, since=now - long_window, symbol=sym)
+        trades = await get_recent_trades(
+            limit=2000, since=now - long_window, symbol=sym
+        )
         if not trades:
             result[sym] = {
                 "instant_velocity": 0.0,
@@ -2291,10 +2773,13 @@ async def price_velocity(
 
 # ── CVD New-High Divergence ───────────────────────────────────────────────────
 
+
 @router.get("/cvd-divergence")
 async def cvd_divergence_endpoint(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=300, ge=60, le=3600, description="Lookback window in seconds"),
+    window: int = Query(
+        default=300, ge=60, le=3600, description="Lookback window in seconds"
+    ),
 ):
     """
     CVD New-High/Low Divergence detector.
@@ -2309,7 +2794,11 @@ async def cvd_divergence_endpoint(
     for sym in symbols:
         trades = await get_recent_trades(limit=5000, since=now - window, symbol=sym)
         if len(trades) < 20:
-            result[sym] = {"signal": "none", "description": "Insufficient data", "severity": 0}
+            result[sym] = {
+                "signal": "none",
+                "description": "Insufficient data",
+                "severity": 0,
+            }
             continue
 
         trades.sort(key=lambda t: t.get("ts", 0))
@@ -2319,8 +2808,12 @@ async def cvd_divergence_endpoint(
         first_half = trades[:mid]
         second_half = trades[mid:]
 
-        def price_high(ts): return max((t.get("price", 0) or 0) for t in ts)
-        def price_low(ts):  return min((t.get("price", 0) or 0) for t in ts)
+        def price_high(ts):
+            return max((t.get("price", 0) or 0) for t in ts)
+
+        def price_low(ts):
+            return min((t.get("price", 0) or 0) for t in ts)
+
         def cvd_sum(ts):
             s = 0
             for t in ts:
@@ -2330,20 +2823,26 @@ async def cvd_divergence_endpoint(
 
         p_high_1 = price_high(first_half)
         p_high_2 = price_high(second_half)
-        p_low_1  = price_low(first_half)
-        p_low_2  = price_low(second_half)
-        cvd_1    = cvd_sum(first_half)
-        cvd_2    = cvd_sum(second_half)
+        p_low_1 = price_low(first_half)
+        p_low_2 = price_low(second_half)
+        cvd_1 = cvd_sum(first_half)
+        cvd_2 = cvd_sum(second_half)
 
         # Price change %
         price_latest = second_half[-1].get("price", 0) or 0
         price_oldest = first_half[0].get("price", 0) or 0
-        price_pct = (price_latest - price_oldest) / price_oldest * 100 if price_oldest else 0
+        price_pct = (
+            (price_latest - price_oldest) / price_oldest * 100 if price_oldest else 0
+        )
 
         # CVD change (normalized by median trade value)
-        median_val = sorted([abs((t.get("price",0) or 0)*(t.get("qty",0) or 0)) for t in trades])[len(trades)//2]
+        median_val = sorted(
+            [abs((t.get("price", 0) or 0) * (t.get("qty", 0) or 0)) for t in trades]
+        )[len(trades) // 2]
         cvd_delta = cvd_2 - cvd_1
-        cvd_norm = cvd_delta / (median_val * len(trades) / 2) if median_val else 0  # -1 to 1
+        cvd_norm = (
+            cvd_delta / (median_val * len(trades) / 2) if median_val else 0
+        )  # -1 to 1
 
         # Bearish divergence: price makes higher high, CVD makes lower high
         bearish_div = p_high_2 > p_high_1 * 1.001 and cvd_2 < cvd_1 * 0.9
@@ -2393,12 +2892,22 @@ async def cvd_divergence_endpoint(
 
 # ── Trade Momentum Burst Detector ────────────────────────────────────────────
 
+
 @router.get("/trade-bursts")
 async def trade_bursts(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=60, ge=10, le=300, description="Total lookback window in seconds"),
-    burst_window: int = Query(default=5, ge=1, le=30, description="Burst detection window in seconds"),
-    threshold: int = Query(default=10, ge=3, le=100, description="Min trades in burst_window to count as burst"),
+    window: int = Query(
+        default=60, ge=10, le=300, description="Total lookback window in seconds"
+    ),
+    burst_window: int = Query(
+        default=5, ge=1, le=30, description="Burst detection window in seconds"
+    ),
+    threshold: int = Query(
+        default=10,
+        ge=3,
+        le=100,
+        description="Min trades in burst_window to count as burst",
+    ),
 ):
     """
     Detect trade momentum bursts: periods with >threshold trades in burst_window seconds.
@@ -2411,7 +2920,12 @@ async def trade_bursts(
     for sym in symbols:
         trades = await get_recent_trades(limit=5000, since=now - window, symbol=sym)
         if not trades:
-            result[sym] = {"burst_active": False, "burst_count": 0, "rate_now": 0.0, "bursts": []}
+            result[sym] = {
+                "burst_active": False,
+                "burst_count": 0,
+                "rate_now": 0.0,
+                "bursts": [],
+            }
             continue
 
         trades.sort(key=lambda t: t.get("ts", 0))
@@ -2430,18 +2944,28 @@ async def trade_bursts(
             if count >= threshold:
                 # Collect burst info
                 burst_trades = trades[i:j]
-                buy_vol  = sum((t.get("price",0) or 0)*(t.get("qty",0) or 0) for t in burst_trades if t.get("side")=="buy")
-                sell_vol = sum((t.get("price",0) or 0)*(t.get("qty",0) or 0) for t in burst_trades if t.get("side")=="sell")
+                buy_vol = sum(
+                    (t.get("price", 0) or 0) * (t.get("qty", 0) or 0)
+                    for t in burst_trades
+                    if t.get("side") == "buy"
+                )
+                sell_vol = sum(
+                    (t.get("price", 0) or 0) * (t.get("qty", 0) or 0)
+                    for t in burst_trades
+                    if t.get("side") == "sell"
+                )
                 direction = "buy" if buy_vol > sell_vol else "sell"
-                bursts.append({
-                    "ts_start": round(ts_start, 2),
-                    "ts_end": round(timestamps[j-1], 2),
-                    "trade_count": count,
-                    "rate_per_sec": round(count / burst_window, 2),
-                    "buy_vol": round(buy_vol, 2),
-                    "sell_vol": round(sell_vol, 2),
-                    "direction": direction,
-                })
+                bursts.append(
+                    {
+                        "ts_start": round(ts_start, 2),
+                        "ts_end": round(timestamps[j - 1], 2),
+                        "trade_count": count,
+                        "rate_per_sec": round(count / burst_window, 2),
+                        "buy_vol": round(buy_vol, 2),
+                        "sell_vol": round(sell_vol, 2),
+                        "direction": direction,
+                    }
+                )
                 i = j  # skip past this burst
             else:
                 i += 1
@@ -2464,21 +2988,38 @@ async def trade_bursts(
             "burst_active": burst_active,
             "burst_count": len(bursts),
             "rate_now": rate_now,
-            "current_burst_trades": len([t for t in timestamps if t >= now - burst_window]),
+            "current_burst_trades": len(
+                [t for t in timestamps if t >= now - burst_window]
+            ),
             "bursts": bursts[-5:],  # last 5 bursts
             "latest_burst": latest_burst,
         }
 
-    return {"status": "ok", "ts": now, "window_s": window, "burst_window_s": burst_window, "threshold": threshold, "symbols": result}
+    return {
+        "status": "ok",
+        "ts": now,
+        "window_s": window,
+        "burst_window_s": burst_window,
+        "threshold": threshold,
+        "symbols": result,
+    }
 
 
 # ── Cumulative Funding Cost Tracker ─────────────────────────────────────────
 
+
 @router.get("/funding-cost")
 async def funding_cost(
     symbol: Optional[str] = Query(default=None),
-    session_hours: float = Query(default=8.0, ge=0.1, le=168, description="Session duration in hours (how long you've been in the trade)"),
-    position_usd: float = Query(default=10000.0, ge=1, description="Position size in USD"),
+    session_hours: float = Query(
+        default=8.0,
+        ge=0.1,
+        le=168,
+        description="Session duration in hours (how long you've been in the trade)",
+    ),
+    position_usd: float = Query(
+        default=10000.0, ge=1, description="Position size in USD"
+    ),
     side: str = Query(default="long", description="Position side: long or short"),
 ):
     """
@@ -2541,7 +3082,9 @@ async def funding_cost(
 
         total_cost = sum(all_costs)
         # Count unique 8h funding intervals elapsed
-        intervals_counted = len(set(int(r["ts"] // FUNDING_INTERVAL) for r in funding_rows))
+        intervals_counted = len(
+            set(int(r["ts"] // FUNDING_INTERVAL) for r in funding_rows)
+        )
 
         # Latest rate
         latest = sorted(funding_rows, key=lambda r: r["ts"])[-1]
@@ -2578,10 +3121,13 @@ async def funding_cost(
 
 # ── Rolling Max Drawdown ──────────────────────────────────────────────────────
 
+
 @router.get("/max-drawdown")
 async def max_drawdown(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=3600, ge=300, le=86400, description="Lookback window in seconds"),
+    window: int = Query(
+        default=3600, ge=300, le=86400, description="Lookback window in seconds"
+    ),
 ):
     """
     Rolling maximum drawdown: peak-to-trough price drop in the last `window` seconds.
@@ -2605,7 +3151,11 @@ async def max_drawdown(
             continue
 
         trades.sort(key=lambda t: t.get("ts", 0))
-        prices = [(t["ts"], t.get("price", 0) or 0) for t in trades if (t.get("price") or 0) > 0]
+        prices = [
+            (t["ts"], t.get("price", 0) or 0)
+            for t in trades
+            if (t.get("price") or 0) > 0
+        ]
         if len(prices) < 3:
             continue
 
@@ -2655,7 +3205,9 @@ async def max_drawdown(
         # Current drawdown from recent peak
         recent_peak = max(p for _, p in prices[-100:])  # last ~100 trades
         current_price = prices[-1][1]
-        current_dd = (current_price - recent_peak) / recent_peak * 100 if recent_peak else 0
+        current_dd = (
+            (current_price - recent_peak) / recent_peak * 100 if recent_peak else 0
+        )
 
         result[sym] = {
             "max_drawdown_pct": round(max_dd, 4),
@@ -2677,12 +3229,17 @@ async def max_drawdown(
 # OB Wall Strength Decay Tracker
 # ---------------------------------------------------------------------------
 
+
 @router.get("/ob-wall-decay")
 async def ob_wall_decay(
     symbol: str = Query("BANANAS31USDT"),
     window: int = Query(300, description="Lookback window in seconds (default 5min)"),
-    wall_threshold_pct: float = Query(0.5, description="Min % of total side volume to be a wall"),
-    price_cluster_pct: float = Query(0.05, description="Price cluster range % for wall detection"),
+    wall_threshold_pct: float = Query(
+        0.5, description="Min % of total side volume to be a wall"
+    ),
+    price_cluster_pct: float = Query(
+        0.05, description="Price cluster range % for wall detection"
+    ),
 ):
     """
     OB wall strength decay tracker.
@@ -2694,12 +3251,22 @@ async def ob_wall_decay(
     since = now - window
     target = symbol.upper()
 
-    snapshots = await get_orderbook_snapshots_for_heatmap(target, since, sample_interval=5)
+    snapshots = await get_orderbook_snapshots_for_heatmap(
+        target, since, sample_interval=5
+    )
 
     if not snapshots:
-        return {"status": "ok", "symbol": target, "window_s": window, "series": [], "decay": {}}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "window_s": window,
+            "series": [],
+            "decay": {},
+        }
 
-    def detect_walls(levels: list, total_volume: float, cluster_pct: float, threshold_pct: float):
+    def detect_walls(
+        levels: list, total_volume: float, cluster_pct: float, threshold_pct: float
+    ):
         if not levels or total_volume == 0:
             return []
         levels_sorted = sorted(levels, key=lambda x: float(x[0]))
@@ -2718,11 +3285,13 @@ async def ob_wall_decay(
                     break
             pct = cluster_vol / total_volume * 100
             if pct >= threshold_pct:
-                walls.append({
-                    "price": round(base_price, 8),
-                    "volume": round(cluster_vol, 2),
-                    "pct_of_side": round(pct, 2),
-                })
+                walls.append(
+                    {
+                        "price": round(base_price, 8),
+                        "volume": round(cluster_vol, 2),
+                        "pct_of_side": round(pct, 2),
+                    }
+                )
             i = j
         walls.sort(key=lambda x: x["volume"], reverse=True)
         return walls[:3]
@@ -2731,30 +3300,44 @@ async def ob_wall_decay(
     for snap in snapshots:
         ts = snap["ts"]
         try:
-            bids = json.loads(snap["bids"]) if isinstance(snap["bids"], str) else snap["bids"]
-            asks = json.loads(snap["asks"]) if isinstance(snap["asks"], str) else snap["asks"]
+            bids = (
+                json.loads(snap["bids"])
+                if isinstance(snap["bids"], str)
+                else snap["bids"]
+            )
+            asks = (
+                json.loads(snap["asks"])
+                if isinstance(snap["asks"], str)
+                else snap["asks"]
+            )
         except Exception:
             continue
 
         total_bid_vol = sum(float(b[1]) for b in bids) if bids else 0
         total_ask_vol = sum(float(a[1]) for a in asks) if asks else 0
 
-        bid_walls = detect_walls(bids, total_bid_vol, price_cluster_pct, wall_threshold_pct)
-        ask_walls = detect_walls(asks, total_ask_vol, price_cluster_pct, wall_threshold_pct)
+        bid_walls = detect_walls(
+            bids, total_bid_vol, price_cluster_pct, wall_threshold_pct
+        )
+        ask_walls = detect_walls(
+            asks, total_ask_vol, price_cluster_pct, wall_threshold_pct
+        )
 
         top_bid = bid_walls[0] if bid_walls else None
         top_ask = ask_walls[0] if ask_walls else None
 
-        series.append({
-            "ts": round(ts, 2),
-            "mid_price": snap.get("mid_price"),
-            "top_bid_wall": top_bid,
-            "top_ask_wall": top_ask,
-            "top_bid_vol": round(top_bid["volume"], 2) if top_bid else 0,
-            "top_ask_vol": round(top_ask["volume"], 2) if top_ask else 0,
-            "top_bid_pct": round(top_bid["pct_of_side"], 2) if top_bid else 0,
-            "top_ask_pct": round(top_ask["pct_of_side"], 2) if top_ask else 0,
-        })
+        series.append(
+            {
+                "ts": round(ts, 2),
+                "mid_price": snap.get("mid_price"),
+                "top_bid_wall": top_bid,
+                "top_ask_wall": top_ask,
+                "top_bid_vol": round(top_bid["volume"], 2) if top_bid else 0,
+                "top_ask_vol": round(top_ask["volume"], 2) if top_ask else 0,
+                "top_bid_pct": round(top_bid["pct_of_side"], 2) if top_bid else 0,
+                "top_ask_pct": round(top_ask["pct_of_side"], 2) if top_ask else 0,
+            }
+        )
 
     decay_info = {}
     if len(series) >= 2:
@@ -2763,16 +3346,42 @@ async def ob_wall_decay(
         bid_decay = None
         ask_decay = None
         if first["top_bid_vol"] > 0:
-            bid_decay = round((last["top_bid_vol"] - first["top_bid_vol"]) / first["top_bid_vol"] * 100, 2)
+            bid_decay = round(
+                (last["top_bid_vol"] - first["top_bid_vol"])
+                / first["top_bid_vol"]
+                * 100,
+                2,
+            )
         if first["top_ask_vol"] > 0:
-            ask_decay = round((last["top_ask_vol"] - first["top_ask_vol"]) / first["top_ask_vol"] * 100, 2)
+            ask_decay = round(
+                (last["top_ask_vol"] - first["top_ask_vol"])
+                / first["top_ask_vol"]
+                * 100,
+                2,
+            )
         decay_info = {
             "bid_wall_decay_pct": bid_decay,
             "ask_wall_decay_pct": ask_decay,
             "window_s": window,
             "snapshots": len(series),
-            "bid_trend": "weakening" if bid_decay is not None and bid_decay < -5 else "strengthening" if bid_decay is not None and bid_decay > 5 else "stable",
-            "ask_trend": "weakening" if ask_decay is not None and ask_decay < -5 else "strengthening" if ask_decay is not None and ask_decay > 5 else "stable",
+            "bid_trend": (
+                "weakening"
+                if bid_decay is not None and bid_decay < -5
+                else (
+                    "strengthening"
+                    if bid_decay is not None and bid_decay > 5
+                    else "stable"
+                )
+            ),
+            "ask_trend": (
+                "weakening"
+                if ask_decay is not None and ask_decay < -5
+                else (
+                    "strengthening"
+                    if ask_decay is not None and ask_decay > 5
+                    else "stable"
+                )
+            ),
         }
 
     return {
@@ -2799,7 +3408,9 @@ async def flow_imbalance(
     target = symbol.upper()
     now = time.time()
 
-    candles = await get_ohlcv(interval_seconds=bucket_size, window_seconds=window, symbol=target)
+    candles = await get_ohlcv(
+        interval_seconds=bucket_size, window_seconds=window, symbol=target
+    )
 
     series = []
     for c in candles:
@@ -2807,19 +3418,29 @@ async def flow_imbalance(
         sell_vol = c.get("sell_volume", 0) or 0
         total = buy_vol + sell_vol
         ratio = round(buy_vol / total, 4) if total > 0 else None
-        series.append({
-            "ts": c["ts"],
-            "buy_vol": round(buy_vol, 4),
-            "sell_vol": round(sell_vol, 4),
-            "total_vol": round(total, 4),
-            "ratio": ratio,
-            "label": "buy" if ratio is not None and ratio > 0.55 else "sell" if ratio is not None and ratio < 0.45 else "neutral",
-        })
+        series.append(
+            {
+                "ts": c["ts"],
+                "buy_vol": round(buy_vol, 4),
+                "sell_vol": round(sell_vol, 4),
+                "total_vol": round(total, 4),
+                "ratio": ratio,
+                "label": (
+                    "buy"
+                    if ratio is not None and ratio > 0.55
+                    else "sell" if ratio is not None and ratio < 0.45 else "neutral"
+                ),
+            }
+        )
 
     # Rolling 5-bucket average ratio
     window_size = 5
     for i, s in enumerate(series):
-        slice_ = [x["ratio"] for x in series[max(0, i - window_size + 1):i + 1] if x["ratio"] is not None]
+        slice_ = [
+            x["ratio"]
+            for x in series[max(0, i - window_size + 1) : i + 1]
+            if x["ratio"] is not None
+        ]
         s["ratio_ma5"] = round(sum(slice_) / len(slice_), 4) if slice_ else None
 
     # Summary stats
@@ -2833,7 +3454,9 @@ async def flow_imbalance(
             "avg_ratio": round(avg_ratio, 4),
             "total_buy_vol": round(total_buy, 4),
             "total_sell_vol": round(total_sell, 4),
-            "bias": "buy" if avg_ratio > 0.55 else "sell" if avg_ratio < 0.45 else "neutral",
+            "bias": (
+                "buy" if avg_ratio > 0.55 else "sell" if avg_ratio < 0.45 else "neutral"
+            ),
             "bias_strength": round(abs(avg_ratio - 0.5) * 200, 1),  # 0-100 scale
             "buckets": len(series),
         }
@@ -2874,7 +3497,9 @@ async def volatility_regime_endpoint(
     total_candles_needed = lookback_periods + period + 5
     window_seconds = total_candles_needed * 60  # 1-min candles
 
-    candles = await get_ohlcv(interval_seconds=60, window_seconds=window_seconds, symbol=target)
+    candles = await get_ohlcv(
+        interval_seconds=60, window_seconds=window_seconds, symbol=target
+    )
 
     if len(candles) < period + 10:
         return {
@@ -2888,14 +3513,18 @@ async def volatility_regime_endpoint(
             "note": "insufficient data",
         }
 
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
     closes = [c["close"] for c in candles]
 
     # Compute TR for each candle
     trs = []
     for i in range(1, len(candles)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
         trs.append(tr)
 
     # Compute rolling ATR values (Wilder) for each window ending point
@@ -2974,7 +3603,9 @@ async def volatility_regime_all(period: int = Query(default=14, ge=5, le=50)):
     import asyncio
 
     async def _fetch(sym: str):
-        return await volatility_regime_endpoint(symbol=sym, period=int(period), lookback_periods=100)
+        return await volatility_regime_endpoint(
+            symbol=sym, period=int(period), lookback_periods=100
+        )
 
     syms = get_symbols()
     results = await asyncio.gather(*[_fetch(s) for s in syms], return_exceptions=True)
@@ -2989,11 +3620,16 @@ async def volatility_regime_all(period: int = Query(default=14, ge=5, le=50)):
 
 # ── CDV vs Price Action Oscillator ────────────────────────────────────────────
 
+
 @router.get("/cdv-oscillator")
 async def cdv_oscillator_endpoint(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=1800, ge=300, le=7200, description="Lookback window in seconds"),
-    bucket: int = Query(default=60, ge=15, le=300, description="Bucket size in seconds"),
+    window: int = Query(
+        default=1800, ge=300, le=7200, description="Lookback window in seconds"
+    ),
+    bucket: int = Query(
+        default=60, ge=15, le=300, description="Bucket size in seconds"
+    ),
 ):
     """
     CDV vs Price Action Oscillator.
@@ -3058,12 +3694,14 @@ async def cdv_oscillator_endpoint(
     for ts, bc in sorted_b:
         cum_cdv += bc["cvd_usd"]
         mid_price = (bc["open"] + bc["close"]) / 2
-        series.append({
-            "ts": ts,
-            "price": round(mid_price, 8),
-            "cdv_bucket": round(bc["cvd_usd"], 2),
-            "cum_cdv": round(cum_cdv, 2),
-        })
+        series.append(
+            {
+                "ts": ts,
+                "price": round(mid_price, 8),
+                "cdv_bucket": round(bc["cvd_usd"], 2),
+                "cum_cdv": round(cum_cdv, 2),
+            }
+        )
 
     # Normalize CDV and price to [-1, 1] for oscillator
     prices = [s["price"] for s in series]
@@ -3087,7 +3725,7 @@ async def cdv_oscillator_endpoint(
     divergences = []
     lookback = max(5, len(series) // 10)
     for i in range(lookback, len(series)):
-        window_slice = series[max(0, i - lookback):i]
+        window_slice = series[max(0, i - lookback) : i]
         cur = series[i]
 
         cdv_window_max = max(s["cum_cdv"] for s in window_slice)
@@ -3096,25 +3734,35 @@ async def cdv_oscillator_endpoint(
         price_window_min = min(s["price"] for s in window_slice)
 
         # Bearish: CDV new high but price NOT new high
-        if cur["cum_cdv"] > cdv_window_max * 1.005 and cur["price"] <= price_window_max * 0.998:
-            divergences.append({
-                "ts": cur["ts"],
-                "type": "bearish",
-                "label": "CDV↑ Price→",
-                "cdv": cur["cum_cdv"],
-                "price": cur["price"],
-                "oscillator": cur["oscillator"],
-            })
+        if (
+            cur["cum_cdv"] > cdv_window_max * 1.005
+            and cur["price"] <= price_window_max * 0.998
+        ):
+            divergences.append(
+                {
+                    "ts": cur["ts"],
+                    "type": "bearish",
+                    "label": "CDV↑ Price→",
+                    "cdv": cur["cum_cdv"],
+                    "price": cur["price"],
+                    "oscillator": cur["oscillator"],
+                }
+            )
         # Bullish: CDV new low but price NOT new low
-        elif cur["cum_cdv"] < cdv_window_min * 1.005 and cur["price"] >= price_window_min * 1.002:
-            divergences.append({
-                "ts": cur["ts"],
-                "type": "bullish",
-                "label": "CDV↓ Price→",
-                "cdv": cur["cum_cdv"],
-                "price": cur["price"],
-                "oscillator": cur["oscillator"],
-            })
+        elif (
+            cur["cum_cdv"] < cdv_window_min * 1.005
+            and cur["price"] >= price_window_min * 1.002
+        ):
+            divergences.append(
+                {
+                    "ts": cur["ts"],
+                    "type": "bullish",
+                    "label": "CDV↓ Price→",
+                    "cdv": cur["cum_cdv"],
+                    "price": cur["price"],
+                    "oscillator": cur["oscillator"],
+                }
+            )
 
     # Deduplicate: max one divergence per 3-bucket window
     deduped = []
@@ -3132,7 +3780,9 @@ async def cdv_oscillator_endpoint(
         desc = f"CDV leading price (osc={osc_now:+.3f}) — bullish momentum confirmation"
     elif osc_now < -0.3:
         signal = "price_leading"
-        desc = f"Price leading CDV (osc={osc_now:+.3f}) — momentum not supported by flow"
+        desc = (
+            f"Price leading CDV (osc={osc_now:+.3f}) — momentum not supported by flow"
+        )
     else:
         signal = "neutral"
         desc = f"CDV ≈ Price (osc={osc_now:+.3f})"
@@ -3161,11 +3811,19 @@ async def cdv_oscillator_endpoint(
 
 # ── Session VWAP Band Chart ──────────────────────────────────────────────────
 
+
 @router.get("/vwap-band")
 async def vwap_band_endpoint(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=28800, ge=900, le=86400, description="Session window in seconds (default 8h)"),
-    bucket: int = Query(default=60, ge=15, le=300, description="Bucket size in seconds"),
+    window: int = Query(
+        default=28800,
+        ge=900,
+        le=86400,
+        description="Session window in seconds (default 8h)",
+    ),
+    bucket: int = Query(
+        default=60, ge=15, le=300, description="Bucket size in seconds"
+    ),
 ):
     """
     Session VWAP Band chart.
@@ -3207,8 +3865,15 @@ async def vwap_band_endpoint(
         if p <= 0 or q <= 0:
             continue
         if b not in buckets_map:
-            buckets_map[b] = {"open": p, "close": p, "high": p, "low": p,
-                               "volume": 0.0, "pv": 0.0, "prices_vols": []}
+            buckets_map[b] = {
+                "open": p,
+                "close": p,
+                "high": p,
+                "low": p,
+                "volume": 0.0,
+                "pv": 0.0,
+                "prices_vols": [],
+            }
         bc = buckets_map[b]
         bc["close"] = p
         bc["high"] = max(bc["high"], p)
@@ -3219,7 +3884,12 @@ async def vwap_band_endpoint(
 
     sorted_buckets = sorted(buckets_map.items())
     if not sorted_buckets:
-        return {"status": "ok", "symbol": target, "series": [], "description": "No data"}
+        return {
+            "status": "ok",
+            "symbol": target,
+            "series": [],
+            "description": "No data",
+        }
 
     # Cumulative VWAP and volume-weighted variance
     cum_pv = 0.0
@@ -3304,9 +3974,15 @@ async def vwap_band_endpoint(
 @router.get("/smart-money-divergence")
 async def smart_money_divergence_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"),
-    threshold_usd: float = Query(default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"),
-    bucket_seconds: int = Query(default=300, ge=60, le=3600, description="Bucket width in seconds"),
+    window: int = Query(
+        default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"
+    ),
+    threshold_usd: float = Query(
+        default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"
+    ),
+    bucket_seconds: int = Query(
+        default=300, ge=60, le=3600, description="Bucket width in seconds"
+    ),
 ):
     """
     Smart money divergence for a single symbol.
@@ -3338,9 +4014,15 @@ async def smart_money_divergence_endpoint(
 
 @router.get("/smart-money-divergence/all")
 async def smart_money_divergence_all_endpoint(
-    window: int = Query(default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"),
-    threshold_usd: float = Query(default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"),
-    bucket_seconds: int = Query(default=300, ge=60, le=3600, description="Bucket width in seconds"),
+    window: int = Query(
+        default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"
+    ),
+    threshold_usd: float = Query(
+        default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"
+    ),
+    bucket_seconds: int = Query(
+        default=300, ge=60, le=3600, description="Bucket width in seconds"
+    ),
 ):
     """
     Smart money divergence for ALL tracked symbols in parallel.
@@ -3352,10 +4034,9 @@ async def smart_money_divergence_all_endpoint(
         return {"error": "No symbols configured"}
 
     since = time.time() - window
-    trade_lists = await asyncio.gather(*[
-        get_recent_trades(symbol=sym, since=since, limit=50000)
-        for sym in symbols
-    ])
+    trade_lists = await asyncio.gather(
+        *[get_recent_trades(symbol=sym, since=since, limit=50000) for sym in symbols]
+    )
 
     results = []
     for sym, trades in zip(symbols, trade_lists):
@@ -3364,10 +4045,12 @@ async def smart_money_divergence_all_endpoint(
             threshold_usd=threshold_usd,
             bucket_seconds=bucket_seconds,
         )
-        results.append({
-            "symbol": sym,
-            **r,
-        })
+        results.append(
+            {
+                "symbol": sym,
+                **r,
+            }
+        )
 
     results.sort(key=lambda x: x["divergence_score"], reverse=True)
 
@@ -3382,12 +4065,36 @@ async def smart_money_divergence_all_endpoint(
 @router.get("/ob-recovery-speed")
 async def ob_recovery_speed_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=900, ge=60, le=3600, description="Lookback in seconds (default 15m)"),
-    threshold_usd: float = Query(default=50000.0, ge=1000.0, description="Minimum trade size to consider (USD)"),
-    recovery_pct: float = Query(default=0.8, ge=0.1, le=1.0, description="Fraction of baseline depth required for recovery"),
-    baseline_window: float = Query(default=30.0, ge=5.0, le=120.0, description="Seconds before trade to measure baseline depth"),
-    alert_seconds: float = Query(default=10.0, ge=1.0, le=120.0, description="Recovery time threshold for slow alert"),
-    max_lookforward: float = Query(default=60.0, ge=5.0, le=300.0, description="Max seconds after trade to look for recovery"),
+    window: int = Query(
+        default=900, ge=60, le=3600, description="Lookback in seconds (default 15m)"
+    ),
+    threshold_usd: float = Query(
+        default=50000.0, ge=1000.0, description="Minimum trade size to consider (USD)"
+    ),
+    recovery_pct: float = Query(
+        default=0.8,
+        ge=0.1,
+        le=1.0,
+        description="Fraction of baseline depth required for recovery",
+    ),
+    baseline_window: float = Query(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        description="Seconds before trade to measure baseline depth",
+    ),
+    alert_seconds: float = Query(
+        default=10.0,
+        ge=1.0,
+        le=120.0,
+        description="Recovery time threshold for slow alert",
+    ),
+    max_lookforward: float = Query(
+        default=60.0,
+        ge=5.0,
+        le=300.0,
+        description="Max seconds after trade to look for recovery",
+    ),
 ):
     """
     Order book recovery speed: measures how fast the OB refills after large trades.
