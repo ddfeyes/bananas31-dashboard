@@ -1038,6 +1038,30 @@
     </div>
   </div>
 
+  <!-- Rolling Max Drawdown -->
+  <div class="card" id="card-max-drawdown">
+    <h2><span class="card-icon">📉</span>Max Drawdown (1h)</h2>
+    <div style="display:flex;gap:12px;margin-bottom:8px;">
+      <div style="flex:1;text-align:center;">
+        <div id="mdd-value" style="font-size:24px;font-weight:700;color:var(--red);">—</div>
+        <div style="font-size:9px;color:var(--muted);margin-top:1px;">MAX DD</div>
+      </div>
+      <div style="flex:1;text-align:center;">
+        <div id="mdd-runup" style="font-size:24px;font-weight:700;color:var(--green);">—</div>
+        <div style="font-size:9px;color:var(--muted);margin-top:1px;">MAX RUN-UP</div>
+      </div>
+      <div style="flex:1;text-align:center;">
+        <div id="mdd-current" style="font-size:24px;font-weight:700;color:var(--muted);">—</div>
+        <div style="font-size:9px;color:var(--muted);margin-top:1px;">CURRENT DD</div>
+      </div>
+    </div>
+    <div id="mdd-detail" style="font-size:10px;color:var(--muted);">—</div>
+    <!-- Bar showing current DD relative to max DD -->
+    <div style="margin-top:6px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;">
+      <div id="mdd-bar" style="height:100%;background:var(--red);width:0%;border-radius:2px;transition:width 0.5s;"></div>
+    </div>
+  </div>
+
   <!-- Cumulative Funding Cost -->
   <div class="card" id="card-funding-cost">
     <h2><span class="card-icon">💸</span>Funding Cost
@@ -2350,6 +2374,7 @@ function selectSymbol(sym) {
   refreshCvdDivergence();
   refreshTradeBursts();
   refreshFundingCost();
+  refreshMaxDrawdown();
   initTape();
 }
 
@@ -4277,6 +4302,53 @@ async function refreshLiqPressure() {
   }
 }
 
+// ── Rolling Max Drawdown ──────────────────────────────────────────────────────
+async function refreshMaxDrawdown() {
+  const enc = encodeURIComponent(currentSymbol);
+  const data = await fetchJSON(`/api/max-drawdown?symbol=${enc}&window=3600`);
+  if (!data || !data.symbols) return;
+
+  const sym = data.symbols[currentSymbol] || data.symbols[Object.keys(data.symbols)[0]];
+  if (!sym) return;
+
+  const mddEl     = document.getElementById('mdd-value');
+  const runupEl   = document.getElementById('mdd-runup');
+  const currentEl = document.getElementById('mdd-current');
+  const detailEl  = document.getElementById('mdd-detail');
+  const barEl     = document.getElementById('mdd-bar');
+
+  const dd = sym.max_drawdown_pct || 0;
+  const ru = sym.max_runup_pct || 0;
+  const cur = sym.current_dd_pct || 0;
+
+  if (mddEl) {
+    mddEl.textContent = `${dd.toFixed(2)}%`;
+    mddEl.style.color = dd < -1 ? 'var(--red)' : dd < -0.3 ? 'var(--accent)' : 'var(--muted)';
+  }
+  if (runupEl) {
+    runupEl.textContent = `+${ru.toFixed(2)}%`;
+    runupEl.style.color = ru > 1 ? 'var(--green)' : 'var(--muted)';
+  }
+  if (currentEl) {
+    currentEl.textContent = `${cur.toFixed(2)}%`;
+    currentEl.style.color = cur < -0.5 ? 'var(--red)' : cur > 0.2 ? 'var(--green)' : 'var(--muted)';
+  }
+  if (detailEl) {
+    const peak = sym.peak_price ? sym.peak_price.toPrecision(5) : '—';
+    const trough = sym.trough_price ? sym.trough_price.toPrecision(5) : '—';
+    const recPeak = sym.recent_peak ? sym.recent_peak.toPrecision(5) : '—';
+    detailEl.textContent = `Peak: ${peak}  →  Trough: ${trough}  |  Now: ${sym.current_price?.toPrecision(5) || '—'}`;
+  }
+  // Bar: how close current DD is to max DD
+  if (barEl && dd < 0) {
+    const pct = Math.min(100, Math.abs(cur / dd) * 100);
+    barEl.style.width = pct + '%';
+    barEl.style.background = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--accent)' : 'rgba(239,83,80,0.4)';
+  } else if (barEl) {
+    barEl.style.width = '0%';
+  }
+}
+
 // ── Cumulative Funding Cost Tracker ─────────────────────────────────────────
 let _fundingCostSide = 'long';
 function setFundingCostSide(side) {
@@ -5372,6 +5444,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshTradeBursts, 5000);  // every 5s — fast
   refreshFundingCost();
   setInterval(refreshFundingCost, 60000);  // every 1min
+  refreshMaxDrawdown();
+  setInterval(refreshMaxDrawdown, 15000);  // every 15s
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();

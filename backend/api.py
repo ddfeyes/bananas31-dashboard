@@ -2251,3 +2251,100 @@ async def funding_cost(
         }
 
     return {"status": "ok", "ts": now, "symbols": result}
+
+
+# ── Rolling Max Drawdown ──────────────────────────────────────────────────────
+
+@router.get("/max-drawdown")
+async def max_drawdown(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=3600, ge=300, le=86400, description="Lookback window in seconds"),
+):
+    """
+    Rolling maximum drawdown: peak-to-trough price drop in the last `window` seconds.
+    Returns: max_drawdown_pct (negative = down), peak price, trough price, times.
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    result = {}
+
+    for sym in symbols:
+        trades = await get_recent_trades(limit=10000, since=now - window, symbol=sym)
+        if len(trades) < 3:
+            result[sym] = {
+                "max_drawdown_pct": 0.0,
+                "max_runup_pct": 0.0,
+                "peak_price": None,
+                "trough_price": None,
+                "current_price": None,
+                "current_dd_pct": 0.0,
+            }
+            continue
+
+        trades.sort(key=lambda t: t.get("ts", 0))
+        prices = [(t["ts"], t.get("price", 0) or 0) for t in trades if (t.get("price") or 0) > 0]
+        if len(prices) < 3:
+            continue
+
+        # Compute max drawdown using O(n) running peak approach
+        peak = prices[0][1]
+        trough = prices[0][1]
+        peak_ts = prices[0][0]
+        trough_ts = prices[0][0]
+        max_dd = 0.0
+        max_dd_peak = peak
+        max_dd_trough = trough
+        max_dd_peak_ts = peak_ts
+        max_dd_trough_ts = trough_ts
+
+        cur_peak = prices[0][1]
+        cur_peak_ts = prices[0][0]
+
+        for ts, p in prices[1:]:
+            if p > cur_peak:
+                cur_peak = p
+                cur_peak_ts = ts
+            dd = (p - cur_peak) / cur_peak * 100 if cur_peak else 0
+            if dd < max_dd:
+                max_dd = dd
+                max_dd_peak = cur_peak
+                max_dd_trough = p
+                max_dd_peak_ts = cur_peak_ts
+                max_dd_trough_ts = ts
+
+        # Max run-up (low-to-high)
+        trough_run = prices[0][1]
+        trough_run_ts = prices[0][0]
+        max_runup = 0.0
+        max_ru_trough = trough_run
+        max_ru_peak = trough_run
+
+        for ts, p in prices[1:]:
+            if p < trough_run:
+                trough_run = p
+                trough_run_ts = ts
+            ru = (p - trough_run) / trough_run * 100 if trough_run else 0
+            if ru > max_runup:
+                max_runup = ru
+                max_ru_trough = trough_run
+                max_ru_peak = p
+
+        # Current drawdown from recent peak
+        recent_peak = max(p for _, p in prices[-100:])  # last ~100 trades
+        current_price = prices[-1][1]
+        current_dd = (current_price - recent_peak) / recent_peak * 100 if recent_peak else 0
+
+        result[sym] = {
+            "max_drawdown_pct": round(max_dd, 4),
+            "max_runup_pct": round(max_runup, 4),
+            "peak_price": round(max_dd_peak, 8),
+            "trough_price": round(max_dd_trough, 8),
+            "peak_ts": round(max_dd_peak_ts, 2),
+            "trough_ts": round(max_dd_trough_ts, 2),
+            "current_price": round(current_price, 8),
+            "current_dd_pct": round(current_dd, 4),
+            "recent_peak": round(recent_peak, 8),
+            "window_s": window,
+        }
+
+    return {"status": "ok", "ts": now, "symbols": result}
