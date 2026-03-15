@@ -3439,3 +3439,153 @@ def compute_volume_bars(trades, volume_threshold=1.0):
         "bar_count":           len(bars),
         "pct_to_close":        pct_to_close,
     }
+
+
+def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5):
+    """
+    Price ladder heatmap: order book density at each price level.
+
+    Args:
+        snapshots:   list of {ts, bids: [[price,qty],...], asks: [[price,qty],...], mid_price}
+        num_levels:  number of price bins on each side of mid (bid + ask = 2*num_levels total)
+        bin_size:    width of each price bin; auto-computed from spread if None
+        wall_sigma:  std-dev multiplier above mean for wall detection
+
+    Returns dict with:
+        levels:         list of {price, bid_vol, ask_vol, is_bid_wall, is_ask_wall} asc by price
+        mid_price, best_bid, best_ask, spread
+        bid_wall_price, ask_wall_price, wall_threshold
+        total_bid_vol, total_ask_vol, snapshot_count, bin_size
+    """
+    empty = {
+        "levels":         [],
+        "mid_price":      0.0,
+        "best_bid":       0.0,
+        "best_ask":       0.0,
+        "spread":         0.0,
+        "bid_wall_price": None,
+        "ask_wall_price": None,
+        "wall_threshold": 0.0,
+        "total_bid_vol":  0.0,
+        "total_ask_vol":  0.0,
+        "snapshot_count": 0,
+        "bin_size":       bin_size or 0.0,
+    }
+    if not snapshots:
+        return empty
+
+    # Sort by ts; use the latest snapshot for best_bid/ask/mid
+    snaps_sorted = sorted(snapshots, key=lambda s: s["ts"])
+    latest = snaps_sorted[-1]
+
+    best_bid  = float(latest["bids"][0][0]) if latest["bids"] else 0.0
+    best_ask  = float(latest["asks"][0][0]) if latest["asks"] else 0.0
+    mid_price = float(latest.get("mid_price") or 0.0)
+    spread    = (best_ask - best_bid) if (best_bid and best_ask) else 0.0
+
+    # Auto bin_size
+    if bin_size is None:
+        if spread > 0:
+            bin_size = max(0.01, spread / 2.0)
+        else:
+            # Fallback: 0.1% of mid_price, rounded to sensible increment
+            bin_size = max(0.01, round(mid_price * 0.001, 2)) if mid_price else 1.0
+
+    bin_size = float(bin_size)
+
+    # Build price grid: levels at mid_grid ± k * bin_size for k = 1..num_levels
+    import math
+    mid_grid = math.floor(mid_price / bin_size) * bin_size
+
+    # bid side: levels at mid_grid - k*bin_size  (k=1..num_levels)
+    bid_prices = [mid_grid - (i + 1) * bin_size for i in range(num_levels)]
+    # ask side: levels at mid_grid + k*bin_size  (k=1..num_levels)
+    ask_prices = [mid_grid + (i + 1) * bin_size for i in range(num_levels)]
+
+    bid_vol_acc = [0.0] * num_levels   # index 0 = nearest to mid
+    ask_vol_acc = [0.0] * num_levels
+
+    n_snaps = len(snaps_sorted)
+
+    for snap in snaps_sorted:
+        for p, q in snap.get("bids", []):
+            p, q = float(p), float(q)
+            diff = mid_grid - p
+            if diff <= 0:
+                continue  # bid above or at mid grid → skip
+            # Round to nearest level (k = 1-indexed)
+            k = int(round(diff / bin_size))
+            if 1 <= k <= num_levels:
+                bid_vol_acc[k - 1] += q
+
+        for p, q in snap.get("asks", []):
+            p, q = float(p), float(q)
+            diff = p - mid_grid
+            if diff <= 0:
+                continue  # ask below or at mid grid → skip
+            k = int(round(diff / bin_size))
+            if 1 <= k <= num_levels:
+                ask_vol_acc[k - 1] += q
+
+    # Normalise by snapshot count → mean volume per level
+    bid_vols = [v / n_snaps for v in bid_vol_acc]
+    ask_vols = [v / n_snaps for v in ask_vol_acc]
+
+    # Wall detection: mean + wall_sigma * std over ALL 2*num_levels values (incl. zeros)
+    # Using all values (not just non-zero) so zeros dilute the mean/std appropriately.
+    import statistics as _stats
+    all_level_vols = bid_vols + ask_vols
+    if len(all_level_vols) >= 2:
+        mean_v = _stats.mean(all_level_vols)
+        try:
+            std_v = _stats.stdev(all_level_vols)
+        except _stats.StatisticsError:
+            std_v = 0.0
+        wall_threshold = mean_v + wall_sigma * std_v
+    else:
+        wall_threshold = 0.0
+
+    # Build levels list (bid side descending → combine and sort asc)
+    levels = []
+    for i in range(num_levels):
+        levels.append({
+            "price":       round(bid_prices[i], 8),
+            "bid_vol":     round(bid_vols[i], 6),
+            "ask_vol":     0.0,
+            "is_bid_wall": wall_threshold > 0 and bid_vols[i] > wall_threshold,
+            "is_ask_wall": False,
+        })
+    for i in range(num_levels):
+        levels.append({
+            "price":       round(ask_prices[i], 8),
+            "bid_vol":     0.0,
+            "ask_vol":     round(ask_vols[i], 6),
+            "is_bid_wall": False,
+            "is_ask_wall": wall_threshold > 0 and ask_vols[i] > wall_threshold,
+        })
+
+    levels.sort(key=lambda lv: lv["price"])
+
+    total_bid_vol = sum(lv["bid_vol"] for lv in levels)
+    total_ask_vol = sum(lv["ask_vol"] for lv in levels)
+
+    # Wall prices
+    max_bid_lv = max(levels, key=lambda lv: lv["bid_vol"])
+    max_ask_lv = max(levels, key=lambda lv: lv["ask_vol"])
+    bid_wall_price = max_bid_lv["price"] if max_bid_lv["bid_vol"] > 0 else None
+    ask_wall_price = max_ask_lv["price"] if max_ask_lv["ask_vol"] > 0 else None
+
+    return {
+        "levels":         levels,
+        "mid_price":      mid_price,
+        "best_bid":       best_bid,
+        "best_ask":       best_ask,
+        "spread":         round(spread, 8),
+        "bid_wall_price": bid_wall_price,
+        "ask_wall_price": ask_wall_price,
+        "wall_threshold": round(wall_threshold, 6),
+        "total_bid_vol":  round(total_bid_vol, 6),
+        "total_ask_vol":  round(total_ask_vol, 6),
+        "snapshot_count": n_snaps,
+        "bin_size":       bin_size,
+    }
