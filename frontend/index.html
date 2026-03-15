@@ -1021,6 +1021,15 @@ function connectWS(symbol) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'summary' && msg.symbol === activeSymbol) {
         updateSummary(msg);
+        // Feed tape from WS trades
+        if (msg.recent_trades?.length) {
+          const newTrades = msg.recent_trades.filter(t => t.ts > _lastTapeTs);
+          newTrades.sort((a, b) => a.ts - b.ts); // chronological
+          for (const t of newTrades) {
+            pushTrade(t);
+            if (t.ts > _lastTapeTs) _lastTapeTs = t.ts;
+          }
+        }
       }
     } catch {}
   };
@@ -1604,16 +1613,15 @@ function updateSummaryWithTape(summary) {
   // WS doesn't push individual trades, poll handled separately
 }
 
-// Poll trades for tape (every 2s)
+// Tape is fed from WS; this is a fallback poll on WS reconnect
 let _lastTapeTs = 0;
 async function pollTape() {
-  if (!activeSymbol) return;
+  if (!activeSymbol || (activeWS && activeWS.readyState === WebSocket.OPEN)) return;
   const sym = encodeURIComponent(activeSymbol);
   const since = _lastTapeTs > 0 ? _lastTapeTs - 0.1 : (Date.now() / 1000 - 10);
   const data = await fetchJSON(`/api/trades/recent?limit=100&since=${since}&symbol=${sym}`);
   if (!data?.data?.length) return;
-  // Filter to only new trades
-  const newTrades = data.data.filter(t => t.ts > _lastTapeTs).reverse(); // chronological
+  const newTrades = data.data.filter(t => t.ts > _lastTapeTs).reverse();
   for (const t of newTrades) {
     pushTrade(t);
     if (t.ts > _lastTapeTs) _lastTapeTs = t.ts;

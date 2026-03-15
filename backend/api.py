@@ -279,6 +279,16 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     cum_ask += q
                     depth_asks.append([round(float(p), 8), round(cum_ask, 6)])
 
+                # Recent trades (last 2s) for tape
+                recent_trades = await get_recent_trades(
+                    limit=50, since=time.time() - 2.5, symbol=symbol
+                )
+                # Serialize: only fields needed by tape
+                tape_trades = [
+                    {"ts": t["ts"], "price": t["price"], "qty": t["qty"], "side": t["side"]}
+                    for t in recent_trades
+                ]
+
                 msg = {
                     "type": "summary",
                     "ts": time.time(),
@@ -294,6 +304,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "depth_asks": depth_asks,
                     "ob_bids": raw_bids[:10],
                     "ob_asks": raw_asks[:10],
+                    "recent_trades": tape_trades,
                 }
                 await ws.send_text(json.dumps(msg))
 
