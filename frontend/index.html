@@ -617,6 +617,44 @@
     </div>
   </div>
 
+  <!-- Bid-Ask Spread Tracker -->
+  <div class="card">
+    <h2><span class="card-icon">↔️</span>Bid-Ask Spread
+      <span id="spread-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <!-- Gauge row: current spread with threshold bars -->
+    <div id="spread-gauge-row" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:6px 0;">
+      <div style="flex:0 0 auto;text-align:center;min-width:90px;">
+        <div id="spread-gauge-val" style="font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);">—</div>
+        <div style="font-size:9px;color:var(--muted);letter-spacing:0.5px;text-transform:uppercase;">bps now</div>
+      </div>
+      <div style="flex:1;">
+        <!-- Gauge bar -->
+        <div style="position:relative;height:8px;background:var(--bg3);border-radius:4px;overflow:visible;">
+          <div id="spread-gauge-bar" style="height:100%;border-radius:4px;transition:width 0.4s,background 0.4s;background:var(--green);width:0%;"></div>
+          <!-- Threshold markers -->
+          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--accent);opacity:0.7;" title="warn 0.3%" id="spread-mark-warn"></div>
+          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--red);opacity:0.7;" title="alert 0.5%" id="spread-mark-high"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:3px;">
+          <span>0</span>
+          <span id="spread-gauge-scale">0.8%</span>
+        </div>
+        <!-- Bid/Ask vol ratio bar -->
+        <div style="margin-top:6px;display:flex;height:4px;border-radius:2px;overflow:hidden;gap:1px;">
+          <div id="spread-bid-vol-bar" style="background:var(--green);flex:1;transition:flex 0.4s;"></div>
+          <div id="spread-ask-vol-bar" style="background:var(--red);flex:1;transition:flex 0.4s;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;">
+          <span id="spread-bid-vol-lbl">bid</span>
+          <span id="spread-ask-vol-lbl">ask</span>
+        </div>
+      </div>
+    </div>
+    <canvas id="chart-spread" style="height:120px !important;"></canvas>
+    <div id="spread-alert" style="margin-top:6px;font-size:10px;display:none;padding:4px 8px;border-radius:4px;background:rgba(255,80,80,0.15);color:var(--red);"></div>
+  </div>
+
   <!-- Trade Count Rate Chart -->
   <div class="card">
     <h2><span class="card-icon">🔢</span>Trade Rate (trades/min)
@@ -631,6 +669,14 @@
       <span id="oi-delta-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
     </h2>
     <canvas id="chart-oi-delta" style="height:140px !important;"></canvas>
+  </div>
+
+  <!-- Trade Flow Imbalance Ratio -->
+  <div class="card">
+    <h2><span class="card-icon">⚖️</span>Trade Flow Imbalance Ratio (1h)
+      <span id="flow-imbalance-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <canvas id="chart-flow-imbalance" style="height:150px !important;"></canvas>
   </div>
 
   <!-- CVD + Price Overlay -->
@@ -1643,6 +1689,44 @@ const charts = {
   dom:     mkDomChart('chart-dom'),
 };
 
+// Bid-Ask Spread area chart
+let chartSpread = null;
+(function initSpreadChart() {
+  const ctx = document.getElementById('chart-spread');
+  if (!ctx) return;
+  chartSpread = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      label: 'Spread (bps)',
+      data: [],
+      borderColor: 'rgba(255,180,60,0.9)',
+      backgroundColor: 'rgba(255,180,60,0.12)',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.3,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.parsed.y.toFixed(2)} bps`,
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: TICK_COLOR, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: GRID_COLOR } },
+        y: { ticks: { color: TICK_COLOR, font: { size: 8 } }, grid: { color: GRID_COLOR }, min: 0 }
+      }
+    }
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -1713,6 +1797,113 @@ let chartOiDelta = null;
       scales: {
         x: { ticks: { color: TICK_COLOR, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 }, grid: { color: GRID_COLOR } },
         y: { ticks: { color: TICK_COLOR, font: { size: 8 } }, grid: { color: GRID_COLOR } }
+      }
+    }
+  });
+})();
+
+// ── Trade Flow Imbalance Ratio Chart ──────────────────────────────
+let chartFlowImbalance = null;
+(function initFlowImbalanceChart() {
+  const ctx = document.getElementById('chart-flow-imbalance');
+  if (!ctx) return;
+  chartFlowImbalance = new Chart(ctx.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Ratio (buy %)',
+          data: [],
+          borderColor: 'rgba(100,220,120,0.9)',
+          backgroundColor: 'rgba(100,220,120,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          yAxisID: 'yRatio',
+        },
+        {
+          label: 'MA5',
+          data: [],
+          borderColor: 'rgba(255,200,50,0.8)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          borderDash: [4,2],
+          yAxisID: 'yRatio',
+        },
+        {
+          label: 'Buy Vol',
+          data: [],
+          borderColor: 'rgba(80,200,100,0.5)',
+          backgroundColor: 'rgba(80,200,100,0.3)',
+          borderWidth: 0,
+          pointRadius: 0,
+          fill: true,
+          type: 'bar',
+          yAxisID: 'yVol',
+          stack: 'vol',
+        },
+        {
+          label: 'Sell Vol',
+          data: [],
+          borderColor: 'rgba(220,80,80,0.5)',
+          backgroundColor: 'rgba(220,80,80,0.3)',
+          borderWidth: 0,
+          pointRadius: 0,
+          fill: true,
+          type: 'bar',
+          yAxisID: 'yVol',
+          stack: 'vol',
+        },
+      ]
+    },
+    options: {
+      animation: { duration: 200 },
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: '#aaa', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.label === 'Ratio (buy %)') return `Buy ratio: ${(ctx.parsed.y * 100).toFixed(1)}%`;
+              if (ctx.dataset.label === 'MA5') return `MA5: ${(ctx.parsed.y * 100).toFixed(1)}%`;
+              return `${ctx.dataset.label}: ${fmtK(ctx.parsed.y)}`;
+            }
+          }
+        },
+        annotation: {
+          annotations: {
+            midLine: {
+              type: 'line',
+              yMin: 0.5, yMax: 0.5,
+              yScaleID: 'yRatio',
+              borderColor: 'rgba(255,255,255,0.2)',
+              borderWidth: 1,
+              borderDash: [3, 3],
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: TICK_COLOR, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: GRID_COLOR } },
+        yRatio: {
+          type: 'linear',
+          position: 'left',
+          min: 0, max: 1,
+          ticks: { color: TICK_COLOR, font: { size: 8 }, callback: v => `${(v*100).toFixed(0)}%` },
+          grid: { color: GRID_COLOR }
+        },
+        yVol: {
+          type: 'linear',
+          position: 'right',
+          ticks: { color: TICK_COLOR, font: { size: 8 }, callback: v => fmtK(v) },
+          grid: { display: false },
+        }
       }
     }
   });
@@ -1988,7 +2179,15 @@ function updateSummary(summary) {
     }
   }
   if (summary) {
-    document.getElementById('m-spread').textContent = summary.spread != null ? fmt(summary.spread, 4) : '—';
+    // Show spread as % if possible (compute from best_bid/ask in WS summary)
+    if (summary.spread != null && summary.price) {
+      const _spreadPct = (summary.spread / summary.price) * 100;
+      const mSpr = document.getElementById('m-spread');
+      mSpr.textContent = _spreadPct.toFixed(4) + '%';
+      mSpr.style.color = _spreadPct > 0.5 ? 'var(--red)' : _spreadPct > 0.3 ? 'var(--accent)' : 'var(--text)';
+    } else {
+      document.getElementById('m-spread').textContent = summary.spread != null ? fmt(summary.spread, 4) : '—';
+    }
     const imb = summary.orderbook_imbalance;
     const imbEl = document.getElementById('m-ob-imb');
     imbEl.textContent = imb != null ? fmt(imb * 100, 2) + '%' : '—';
@@ -2452,7 +2651,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -2468,6 +2667,8 @@ async function refreshAll() {
     fetchJSON(`/api/pattern-history?symbol=${sym}&limit=20&since=${Math.floor(Date.now()/1000)-7200}`),
     fetchJSON(`/api/oi-delta?interval=300&window=3600&symbol=${sym}`),
     fetchJSON(`/api/trade-count-rate?interval=60&window=1800&symbol=${sym}`),
+    fetchJSON(`/api/spread-tracker?window=1800&symbol=${sym}`),
+    fetchJSON(`/api/flow-imbalance?window=3600&bucket_size=60&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -2524,6 +2725,121 @@ async function refreshAll() {
       const last = buckets[buckets.length - 1];
       const avg = values.reduce((a, b) => a + b, 0) / values.length;
       infoEl.textContent = `now: ${last.trades_per_min.toFixed(1)} t/m · avg30m: ${avg.toFixed(1)}`;
+    }
+  }
+
+  // ── Spread Tracker chart + gauge + alert ─────────────────────────────────
+  const _spreadArr = spreadData?.history || spreadData?.data || [];
+  if (chartSpread && _spreadArr.length) {
+    const sd = _spreadArr;
+    const labels = sd.map(d => fmtTs(d.ts));
+    const bpsVals = sd.map(d => d.spread_bps ?? (d.spread_pct != null ? d.spread_pct * 100 : null)).filter(v => v != null);
+    const pctVals = sd.map(d => d.spread_pct).filter(v => v != null);
+    chartSpread.data.labels = labels;
+    chartSpread.data.datasets[0].data = bpsVals;
+    chartSpread.update('none');
+
+    const SPREAD_WARN_PCT = 0.3;
+    const SPREAD_HIGH_PCT = 0.5;
+
+    // Header info: current bps + % + avg
+    const infoEl = document.getElementById('spread-info');
+    const alertEl = document.getElementById('spread-alert');
+    if (infoEl && bpsVals.length > 0) {
+      const cur = bpsVals[bpsVals.length - 1];
+      const curPct = pctVals[pctVals.length - 1];
+      const avg = bpsVals.reduce((a, b) => a + b, 0) / bpsVals.length;
+      const max = Math.max(...bpsVals);
+      infoEl.textContent = `now: ${cur?.toFixed(2)} bps (${curPct?.toFixed(4)}%) · avg: ${avg.toFixed(2)} · max: ${max.toFixed(2)}`;
+      infoEl.style.color = curPct > SPREAD_HIGH_PCT ? 'var(--red)'
+                         : curPct > SPREAD_WARN_PCT ? 'var(--accent)'
+                         : 'var(--muted)';
+    }
+
+    // ── Gauge update ──────────────────────────────────────────────────────
+    if (bpsVals.length > 0) {
+      const curBps = bpsVals[bpsVals.length - 1];
+      const curPct = pctVals[pctVals.length - 1] ?? (curBps / 100);
+      const maxScale = Math.max(0.8, curPct * 1.5);  // scale to at least 0.8%
+      const GAUGE_MAX_PCT = maxScale;
+
+      const gVal  = document.getElementById('spread-gauge-val');
+      const gBar  = document.getElementById('spread-gauge-bar');
+      const gScale = document.getElementById('spread-gauge-scale');
+      const mWarn = document.getElementById('spread-mark-warn');
+      const mHigh = document.getElementById('spread-mark-high');
+
+      if (gVal)   gVal.textContent = curBps?.toFixed(2) ?? '—';
+      if (gVal)   gVal.style.color = curPct > SPREAD_HIGH_PCT ? 'var(--red)' : curPct > SPREAD_WARN_PCT ? 'var(--accent)' : 'var(--green)';
+      if (gScale) gScale.textContent = GAUGE_MAX_PCT.toFixed(2) + '%';
+
+      const widthPct = Math.min(100, (curPct / GAUGE_MAX_PCT) * 100);
+      if (gBar) {
+        gBar.style.width = widthPct + '%';
+        gBar.style.background = curPct > SPREAD_HIGH_PCT ? 'var(--red)' : curPct > SPREAD_WARN_PCT ? 'var(--accent)' : 'var(--green)';
+      }
+      // Position threshold markers
+      if (mWarn) mWarn.style.left = ((SPREAD_WARN_PCT / GAUGE_MAX_PCT) * 100).toFixed(1) + '%';
+      if (mHigh) mHigh.style.left = ((SPREAD_HIGH_PCT / GAUGE_MAX_PCT) * 100).toFixed(1) + '%';
+
+      // Bid/Ask vol bars (from latest data point)
+      const latestData = sd[sd.length - 1];
+      const bidVol = latestData?.bid_vol ?? spreadData?.bid_vol ?? 0;
+      const askVol = latestData?.ask_vol ?? spreadData?.ask_vol ?? 0;
+      const totalVol = (bidVol || 0) + (askVol || 0);
+      if (totalVol > 0) {
+        const bidFlex = ((bidVol / totalVol) * 100).toFixed(1);
+        const askFlex = ((askVol / totalVol) * 100).toFixed(1);
+        const bBidBar = document.getElementById('spread-bid-vol-bar');
+        const bAskBar = document.getElementById('spread-ask-vol-bar');
+        const lBid = document.getElementById('spread-bid-vol-lbl');
+        const lAsk = document.getElementById('spread-ask-vol-lbl');
+        if (bBidBar) bBidBar.style.flex = bidFlex;
+        if (bAskBar) bAskBar.style.flex = askFlex;
+        if (lBid) lBid.textContent = `bid ${bidFlex}%`;
+        if (lAsk) lAsk.textContent = `ask ${askFlex}%`;
+      }
+    }
+
+    // Alert box
+    if (alertEl) {
+      const alertInfo = spreadData.alert;
+      if (alertInfo) {
+        alertEl.style.display = 'block';
+        alertEl.textContent = '⚠️ ' + alertInfo.message;
+        alertEl.style.background = alertInfo.level === 'high'
+          ? 'rgba(255,80,80,0.15)' : 'rgba(255,180,60,0.15)';
+        alertEl.style.color = alertInfo.level === 'high' ? 'var(--red)' : 'var(--accent)';
+      } else {
+        alertEl.style.display = 'none';
+      }
+    }
+    // Update m-spread metric in Market Phase card
+    const mSpread = document.getElementById('m-spread');
+    if (mSpread && pctVals.length > 0) {
+      const curPct = pctVals[pctVals.length - 1];
+      mSpread.textContent = curPct != null ? curPct.toFixed(4) + '%' : '—';
+      mSpread.style.color = curPct > 0.5 ? 'var(--red)' : curPct > 0.3 ? 'var(--accent)' : 'var(--text)';
+    }
+  }
+
+  // ── Trade Flow Imbalance Ratio chart ──────────────────────────────────────
+  if (chartFlowImbalance && flowImb?.series?.length) {
+    const s = flowImb.series;
+    const labels = s.map(d => fmtTs(d.ts));
+    chartFlowImbalance.data.labels = labels;
+    chartFlowImbalance.data.datasets[0].data = s.map(d => d.ratio);
+    chartFlowImbalance.data.datasets[1].data = s.map(d => d.ratio_ma5);
+    chartFlowImbalance.data.datasets[2].data = s.map(d => d.buy_vol);
+    chartFlowImbalance.data.datasets[3].data = s.map(d => d.sell_vol);
+    chartFlowImbalance.update('none');
+
+    const infoEl = document.getElementById('flow-imbalance-info');
+    if (infoEl && flowImb.summary) {
+      const sm = flowImb.summary;
+      const biasColor = sm.bias === 'buy' ? 'var(--green)' : sm.bias === 'sell' ? 'var(--red)' : 'var(--muted)';
+      infoEl.innerHTML = `<span style="color:${biasColor};font-weight:700;">${sm.bias?.toUpperCase()}</span> `
+        + `avg: ${(sm.avg_ratio * 100).toFixed(1)}% · strength: ${sm.bias_strength?.toFixed(1)}`;
     }
   }
 

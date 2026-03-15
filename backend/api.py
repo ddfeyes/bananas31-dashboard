@@ -25,6 +25,8 @@ from storage import (
     get_pattern_history,
     get_phase_snapshots,
     get_data_freshness,
+    get_spread_history,
+    get_spread_stats,
 )
 from metrics import (
     compute_cvd,
@@ -632,6 +634,25 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     sev = "critical" if cascade_pred_result.get("level") == "cascading" else "high"
                     fired_alerts.append(("cascade_predictor", sev, cascade_pred_result.get("description", ""), cascade_pred_result))
 
+                # Spread widening alert (check every tick, 0.5% threshold)
+                try:
+                    if ob and ob[0].get("best_bid") and ob[0].get("best_ask") and ob[0].get("mid_price"):
+                        _bid = ob[0]["best_bid"]
+                        _ask = ob[0]["best_ask"]
+                        _mid = ob[0]["mid_price"]
+                        _spread_pct = (_ask - _bid) / _mid * 100 if _mid > 0 else 0
+                        SPREAD_ALERT_THRESHOLD = 0.5  # %
+                        if _spread_pct > SPREAD_ALERT_THRESHOLD:
+                            fired_alerts.append((
+                                "spread_alert",
+                                "high",
+                                f"Spread widened to {_spread_pct:.4f}% ({_spread_pct*100:.2f} bps) — threshold {SPREAD_ALERT_THRESHOLD}%",
+                                {"spread_pct": round(_spread_pct, 6), "spread_bps": round(_spread_pct * 100, 4),
+                                 "bid": _bid, "ask": _ask, "mid": _mid},
+                            ))
+                except Exception:
+                    pass
+
                 # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
                 cross_sym_result = None
                 if symbol == get_symbols()[0]:  # only run once per tick cycle from primary symbol
@@ -670,7 +691,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
 
                 # Deduplicate: only save if no same-type alert in last 60s
                 # funding_extreme uses 300s cooldown (fires constantly otherwise)
-                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120, "cascade_predictor": 90}
+                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120, "cascade_predictor": 90, "spread_alert": 60}
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
@@ -1183,6 +1204,118 @@ async def trade_count_rate(
         b += interval
 
     return {"status": "ok", "symbol": target, "interval": interval, "window": window, "buckets": result}
+
+
+@router.get("/spread-history")
+async def spread_history(
+    window: int = Query(default=1800, le=86400),
+    symbol: Optional[str] = None,
+    exchange: str = Query(default="binance"),
+):
+    """Bid-ask spread history from orderbook_snapshots. Returns spread in bps and spread %.
+    Also returns alert if current spread is >2x the 30-min average."""
+    target = symbol or get_symbols()[0]
+    since = time.time() - window
+    db_path = storage.DB_PATH
+    q = """SELECT ts, best_bid, best_ask, spread, mid_price
+           FROM orderbook_snapshots
+           WHERE ts > ? AND symbol = ? AND exchange = ?
+           ORDER BY ts ASC"""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, (since, target, exchange)) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        # try without exchange filter
+        q2 = """SELECT ts, best_bid, best_ask, spread, mid_price
+                FROM orderbook_snapshots
+                WHERE ts > ? AND symbol = ?
+                ORDER BY ts ASC"""
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(q2, (since, target)) as cur:
+                rows = await cur.fetchall()
+
+    if not rows:
+        return {"status": "ok", "symbol": target, "data": [], "alert": None}
+
+    data = []
+    for r in rows:
+        mid = r["mid_price"] or ((r["best_bid"] or 0) + (r["best_ask"] or 0)) / 2
+        sp = r["spread"] or 0
+        sp_pct = round((sp / mid) * 100, 4) if mid > 0 else 0
+        sp_bps = round(sp_pct * 100, 2)
+        data.append({"ts": r["ts"], "spread": round(sp, 6), "spread_pct": sp_pct, "spread_bps": sp_bps})
+
+    # Alert: current spread vs 30min average
+    alert = None
+    if len(data) >= 2:
+        current = data[-1]["spread_bps"]
+        avg = sum(d["spread_bps"] for d in data) / len(data)
+        if avg > 0 and current > avg * 2:
+            alert = {
+                "level": "high",
+                "message": f"Spread widened: {current:.1f} bps (avg {avg:.1f} bps, {current/avg:.1f}x)",
+                "current_bps": round(current, 2),
+                "avg_bps": round(avg, 2),
+                "ratio": round(current / avg, 2),
+            }
+
+    return {"status": "ok", "symbol": target, "data": data, "alert": alert}
+
+
+# ─── Spread Tracker ──────────────────────────────────────────────────────────
+
+@router.get("/spread-tracker")
+async def spread_tracker(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=1800, ge=300, le=7200, description="History window in seconds (default 30min)"),
+    exchange: Optional[str] = Query(default=None),
+    threshold_pct: float = Query(default=0.5, description="Alert threshold for spread % (default 0.5%)"),
+):
+    """
+    Bid-ask spread tracker: current spread + historical series + alert status.
+    - spread_pct = (ask - bid) / mid * 100
+    - Stores in dedicated spread_history table (written by insert_orderbook)
+    - Returns alert when spread_pct > threshold_pct OR current > 2x avg
+    """
+    from storage import get_spread_history, get_spread_stats, DB_PATH
+    syms = [symbol.upper()] if symbol else get_symbols()
+    result = {}
+
+    for sym in syms:
+        stats = await get_spread_stats(sym, window=window, exchange=exchange)
+        history = await get_spread_history(sym, window=window, exchange=exchange, limit=1000)
+
+        # Override alert threshold if custom
+        alert = stats.get("alert")
+        current_pct = stats.get("current_pct")
+        current_bps = stats.get("current_bps")
+        avg_bps = stats.get("avg_bps", 0)
+        if current_pct is not None and current_pct > threshold_pct and (alert is None or alert.get("level") != "high"):
+            alert = {
+                "level": "high",
+                "reason": "spread_pct_threshold",
+                "message": f"Spread {current_pct:.4f}% exceeds {threshold_pct}% threshold",
+                "current_pct": round(current_pct, 4),
+                "current_bps": round(current_bps, 2) if current_bps else None,
+            }
+
+        result[sym] = {
+            **stats,
+            "alert": alert,
+            "threshold_pct": threshold_pct,
+            "history": [
+                {"ts": r["ts"], "spread_pct": r["spread_pct"], "spread_bps": r["spread_bps"],
+                 "bid_vol": r.get("bid_vol"), "ask_vol": r.get("ask_vol")}
+                for r in history
+            ],
+        }
+
+    if symbol:
+        return {"status": "ok", "ts": time.time(), **result.get(symbol.upper(), {})}
+    return {"status": "ok", "ts": time.time(), "symbols": result}
 
 
 @router.get("/momentum")
@@ -2518,5 +2651,70 @@ async def ob_wall_decay(
         "symbol": target,
         "ts": now,
         "decay": decay_info,
+        "series": series,
+    }
+
+
+@router.get("/flow-imbalance")
+async def flow_imbalance(
+    symbol: str = Query("BANANAS31USDT"),
+    window: int = Query(3600, description="Window in seconds (default 1h)"),
+    bucket_size: int = Query(60, description="Bucket size in seconds (default 1m)"),
+):
+    """
+    Trade flow imbalance ratio chart.
+    Returns rolling buy/sell volume ratio as time series.
+    Ratio = buy_vol / (buy_vol + sell_vol), range [0..1].
+    0.5 = balanced, >0.5 = buy-dominant, <0.5 = sell-dominant.
+    """
+    target = symbol.upper()
+    now = time.time()
+
+    candles = await get_ohlcv(interval_seconds=bucket_size, window_seconds=window, symbol=target)
+
+    series = []
+    for c in candles:
+        buy_vol = c.get("buy_volume", 0) or 0
+        sell_vol = c.get("sell_volume", 0) or 0
+        total = buy_vol + sell_vol
+        ratio = round(buy_vol / total, 4) if total > 0 else None
+        series.append({
+            "ts": c["ts"],
+            "buy_vol": round(buy_vol, 4),
+            "sell_vol": round(sell_vol, 4),
+            "total_vol": round(total, 4),
+            "ratio": ratio,
+            "label": "buy" if ratio is not None and ratio > 0.55 else "sell" if ratio is not None and ratio < 0.45 else "neutral",
+        })
+
+    # Rolling 5-bucket average ratio
+    window_size = 5
+    for i, s in enumerate(series):
+        slice_ = [x["ratio"] for x in series[max(0, i - window_size + 1):i + 1] if x["ratio"] is not None]
+        s["ratio_ma5"] = round(sum(slice_) / len(slice_), 4) if slice_ else None
+
+    # Summary stats
+    valid_ratios = [s["ratio"] for s in series if s["ratio"] is not None]
+    summary = {}
+    if valid_ratios:
+        avg_ratio = sum(valid_ratios) / len(valid_ratios)
+        total_buy = sum(s["buy_vol"] for s in series)
+        total_sell = sum(s["sell_vol"] for s in series)
+        summary = {
+            "avg_ratio": round(avg_ratio, 4),
+            "total_buy_vol": round(total_buy, 4),
+            "total_sell_vol": round(total_sell, 4),
+            "bias": "buy" if avg_ratio > 0.55 else "sell" if avg_ratio < 0.45 else "neutral",
+            "bias_strength": round(abs(avg_ratio - 0.5) * 200, 1),  # 0-100 scale
+            "buckets": len(series),
+        }
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "window_s": window,
+        "bucket_size_s": bucket_size,
+        "ts": now,
+        "summary": summary,
         "series": series,
     }

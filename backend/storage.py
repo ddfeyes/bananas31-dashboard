@@ -102,6 +102,26 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_ts ON liquidations(ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_sym ON liquidations(symbol, ts)")
 
+        # Dedicated spread history table for faster queries / less IO
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS spread_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'binance',
+                spread_pct REAL NOT NULL,
+                spread_bps REAL NOT NULL,
+                spread_abs REAL,
+                bid REAL,
+                ask REAL,
+                mid REAL,
+                bid_vol REAL,
+                ask_vol REAL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_spread_ts  ON spread_history(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_spread_sym ON spread_history(symbol, ts)")
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS alert_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +166,9 @@ async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
     ask_vol = sum(float(a[1]) for a in asks[:10])
     imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
 
+    spread_pct = (spread / mid_price * 100) if (spread and mid_price) else None
+    spread_bps = round(spread_pct * 100, 4) if spread_pct is not None else None
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO orderbook_snapshots
@@ -155,7 +178,105 @@ async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
               json.dumps(bids[:20]), json.dumps(asks[:20]),
               best_bid, best_ask, mid_price, spread,
               bid_vol, ask_vol, imbalance))
+        # Also write to dedicated spread_history table for fast tracker queries
+        if spread_pct is not None:
+            await db.execute("""
+                INSERT INTO spread_history
+                (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (ts, symbol, exchange, round(spread_pct, 6), spread_bps,
+                  round(spread, 8) if spread else None,
+                  best_bid, best_ask, mid_price, bid_vol, ask_vol))
         await db.commit()
+
+
+async def insert_spread(
+    symbol: str, exchange: str,
+    spread_pct: float, spread_bps: float,
+    spread_abs: float = None,
+    bid: float = None, ask: float = None, mid: float = None,
+    bid_vol: float = None, ask_vol: float = None,
+):
+    """Explicit spread insert (for external callers)."""
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO spread_history
+            (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol))
+        await db.commit()
+
+
+async def get_spread_history(
+    symbol: str,
+    since: float = None,
+    window: int = 3600,
+    exchange: str = None,
+    limit: int = 2000,
+) -> List[Dict]:
+    """Fetch spread history from dedicated table."""
+    since = since or (time.time() - window)
+    params: list = [since, symbol]
+    q = "SELECT ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol FROM spread_history WHERE ts > ? AND symbol = ?"
+    if exchange:
+        q += " AND exchange = ?"
+        params.append(exchange)
+    q += " ORDER BY ts ASC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None) -> Dict:
+    """Return current, avg, max spread and alert status."""
+    since = time.time() - window
+    rows = await get_spread_history(symbol=symbol, since=since, exchange=exchange, limit=5000)
+    if not rows:
+        return {"symbol": symbol, "count": 0}
+    bps_vals = [r["spread_bps"] for r in rows if r["spread_bps"] is not None]
+    pct_vals  = [r["spread_pct"] for r in rows if r["spread_pct"] is not None]
+    if not bps_vals:
+        return {"symbol": symbol, "count": 0}
+    current_bps = bps_vals[-1]
+    current_pct = pct_vals[-1] if pct_vals else None
+    avg_bps = sum(bps_vals) / len(bps_vals)
+    max_bps = max(bps_vals)
+    min_bps = min(bps_vals)
+    p95_bps = sorted(bps_vals)[int(len(bps_vals) * 0.95)]
+    alert = None
+    # Alert: current > 0.5% spread OR > 2x avg
+    if current_pct is not None and current_pct > 0.5:
+        alert = {"level": "high", "reason": "spread_pct_threshold",
+                 "message": f"Spread {current_pct:.4f}% exceeds 0.5% threshold",
+                 "current_pct": round(current_pct, 4), "current_bps": round(current_bps, 2)}
+    elif avg_bps > 0 and current_bps > avg_bps * 2:
+        alert = {"level": "medium", "reason": "spread_widening",
+                 "message": f"Spread widened: {current_bps:.1f} bps (avg {avg_bps:.1f} bps, {current_bps/avg_bps:.1f}x)",
+                 "current_bps": round(current_bps, 2), "avg_bps": round(avg_bps, 2),
+                 "ratio": round(current_bps / avg_bps, 2)}
+    latest = rows[-1]
+    return {
+        "symbol": symbol,
+        "ts": latest["ts"],
+        "current_pct": round(current_pct, 6) if current_pct is not None else None,
+        "current_bps": round(current_bps, 2),
+        "avg_bps": round(avg_bps, 2),
+        "max_bps": round(max_bps, 2),
+        "min_bps": round(min_bps, 2),
+        "p95_bps": round(p95_bps, 2),
+        "bid": latest.get("bid"),
+        "ask": latest.get("ask"),
+        "mid": latest.get("mid"),
+        "bid_vol": latest.get("bid_vol"),
+        "ask_vol": latest.get("ask_vol"),
+        "count": len(rows),
+        "window_s": window,
+        "alert": alert,
+    }
 
 
 async def insert_trade(exchange: str, symbol: str, price: float, qty: float, side: str, trade_id: str = None):
