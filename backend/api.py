@@ -390,6 +390,11 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "ob_asks": raw_asks[:10],
                     "recent_trades": tape_trades,
                     "active_alerts": [{"type": a, "severity": s, "description": d} for a, s, d, _ in fired_alerts],
+                    # Inline alert details so frontend can update without REST polling
+                    "oi_spike": oi_result if isinstance(oi_result, dict) else None,
+                    "vol_spike": vol_result if isinstance(vol_result, dict) else None,
+                    "liq_cascade": liq_result if isinstance(liq_result, dict) else None,
+                    "delta_divergence": div_result if isinstance(div_result, dict) else None,
                 }
                 await ws.send_text(json.dumps(msg))
 
@@ -884,6 +889,59 @@ async def symbol_stats(symbol: Optional[str] = None):
             "sell_volume": round(sell_volume, 2),
             "candles": len(candles),
         }
+    }
+
+
+@router.get("/pivots")
+async def pivot_levels(symbol: Optional[str] = None):
+    """
+    Classic pivot points from previous day's OHLC.
+    PP = (H + L + C) / 3
+    R1 = 2*PP - L, S1 = 2*PP - H
+    R2 = PP + (H - L), S2 = PP - (H - L)
+    R3 = H + 2*(PP - L), S3 = L - 2*(H - PP)
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    # Try to get previous day candles; fall back to all available data
+    candles_48h = await get_ohlcv(interval_seconds=3600, window_seconds=48 * 3600, symbol=target)
+    if not candles_48h:
+        return {"status": "ok", "symbol": target, "pivots": None, "note": "Insufficient data"}
+
+    # Previous day = candles from 48h ago to 24h ago (or all if not enough)
+    now = time.time()
+    cutoff_start = now - 48 * 3600
+    cutoff_end   = now - 24 * 3600
+    prev_day = [c for c in candles_48h if cutoff_start <= c["ts"] <= cutoff_end]
+    if not prev_day:
+        # Fallback: use first half or all candles if < 4h
+        half = max(1, len(candles_48h) // 2)
+        prev_day = candles_48h[:half] if len(candles_48h) >= 4 else candles_48h
+
+    ph = max(c["high"] for c in prev_day)
+    pl = min(c["low"]  for c in prev_day)
+    pc = prev_day[-1]["close"]
+
+    pp = (ph + pl + pc) / 3
+    r1 = 2 * pp - pl
+    s1 = 2 * pp - ph
+    r2 = pp + (ph - pl)
+    s2 = pp - (ph - pl)
+    r3 = ph + 2 * (pp - pl)
+    s3 = pl - 2 * (ph - pp)
+
+    def rnd(v): return round(v, 8)
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "pivots": {
+            "pp": rnd(pp),
+            "r1": rnd(r1), "r2": rnd(r2), "r3": rnd(r3),
+            "s1": rnd(s1), "s2": rnd(s2), "s3": rnd(s3),
+        },
+        "prev_day": {"high": rnd(ph), "low": rnd(pl), "close": rnd(pc)},
     }
 
 

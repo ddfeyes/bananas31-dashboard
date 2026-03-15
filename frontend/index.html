@@ -1376,6 +1376,68 @@ function updateSummary(summary) {
     }
   }
 
+  // ── Real-time alert updates from WS ──────────────────────────────────────
+  if (summary.oi_spike) {
+    const oisp = summary.oi_spike;
+    const spikeEl  = document.getElementById('oi-spike-text');
+    const spikeBox = document.getElementById('alert-oi-spike');
+    if (oisp.spike) {
+      spikeEl.style.color = 'var(--accent)';
+      spikeEl.textContent = '🚨 ' + (oisp.description || 'OI spike');
+      spikeBox.className = 'alert-box active';
+    } else {
+      spikeEl.style.color = 'var(--muted)';
+      spikeEl.textContent = oisp.description || 'OI stable';
+      spikeBox.className = 'alert-box';
+    }
+  }
+  if (summary.vol_spike) {
+    const vs = summary.vol_spike;
+    const vsEl  = document.getElementById('vol-spike-text');
+    const vsBox = document.getElementById('alert-vol-spike');
+    if (vs.spike) {
+      vsEl.style.color = 'var(--accent)';
+      vsEl.textContent = vs.description || 'Volume spike!';
+      vsBox.className = 'alert-box active';
+    } else {
+      vsEl.style.color = 'var(--muted)';
+      vsEl.textContent = vs.description || 'Normal';
+      vsBox.className = 'alert-box';
+    }
+  }
+  if (summary.liq_cascade) {
+    const lc = summary.liq_cascade;
+    const lcEl  = document.getElementById('liq-cascade-text');
+    const lcBox = document.getElementById('alert-liq-cascade');
+    if (lc.cascade) {
+      const cascadeColor = lc.dominant === 'longs' ? 'var(--red)' : 'var(--green)';
+      lcEl.style.color = cascadeColor;
+      lcEl.textContent = lc.description || 'Cascade!';
+      lcBox.className = 'alert-box ' + (lc.dominant === 'longs' ? 'active-red' : 'active-green');
+    } else {
+      lcEl.style.color = 'var(--muted)';
+      lcEl.textContent = lc.description || 'No cascade';
+      lcBox.className = 'alert-box';
+    }
+  }
+  if (summary.delta_divergence) {
+    const divg = summary.delta_divergence;
+    const divColor = divg.divergence === 'bearish' ? 'var(--red)' : divg.divergence === 'bullish' ? 'var(--green)' : 'var(--muted)';
+    const divEl    = document.getElementById('div-text');
+    const alertBox = document.getElementById('alert-divergence');
+    divEl.style.color = divColor;
+    divEl.textContent = divg.description || 'No divergence';
+    const sev = divg.severity || 0;
+    document.getElementById('div-severity').innerHTML = sev > 0
+      ? `<div style="height:3px;width:${Math.min(100, sev*100)}%;background:${divColor};border-radius:2px;margin-top:5px;transition:width 0.5s;"></div>`
+      : '';
+    if (divg.divergence !== 'none' && divg.divergence) {
+      alertBox.className = 'alert-box ' + (divg.divergence === 'bearish' ? 'active-red' : 'active-green');
+    } else {
+      alertBox.className = 'alert-box';
+    }
+  }
+
   // ── Price alert check ─────────────────────────────────────────────────────
   if (summary.price) checkPriceAlerts(summary.price);
 
@@ -2442,8 +2504,6 @@ async function refreshPriceChart() {
   chartPrice.data.datasets[6].data = ema9;
   chartPrice.data.datasets[7].data = ema21;
 
-  chartPrice.update();
-
   // BB Squeeze: bandwidth = (upper - lower) / sma
   const bbWidths = bbUpper.map((u, i) => {
     if (u == null || bbLower[i] == null) return null;
@@ -2526,6 +2586,35 @@ async function refreshPriceChart() {
   chartVolume.data.datasets[0].data = candles.map(c => c.buy_volume);
   chartVolume.data.datasets[1].data = candles.map(c => c.sell_volume);
   chartVolume.update();
+
+  // Pivot levels (lazy-fetch and add as constant datasets)
+  const pivotData = await fetchJSON(`/api/pivots?symbol=${sym}`);
+  if (pivotData?.pivots) {
+    const pv = pivotData.pivots;
+    const n = candles.length;
+    const pivotLevels = [
+      { label: 'PP', value: pv.pp, color: 'rgba(240,192,64,0.7)' },
+      { label: 'R1', value: pv.r1, color: 'rgba(102,187,106,0.6)' },
+      { label: 'S1', value: pv.s1, color: 'rgba(239,83,80,0.6)' },
+      { label: 'R2', value: pv.r2, color: 'rgba(102,187,106,0.4)' },
+      { label: 'S2', value: pv.s2, color: 'rgba(239,83,80,0.4)' },
+    ];
+    // Remove previous pivot datasets (indices >= 8)
+    chartPrice.data.datasets.splice(8);
+    for (const pv of pivotLevels) {
+      chartPrice.data.datasets.push({
+        label: pv.label,
+        data: Array(n).fill(pv.value),
+        borderColor: pv.color,
+        borderWidth: 1,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        fill: false,
+        tension: 0,
+      });
+    }
+  }
+  chartPrice.update();
 
   // Stats
   const first = candles[0], last = candles[candles.length - 1];
