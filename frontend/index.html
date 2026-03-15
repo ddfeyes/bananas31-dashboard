@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BANANAS31/USDT Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a24;
+      --border: #2a2a3a;
+      --accent: #f0c040;
+      --green: #00e676;
+      --red: #ff4444;
+      --blue: #4fc3f7;
+      --purple: #ce93d8;
+      --text: #e0e0e0;
+      --muted: #888;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; font-size: 13px; }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px; background: var(--bg2); border-bottom: 1px solid var(--border);
+    }
+    header h1 { color: var(--accent); font-size: 18px; letter-spacing: 2px; }
+    #price-display { font-size: 24px; font-weight: bold; color: var(--green); }
+    #status { color: var(--muted); font-size: 11px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 12px; padding: 12px;
+    }
+    .card {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px; position: relative;
+    }
+    .card h2 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+    .card canvas { width: 100% !important; height: 160px !important; }
+    .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric { background: var(--bg3); border-radius: 6px; padding: 10px; text-align: center; }
+    .metric .val { font-size: 20px; font-weight: bold; color: var(--accent); }
+    .metric .lbl { font-size: 10px; color: var(--muted); margin-top: 3px; }
+    .phase-badge {
+      display: inline-block; padding: 6px 16px; border-radius: 20px;
+      font-size: 14px; font-weight: bold; letter-spacing: 1px;
+    }
+    .phase-Markup { background: #004d1a; color: var(--green); }
+    .phase-Markdown { background: #4d0000; color: var(--red); }
+    .phase-Accumulation { background: #1a1a00; color: var(--accent); }
+    .phase-Distribution { background: #2a003a; color: var(--purple); }
+    .phase-Unknown { background: var(--bg3); color: var(--muted); }
+    #liq-list { max-height: 180px; overflow-y: auto; }
+    .liq-row {
+      display: flex; justify-content: space-between; padding: 4px 0;
+      border-bottom: 1px solid var(--border); font-size: 11px;
+    }
+    .liq-row .liq-buy { color: var(--green); }
+    .liq-row .liq-sell { color: var(--red); }
+    .ob-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .ob-col { font-size: 11px; }
+    .ob-col .ob-row { display: flex; justify-content: space-between; padding: 2px 0; }
+    .ob-col .ob-row.bid { color: var(--green); }
+    .ob-col .ob-row.ask { color: var(--red); }
+    .ob-header { color: var(--muted); font-size: 10px; display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .refresh-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+      display: inline-block; margin-right: 6px; animation: pulse 1s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .funding-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .positive { color: var(--green); }
+    .negative { color: var(--red); }
+    .wide { grid-column: 1 / -1; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🍌 BANANAS31/USDT</h1>
+  <div id="price-display">—</div>
+  <div id="status"><span class="refresh-dot"></span>Auto-refresh 5s</div>
+</header>
+
+<div class="grid">
+  <!-- Phase + Summary -->
+  <div class="card">
+    <h2>Market Phase</h2>
+    <div style="text-align:center; padding: 10px 0;">
+      <div id="phase-badge" class="phase-badge phase-Unknown">Unknown</div>
+      <div id="phase-conf" style="color:var(--muted); font-size:11px; margin-top:8px;">confidence: —</div>
+      <div id="phase-desc" style="color:var(--text); font-size:11px; margin-top:6px; line-height:1.4;"></div>
+    </div>
+    <div class="metrics-grid" style="margin-top:10px;">
+      <div class="metric"><div class="val" id="m-spread">—</div><div class="lbl">Spread</div></div>
+      <div class="metric"><div class="val" id="m-ob-imb">—</div><div class="lbl">OB Imbalance</div></div>
+      <div class="metric"><div class="val" id="m-buy-vol">—</div><div class="lbl">Buy Vol 1m</div></div>
+      <div class="metric"><div class="val" id="m-sell-vol">—</div><div class="lbl">Sell Vol 1m</div></div>
+    </div>
+  </div>
+
+  <!-- OI Momentum -->
+  <div class="card">
+    <h2>Open Interest History</h2>
+    <canvas id="chart-oi"></canvas>
+    <div class="metrics-grid" style="margin-top:10px;">
+      <div class="metric"><div class="val" id="m-oi-binance">—</div><div class="lbl">Binance OI Δ%</div></div>
+      <div class="metric"><div class="val" id="m-oi-bybit">—</div><div class="lbl">Bybit OI Δ%</div></div>
+    </div>
+  </div>
+
+  <!-- CVD -->
+  <div class="card">
+    <h2>Cumulative Volume Delta (1h)</h2>
+    <canvas id="chart-cvd"></canvas>
+  </div>
+
+  <!-- Funding -->
+  <div class="card">
+    <h2>Funding Rate</h2>
+    <canvas id="chart-funding"></canvas>
+    <div id="funding-rates" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Orderbook -->
+  <div class="card">
+    <h2>Order Book (Top 10)</h2>
+    <div class="ob-grid">
+      <div class="ob-col">
+        <div class="ob-header"><span>Price</span><span>Qty</span></div>
+        <div id="ob-bids"></div>
+      </div>
+      <div class="ob-col">
+        <div class="ob-header"><span>Price</span><span>Qty</span></div>
+        <div id="ob-asks"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Liquidations -->
+  <div class="card">
+    <h2>Recent Liquidations (1h)</h2>
+    <div id="liq-list"></div>
+    <canvas id="chart-liq" style="margin-top:10px;"></canvas>
+  </div>
+</div>
+
+<script>
+const API = '';  // same origin
+
+// Chart helpers
+function mkChart(id, label, color, type='line') {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type,
+    data: {
+      labels: [],
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: color + '22',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: type === 'line',
+        tension: 0.3,
+      }]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: '#1a1a24' } }
+      }
+    }
+  });
+}
+
+function mkBarChart(id) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: { labels: [], datasets: [
+      { label: 'Long Liq', data: [], backgroundColor: '#ff444488' },
+      { label: 'Short Liq', data: [], backgroundColor: '#00e67688' },
+    ]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: '#1a1a24' } }
+      }
+    }
+  });
+}
+
+const charts = {
+  oi: mkChart('chart-oi', 'OI', '#4fc3f7'),
+  cvd: mkChart('chart-cvd', 'CVD', '#ce93d8'),
+  funding: mkChart('chart-funding', 'Funding', '#f0c040'),
+  liq: mkBarChart('chart-liq'),
+};
+
+function fmt(n, d=2) { return n != null ? Number(n).toFixed(d) : '—'; }
+function fmtTs(ts) { return new Date(ts * 1000).toLocaleTimeString(); }
+function fmtK(n) {
+  if (n == null) return '—';
+  n = Number(n);
+  if (Math.abs(n) >= 1e6) return (n/1e6).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1e3) return (n/1e3).toFixed(2) + 'K';
+  return n.toFixed(4);
+}
+
+function updateChart(chart, labels, data, colorFn) {
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  if (colorFn) {
+    chart.data.datasets[0].borderColor = colorFn;
+    chart.data.datasets[0].backgroundColor = colorFn + '22';
+  }
+  chart.update('none');
+}
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(API + url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function refreshAll() {
+  const [summary, cvd, oi, funding, liqs] = await Promise.all([
+    fetchJSON('/api/metrics/summary'),
+    fetchJSON('/api/cvd/history?window=3600'),
+    fetchJSON('/api/oi/history?limit=300'),
+    fetchJSON('/api/funding/history?limit=200'),
+    fetchJSON('/api/liquidations/recent?limit=100'),
+  ]);
+
+  // Price
+  if (summary?.price) {
+    document.getElementById('price-display').textContent = '$' + fmt(summary.price, 4);
+  }
+
+  // Phase
+  if (summary?.phase) {
+    const ph = summary.phase;
+    const badge = document.getElementById('phase-badge');
+    badge.textContent = ph.phase || 'Unknown';
+    badge.className = 'phase-badge phase-' + (ph.phase || 'Unknown');
+    document.getElementById('phase-conf').textContent = 'confidence: ' + fmt(ph.confidence * 100, 1) + '%';
+    document.getElementById('phase-desc').textContent = ph.description || '';
+  }
+
+  // Spread & OB imbalance
+  if (summary) {
+    document.getElementById('m-spread').textContent = summary.spread != null ? fmt(summary.spread, 4) : '—';
+    const imb = summary.orderbook_imbalance;
+    const imbEl = document.getElementById('m-ob-imb');
+    imbEl.textContent = imb != null ? fmt(imb * 100, 2) + '%' : '—';
+    imbEl.className = 'val ' + (imb > 0 ? 'positive' : imb < 0 ? 'negative' : '');
+
+    // Volume imbalance
+    const vi = summary.volume_imbalance;
+    if (vi) {
+      document.getElementById('m-buy-vol').textContent = fmtK(vi.buy_volume);
+      document.getElementById('m-sell-vol').textContent = fmtK(vi.sell_volume);
+    }
+
+    // OI momentum
+    const oim = summary.oi_momentum?.exchanges || {};
+    const binOI = oim['binance'];
+    const bybOI = oim['bybit'];
+    const binEl = document.getElementById('m-oi-binance');
+    const bybEl = document.getElementById('m-oi-bybit');
+    if (binOI) {
+      binEl.textContent = fmt(binOI.pct_change, 4) + '%';
+      binEl.className = 'val ' + (binOI.pct_change > 0 ? 'positive' : binOI.pct_change < 0 ? 'negative' : '');
+    }
+    if (bybOI) {
+      bybEl.textContent = fmt(bybOI.pct_change, 4) + '%';
+      bybEl.className = 'val ' + (bybOI.pct_change > 0 ? 'positive' : bybOI.pct_change < 0 ? 'negative' : '');
+    }
+
+    // Funding rates
+    const fr = summary.funding_rates || {};
+    const frDiv = document.getElementById('funding-rates');
+    frDiv.innerHTML = Object.entries(fr).map(([ex, rate]) =>
+      `<div class="funding-row"><span>${ex}</span><span class="${rate > 0 ? 'positive' : 'negative'}">${fmt(rate * 100, 6)}%</span></div>`
+    ).join('');
+  }
+
+  // CVD chart
+  if (cvd?.data?.length) {
+    const labels = cvd.data.map(d => fmtTs(d.ts));
+    const data = cvd.data.map(d => d.cvd);
+    const lastCvd = data[data.length - 1] || 0;
+    updateChart(charts.cvd, labels, data, lastCvd >= 0 ? '#ce93d8' : '#ff4444');
+  }
+
+  // OI chart (aggregate by ts, prefer binance)
+  if (oi?.data?.length) {
+    const binanceOI = oi.data.filter(d => d.exchange === 'binance');
+    const src = binanceOI.length > 0 ? binanceOI : oi.data;
+    updateChart(charts.oi, src.map(d => fmtTs(d.ts)), src.map(d => d.oi_value));
+  }
+
+  // Funding chart
+  if (funding?.data?.length) {
+    const src = funding.data.filter(d => d.exchange === 'binance');
+    updateChart(charts.funding, src.map(d => fmtTs(d.ts)), src.map(d => d.rate * 100));
+  }
+
+  // Liquidations
+  if (liqs?.data) {
+    const list = liqs.data.slice(0, 20);
+    document.getElementById('liq-list').innerHTML = list.map(l =>
+      `<div class="liq-row">
+        <span class="${l.side === 'buy' ? 'liq-buy' : 'liq-sell'}">${l.side?.toUpperCase()}</span>
+        <span>${l.exchange}</span>
+        <span>$${fmt(l.price, 4)}</span>
+        <span>${fmtK(l.qty)}</span>
+        <span style="color:var(--muted)">${fmtTs(l.ts)}</span>
+      </div>`
+    ).join('') || '<div style="color:var(--muted);text-align:center;padding:20px">No liquidations yet</div>';
+
+    // Liq bar chart: bucket by minute, buy vs sell
+    const now = Date.now() / 1000;
+    const buckets = {};
+    for (const l of liqs.data) {
+      const min = Math.floor(l.ts / 60);
+      if (!buckets[min]) buckets[min] = { buy: 0, sell: 0 };
+      buckets[min][l.side === 'buy' ? 'buy' : 'sell'] += l.value || 0;
+    }
+    const mins = Object.keys(buckets).sort().slice(-30);
+    charts.liq.data.labels = mins.map(m => fmtTs(m * 60));
+    charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);  // long liq = sell side forced
+    charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
+    charts.liq.update('none');
+  }
+
+  // Orderbook
+  const ob = await fetchJSON('/api/orderbook/latest?limit=1');
+  if (ob?.data?.length) {
+    let bids = [], asks = [];
+    try {
+      bids = JSON.parse(ob.data[0].bids || '[]').slice(0, 10);
+      asks = JSON.parse(ob.data[0].asks || '[]').slice(0, 10);
+    } catch {}
+    document.getElementById('ob-bids').innerHTML = bids.map(([p, q]) =>
+      `<div class="ob-row bid"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
+    ).join('');
+    document.getElementById('ob-asks').innerHTML = asks.map(([p, q]) =>
+      `<div class="ob-row ask"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
+    ).join('');
+  }
+}
+
+// Initial load + auto-refresh
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

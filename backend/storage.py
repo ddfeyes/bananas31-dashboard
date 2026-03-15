@@ -1,0 +1,251 @@
+"""SQLite storage layer using aiosqlite."""
+import aiosqlite
+import asyncio
+import os
+import time
+from typing import Any, Dict, List, Optional
+
+DB_PATH = os.getenv("DB_PATH", "data/bananas31.db")
+
+
+async def get_db() -> aiosqlite.Connection:
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db = await aiosqlite.connect(DB_PATH)
+    db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA synchronous=NORMAL")
+    return db
+
+
+async def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                bids TEXT NOT NULL,
+                asks TEXT NOT NULL,
+                best_bid REAL,
+                best_ask REAL,
+                mid_price REAL,
+                spread REAL,
+                bid_volume REAL,
+                ask_volume REAL,
+                imbalance REAL
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                qty REAL NOT NULL,
+                side TEXT NOT NULL,
+                trade_id TEXT
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS open_interest (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                oi_value REAL NOT NULL,
+                oi_contracts REAL
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS funding_rate (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                rate REAL NOT NULL,
+                next_funding_ts REAL
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS liquidations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                price REAL NOT NULL,
+                qty REAL NOT NULL,
+                value REAL
+            )
+        """)
+
+        # Indexes for time-range queries
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ob_ts ON orderbook_snapshots(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oi_ts ON open_interest(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_fr_ts ON funding_rate(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_ts ON liquidations(ts)")
+
+        await db.commit()
+
+
+async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
+    import json
+    ts = time.time()
+    best_bid = float(bids[0][0]) if bids else None
+    best_ask = float(asks[0][0]) if asks else None
+    mid_price = (best_bid + best_ask) / 2 if best_bid and best_ask else None
+    spread = (best_ask - best_bid) if best_bid and best_ask else None
+
+    bid_vol = sum(float(b[1]) for b in bids[:10])
+    ask_vol = sum(float(a[1]) for a in asks[:10])
+    imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO orderbook_snapshots
+            (ts, exchange, symbol, bids, asks, best_bid, best_ask, mid_price, spread, bid_volume, ask_volume, imbalance)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (ts, exchange, symbol,
+              json.dumps(bids[:20]), json.dumps(asks[:20]),
+              best_bid, best_ask, mid_price, spread,
+              bid_vol, ask_vol, imbalance))
+        await db.commit()
+
+
+async def insert_trade(exchange: str, symbol: str, price: float, qty: float, side: str, trade_id: str = None):
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO trades (ts, exchange, symbol, price, qty, side, trade_id)
+            VALUES (?,?,?,?,?,?,?)
+        """, (ts, exchange, symbol, price, qty, side, trade_id))
+        await db.commit()
+
+
+async def insert_oi(exchange: str, symbol: str, oi_value: float, oi_contracts: float = None):
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO open_interest (ts, exchange, symbol, oi_value, oi_contracts)
+            VALUES (?,?,?,?,?)
+        """, (ts, exchange, symbol, oi_value, oi_contracts))
+        await db.commit()
+
+
+async def insert_funding(exchange: str, symbol: str, rate: float, next_ts: float = None):
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO funding_rate (ts, exchange, symbol, rate, next_funding_ts)
+            VALUES (?,?,?,?,?)
+        """, (ts, exchange, symbol, rate, next_ts))
+        await db.commit()
+
+
+async def insert_liquidation(exchange: str, symbol: str, side: str, price: float, qty: float):
+    ts = time.time()
+    value = price * qty
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO liquidations (ts, exchange, symbol, side, price, qty, value)
+            VALUES (?,?,?,?,?,?,?)
+        """, (ts, exchange, symbol, side, price, qty, value))
+        await db.commit()
+
+
+async def get_latest_orderbook(exchange: str = None, limit: int = 1) -> List[Dict]:
+    q = "SELECT * FROM orderbook_snapshots"
+    params = []
+    if exchange:
+        q += " WHERE exchange = ?"
+        params.append(exchange)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_recent_trades(limit: int = 100, since: float = None) -> List[Dict]:
+    q = "SELECT * FROM trades"
+    params = []
+    if since:
+        q += " WHERE ts > ?"
+        params.append(since)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_oi_history(limit: int = 300, since: float = None) -> List[Dict]:
+    since = since or (time.time() - 3600)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM open_interest WHERE ts > ? ORDER BY ts ASC LIMIT ?",
+            (since, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_funding_history(limit: int = 100, since: float = None) -> List[Dict]:
+    since = since or (time.time() - 86400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM funding_rate WHERE ts > ? ORDER BY ts ASC LIMIT ?",
+            (since, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_recent_liquidations(limit: int = 50, since: float = None) -> List[Dict]:
+    since = since or (time.time() - 3600)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM liquidations WHERE ts > ? ORDER BY ts DESC LIMIT ?",
+            (since, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_trades_for_cvd(since: float) -> List[Dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT ts, price, qty, side FROM trades WHERE ts > ? ORDER BY ts ASC",
+            (since,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
+    cutoff = time.time() - max_age_seconds
+    async with aiosqlite.connect(DB_PATH) as db:
+        for table in ["orderbook_snapshots", "trades", "open_interest", "funding_rate", "liquidations"]:
+            await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+        # Keep orderbook more recent (1 hour)
+        await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 3600,))
+        await db.commit()
