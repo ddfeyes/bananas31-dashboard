@@ -51,6 +51,7 @@ from metrics import (
     detect_funding_divergence,
     compute_oi_concentration,
     compute_vpin,
+    compute_realized_vs_implied_vol,
 )
 
 router = APIRouter(prefix="/api")
@@ -451,6 +452,20 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/realized-implied-vol")
+async def realized_implied_vol_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, ge=300, le=86400),
+    candle: int = Query(default=60, ge=10, le=3600),
+):
+    """Realized vs ATR-implied volatility comparison."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_realized_vs_implied_vol(symbol=target, window_seconds=window, candle_size=candle)
     return {"status": "ok", "symbol": target, **data}
 
 

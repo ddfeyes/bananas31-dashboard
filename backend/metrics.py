@@ -1873,3 +1873,147 @@ async def compute_vpin(symbol: str = None, window_seconds: int = 1800, n_buckets
         "window_seconds": window_seconds,
         "series": [round(v, 4) for v in vpin_buckets[-20:]],  # last 20 buckets for sparkline
     }
+
+
+async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: int = 3600, candle_size: int = 60) -> Dict:
+    """
+    Realized vs implied volatility comparison.
+    
+    Realized vol: annualized std dev of log returns over window, computed from 1-min candles.
+    Implied vol (proxy): ATR(14) normalized by price × sqrt(annualization factor).
+    
+    Convergence signal: when realized vol > implied vol proxy → market moving faster than expected.
+    Divergence signal: when realized vol << implied vol proxy → market calmer than expected.
+    """
+    import math
+    import time
+    from storage import get_recent_trades
+    
+    since = time.time() - window_seconds
+    trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
+    
+    if not trades or len(trades) < 20:
+        return {
+            "realized_vol_pct": None,
+            "implied_vol_pct": None,
+            "vol_ratio": None,
+            "signal": "insufficient_data",
+            "description": "Not enough data",
+            "window_seconds": window_seconds,
+        }
+    
+    trades.sort(key=lambda t: t["ts"])
+    
+    # Build candles of candle_size seconds
+    candles = {}
+    for t in trades:
+        bucket = int(t["ts"] // candle_size) * candle_size
+        p = t.get("price", 0)
+        q = t.get("qty", 0)
+        if p <= 0:
+            continue
+        if bucket not in candles:
+            candles[bucket] = {"open": p, "high": p, "low": p, "close": p, "volume": q}
+        else:
+            c = candles[bucket]
+            c["high"] = max(c["high"], p)
+            c["low"] = min(c["low"], p)
+            c["close"] = p
+            c["volume"] += q
+    
+    sorted_candles = sorted(candles.items())
+    if len(sorted_candles) < 5:
+        return {
+            "realized_vol_pct": None,
+            "implied_vol_pct": None,
+            "vol_ratio": None,
+            "signal": "insufficient_data",
+            "description": "Too few candles",
+            "window_seconds": window_seconds,
+        }
+    
+    closes = [c["close"] for _, c in sorted_candles]
+    
+    # Realized vol: std dev of log returns, annualized
+    log_returns = []
+    for i in range(1, len(closes)):
+        if closes[i - 1] > 0 and closes[i] > 0:
+            lr = math.log(closes[i] / closes[i - 1])
+            log_returns.append(lr)
+    
+    if len(log_returns) < 3:
+        return {
+            "realized_vol_pct": None,
+            "implied_vol_pct": None,
+            "vol_ratio": None,
+            "signal": "insufficient_data",
+            "description": "Insufficient returns",
+            "window_seconds": window_seconds,
+        }
+    
+    n = len(log_returns)
+    mean_r = sum(log_returns) / n
+    variance = sum((r - mean_r) ** 2 for r in log_returns) / (n - 1)
+    std_dev = math.sqrt(variance)
+    
+    # Annualize: candles per year = (365 * 24 * 3600) / candle_size
+    candles_per_year = (365 * 24 * 3600) / candle_size
+    realized_vol = std_dev * math.sqrt(candles_per_year)
+    realized_vol_pct = realized_vol * 100
+    
+    # ATR-implied vol proxy: ATR(14) / price → normalize to per-candle, then annualize
+    highs = [c["high"] for _, c in sorted_candles]
+    lows = [c["low"] for _, c in sorted_candles]
+    
+    # True ranges
+    trs = []
+    for i in range(1, len(sorted_candles)):
+        prev_close = sorted_candles[i - 1][1]["close"]
+        high = highs[i]
+        low = lows[i]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    
+    if not trs:
+        implied_vol_pct = None
+    else:
+        period = min(14, len(trs))
+        atr = sum(trs[:period]) / period
+        current_price = closes[-1]
+        if current_price > 0:
+            atr_pct_per_candle = atr / current_price
+            implied_vol_pct = atr_pct_per_candle * math.sqrt(candles_per_year) * 100
+        else:
+            implied_vol_pct = None
+    
+    # Signal
+    if implied_vol_pct is None or implied_vol_pct < 1e-6:
+        signal = "no_implied"
+        desc = f"Realized vol: {realized_vol_pct:.1f}% (annualized, implied unavailable)"
+        vol_ratio = None
+    else:
+        vol_ratio = realized_vol_pct / implied_vol_pct
+        if vol_ratio >= 1.3:
+            signal = "realized_high"
+            emoji = "🔥"
+            desc = f"{emoji} Realized {realized_vol_pct:.1f}% > Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — market moving faster than expected"
+        elif vol_ratio <= 0.7:
+            signal = "realized_low"
+            emoji = "😴"
+            desc = f"{emoji} Realized {realized_vol_pct:.1f}% < Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — market calmer than expected"
+        else:
+            signal = "converged"
+            emoji = "⚖️"
+            desc = f"{emoji} Realized {realized_vol_pct:.1f}% ≈ Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — converged"
+    
+    return {
+        "realized_vol_pct": round(realized_vol_pct, 2),
+        "implied_vol_pct": round(implied_vol_pct, 2) if implied_vol_pct is not None else None,
+        "vol_ratio": round(vol_ratio, 3) if vol_ratio is not None else None,
+        "signal": signal,
+        "description": desc,
+        "n_candles": len(sorted_candles),
+        "n_returns": len(log_returns),
+        "candle_size": candle_size,
+        "window_seconds": window_seconds,
+    }
