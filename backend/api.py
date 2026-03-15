@@ -892,6 +892,85 @@ async def symbol_stats(symbol: Optional[str] = None):
     }
 
 
+@router.get("/support-resistance")
+async def support_resistance(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, le=86400),
+    sensitivity: float = Query(default=0.003, le=0.05, description="Min price diff to count as new level (as fraction)")
+):
+    """
+    Auto-detect support/resistance levels from local price extrema in trade data.
+    Uses peak-finding on 1-min OHLCV data.
+    Returns sorted list of price levels with strength (touch count).
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    candles = await get_ohlcv(interval_seconds=60, window_seconds=window, symbol=target)
+    if len(candles) < 10:
+        return {"status": "ok", "symbol": target, "levels": []}
+
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
+    closes = [c["close"] for c in candles]
+
+    def find_peaks(series, is_max: bool):
+        peaks = []
+        for i in range(2, len(series) - 2):
+            if is_max:
+                if series[i] > series[i-1] and series[i] > series[i-2] and \
+                   series[i] > series[i+1] and series[i] > series[i+2]:
+                    peaks.append(series[i])
+            else:
+                if series[i] < series[i-1] and series[i] < series[i-2] and \
+                   series[i] < series[i+1] and series[i] < series[i+2]:
+                    peaks.append(series[i])
+        return peaks
+
+    resistance_peaks = find_peaks(highs, is_max=True)
+    support_troughs  = find_peaks(lows, is_max=False)
+
+    current_price = closes[-1] if closes else 0
+
+    # Cluster nearby levels within sensitivity range
+    def cluster(levels, sens):
+        if not levels:
+            return []
+        levels_sorted = sorted(levels)
+        clusters = []
+        cur_cluster = [levels_sorted[0]]
+        for p in levels_sorted[1:]:
+            if (p - cur_cluster[-1]) / max(cur_cluster[-1], 1e-12) < sens:
+                cur_cluster.append(p)
+            else:
+                clusters.append(cur_cluster)
+                cur_cluster = [p]
+        clusters.append(cur_cluster)
+        # Return center price + touch count
+        return [{"price": round(sum(c)/len(c), 8), "touches": len(c)} for c in clusters]
+
+    resistance_levels = cluster(resistance_peaks, sensitivity)
+    support_levels    = cluster(support_troughs, sensitivity)
+
+    # Sort by touches (strength) and annotate type
+    all_levels = []
+    for r in resistance_levels:
+        all_levels.append({**r, "type": "resistance", "distance_pct": round((r["price"] - current_price) / current_price * 100, 4) if current_price else 0})
+    for s in support_levels:
+        all_levels.append({**s, "type": "support", "distance_pct": round((s["price"] - current_price) / current_price * 100, 4) if current_price else 0})
+
+    # Sort by proximity to current price
+    all_levels.sort(key=lambda x: abs(x["distance_pct"]))
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "current_price": current_price,
+        "levels": all_levels[:20],  # top 20 closest levels
+        "window": window,
+    }
+
+
 @router.get("/microstructure")
 async def microstructure(
     symbol: Optional[str] = None,

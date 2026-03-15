@@ -2727,25 +2727,30 @@ async function refreshPriceChart() {
   chartVolume.data.datasets[1].data = candles.map(c => c.sell_volume);
   chartVolume.update();
 
-  // Pivot levels (lazy-fetch and add as constant datasets)
-  const pivotData = await fetchJSON(`/api/pivots?symbol=${sym}`);
+  // Pivot levels + S/R levels (lazy-fetch and add as constant datasets)
+  const [pivotData, srData] = await Promise.all([
+    fetchJSON(`/api/pivots?symbol=${sym}`),
+    fetchJSON(`/api/support-resistance?symbol=${sym}&window=${window}`),
+  ]);
+
+  // Remove previous overlay datasets (indices >= 8)
+  chartPrice.data.datasets.splice(8);
+  const n = candles.length;
+
   if (pivotData?.pivots) {
     const pv = pivotData.pivots;
-    const n = candles.length;
     const pivotLevels = [
-      { label: 'PP', value: pv.pp, color: 'rgba(240,192,64,0.7)' },
-      { label: 'R1', value: pv.r1, color: 'rgba(102,187,106,0.6)' },
-      { label: 'S1', value: pv.s1, color: 'rgba(239,83,80,0.6)' },
+      { label: 'PP', value: pv.pp, color: 'rgba(240,192,64,0.75)' },
+      { label: 'R1', value: pv.r1, color: 'rgba(102,187,106,0.65)' },
+      { label: 'S1', value: pv.s1, color: 'rgba(239,83,80,0.65)' },
       { label: 'R2', value: pv.r2, color: 'rgba(102,187,106,0.4)' },
       { label: 'S2', value: pv.s2, color: 'rgba(239,83,80,0.4)' },
     ];
-    // Remove previous pivot datasets (indices >= 8)
-    chartPrice.data.datasets.splice(8);
-    for (const pv of pivotLevels) {
+    for (const pl of pivotLevels) {
       chartPrice.data.datasets.push({
-        label: pv.label,
-        data: Array(n).fill(pv.value),
-        borderColor: pv.color,
+        label: pl.label,
+        data: Array(n).fill(pl.value),
+        borderColor: pl.color,
         borderWidth: 1,
         borderDash: [6, 3],
         pointRadius: 0,
@@ -2754,6 +2759,28 @@ async function refreshPriceChart() {
       });
     }
   }
+
+  if (srData?.levels?.length) {
+    // Add top 4 S/R levels as thin lines (strength-weighted opacity)
+    const maxTouches = Math.max(...srData.levels.map(l => l.touches));
+    for (const lv of srData.levels.slice(0, 6)) {
+      const opacity = 0.3 + (lv.touches / maxTouches) * 0.5;
+      const color = lv.type === 'resistance'
+        ? `rgba(239,83,80,${opacity.toFixed(2)})`
+        : `rgba(102,187,106,${opacity.toFixed(2)})`;
+      chartPrice.data.datasets.push({
+        label: `${lv.type === 'resistance' ? 'R' : 'S'}×${lv.touches}`,
+        data: Array(n).fill(lv.price),
+        borderColor: color,
+        borderWidth: lv.touches >= 3 ? 1.5 : 1,
+        borderDash: [3, 5],
+        pointRadius: 0,
+        fill: false,
+        tension: 0,
+      });
+    }
+  }
+
   chartPrice.update();
 
   // Stats
