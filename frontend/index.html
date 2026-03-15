@@ -147,6 +147,36 @@
     </div>
   </div>
 
+  <!-- Volume Profile -->
+  <div class="card">
+    <h2>Volume Profile (1h)</h2>
+    <div id="vp-levels" style="display:flex; gap:12px; margin-bottom:10px; font-size:11px;">
+      <span>POC: <b id="vp-poc" style="color:var(--accent)">—</b></span>
+      <span>VAH: <b id="vp-vah" style="color:var(--green)">—</b></span>
+      <span>VAL: <b id="vp-val" style="color:var(--red)">—</b></span>
+      <span style="color:var(--muted)" id="vp-va-pct"></span>
+    </div>
+    <canvas id="chart-vp" style="height:200px !important;"></canvas>
+  </div>
+
+  <!-- Delta Divergence + Large Trades -->
+  <div class="card">
+    <h2>Alerts</h2>
+    <div id="alert-divergence" style="margin-bottom:12px; padding:10px; border-radius:6px; background:var(--bg3); font-size:12px;">
+      <div style="font-size:10px; color:var(--muted); margin-bottom:4px;">DELTA DIVERGENCE</div>
+      <div id="div-text" style="color:var(--muted)">Loading...</div>
+      <div id="div-severity" style="margin-top:4px;"></div>
+    </div>
+    <div>
+      <div style="font-size:10px; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;">Large Trades &gt;$10k (5min)</div>
+      <div class="metrics-grid" style="margin-bottom:8px;">
+        <div class="metric"><div class="val positive" id="lt-buy">—</div><div class="lbl">Buy $</div></div>
+        <div class="metric"><div class="val negative" id="lt-sell">—</div><div class="lbl">Sell $</div></div>
+      </div>
+      <div id="lt-list" style="max-height:140px; overflow-y:auto; font-size:11px;"></div>
+    </div>
+  </div>
+
   <!-- Liquidations -->
   <div class="card">
     <h2>Recent Liquidations (1h)</h2>
@@ -214,11 +244,38 @@ function mkBarChart(id) {
   });
 }
 
+function mkVolumeProfileChart(id) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy Vol', data: [], backgroundColor: '#00e67644', borderWidth: 0 },
+        { label: 'Sell Vol', data: [], backgroundColor: '#ff444444', borderWidth: 0 },
+        { label: 'POC', data: [], backgroundColor: '#f0c04088', borderWidth: 0 },
+      ]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { stacked: true, ticks: { color: '#888', font: { size: 9 } }, grid: { color: '#1a1a24' } },
+        y: { stacked: true, ticks: { color: '#888', font: { size: 9 }, maxTicksLimit: 12 }, grid: { display: false } }
+      }
+    }
+  });
+}
+
 const charts = {
   oi: mkChart('chart-oi', 'OI', '#4fc3f7'),
   cvd: mkChart('chart-cvd', 'CVD', '#ce93d8'),
   funding: mkChart('chart-funding', 'Funding', '#f0c040'),
   liq: mkBarChart('chart-liq'),
+  vp: mkVolumeProfileChart('chart-vp'),
 };
 
 function fmt(n, d=2) { return n != null ? Number(n).toFixed(d) : '—'; }
@@ -263,9 +320,17 @@ function selectSymbol(sym) {
   // Clear charts
   Object.values(charts).forEach(c => {
     c.data.labels = [];
-    c.data.datasets.forEach(ds => ds.data = []);
+    c.data.datasets.forEach(ds => { ds.data = []; });
     c.update('none');
   });
+  document.getElementById('vp-poc').textContent = '—';
+  document.getElementById('vp-vah').textContent = '—';
+  document.getElementById('vp-val').textContent = '—';
+  document.getElementById('div-text').textContent = 'Loading...';
+  document.getElementById('div-text').style.color = 'var(--muted)';
+  document.getElementById('lt-buy').textContent = '—';
+  document.getElementById('lt-sell').textContent = '—';
+  document.getElementById('lt-list').innerHTML = '';
   renderSymbolTabs();
   document.getElementById('header-title').textContent = '🍌 ' + sym;
   document.title = sym + ' Dashboard';
@@ -290,12 +355,15 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [summary, cvd, oi, funding, liqs] = await Promise.all([
+  const [summary, cvd, oi, funding, liqs, vp, divg, ltrades] = await Promise.all([
     fetchJSON(`/api/metrics/summary?symbol=${sym}`),
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
     fetchJSON(`/api/liquidations/recent?limit=100&symbol=${sym}`),
+    fetchJSON(`/api/volume-profile?window=3600&bins=50&symbol=${sym}`),
+    fetchJSON(`/api/delta-divergence?window=300&symbol=${sym}`),
+    fetchJSON(`/api/large-trades?window=300&min_usd=10000&symbol=${sym}`),
   ]);
 
   // Price
@@ -397,6 +465,57 @@ async function refreshAll() {
     charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);
     charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
     charts.liq.update('none');
+  }
+
+  // Delta Divergence
+  if (divg) {
+    const divColor = divg.divergence === 'bearish' ? 'var(--red)' : divg.divergence === 'bullish' ? 'var(--green)' : 'var(--muted)';
+    document.getElementById('div-text').style.color = divColor;
+    document.getElementById('div-text').textContent = divg.description || 'No divergence';
+    const sev = divg.severity || 0;
+    document.getElementById('div-severity').innerHTML = sev > 0
+      ? `<div style="height:4px; width:${Math.min(100, sev*100)}%; background:${divColor}; border-radius:2px; margin-top:4px;"></div>`
+      : '';
+    const alertBox = document.getElementById('alert-divergence');
+    alertBox.style.borderLeft = divg.divergence !== 'none' ? `3px solid ${divColor}` : '3px solid var(--border)';
+  }
+
+  // Large Trades
+  if (ltrades) {
+    document.getElementById('lt-buy').textContent = fmtK(ltrades.total_buy_usd);
+    document.getElementById('lt-sell').textContent = fmtK(ltrades.total_sell_usd);
+    const trades = (ltrades.trades || []).slice(0, 8);
+    document.getElementById('lt-list').innerHTML = trades.map(t =>
+      `<div class="liq-row">
+        <span class="${t.side === 'buy' || t.side === 'Buy' ? 'liq-buy' : 'liq-sell'}">${t.side?.toUpperCase()}</span>
+        <span>$${fmt(t.price, 4)}</span>
+        <span style="color:var(--accent)">$${fmtK(t.value_usd)}</span>
+        <span style="color:var(--muted)">${fmtTs(t.ts)}</span>
+      </div>`
+    ).join('') || '<div style="color:var(--muted); padding:8px 0; text-align:center">No large trades</div>';
+  }
+
+  // Volume Profile
+  if (vp?.bins?.length) {
+    const bins = vp.bins.filter(b => b.volume > 0);
+    const pocPrice = vp.poc;
+    const labels = bins.map(b => fmt(b.price, 6));
+
+    // Split into POC vs normal bins
+    const buyData = bins.map(b => b.price === pocPrice ? 0 : b.buy_vol);
+    const sellData = bins.map(b => b.price === pocPrice ? 0 : b.sell_vol);
+    const pocData = bins.map(b => b.price === pocPrice ? b.volume : 0);
+
+    charts.vp.data.labels = labels;
+    charts.vp.data.datasets[0].data = buyData;
+    charts.vp.data.datasets[1].data = sellData;
+    charts.vp.data.datasets[2].data = pocData;
+    charts.vp.update('none');
+
+    document.getElementById('vp-poc').textContent = fmt(vp.poc, 6);
+    document.getElementById('vp-vah').textContent = fmt(vp.vah, 6);
+    document.getElementById('vp-val').textContent = fmt(vp.val, 6);
+    document.getElementById('vp-va-pct').textContent = `VA: ${vp.value_area_pct || 70}%`;
   }
 
   // Orderbook

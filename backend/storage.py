@@ -284,6 +284,27 @@ async def get_recent_liquidations(
             return [dict(r) for r in rows]
 
 
+async def get_trades_for_volume_profile(since: float, symbol: str = None) -> List[Dict]:
+    """Return aggregated volume per price level (rounded to 0.01) for volume profile."""
+    params: list = [since]
+    q = """
+        SELECT
+            ROUND(price / 0.01) * 0.01 AS price_level,
+            SUM(qty) AS volume
+        FROM trades
+        WHERE ts > ?
+    """
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    q += " GROUP BY price_level ORDER BY price_level ASC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
     params: list = [since]
     q = "SELECT ts, price, qty, side FROM trades WHERE ts > ?"

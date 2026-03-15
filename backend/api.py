@@ -18,6 +18,9 @@ from metrics import (
     compute_volume_imbalance,
     compute_oi_momentum,
     classify_market_phase,
+    compute_volume_profile,
+    detect_delta_divergence,
+    detect_large_trades,
 )
 
 router = APIRouter(prefix="/api")
@@ -88,6 +91,56 @@ async def cvd_history(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_cvd(window_seconds=window, symbol=target)
     return {"status": "ok", "data": data, "count": len(data)}
+
+
+@router.get("/volume-profile")
+async def volume_profile(
+    window: int = Query(default=3600, le=86400),
+    bins: int = Query(default=50, le=200),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_profile(window_seconds=window, bins=bins, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/volume-profile")
+async def volume_profile(
+    symbol: Optional[str] = Query(default=None),
+    timeframe: int = Query(default=3600, le=86400, description="Lookback window in seconds"),
+):
+    """
+    Volume Profile for a symbol over the given timeframe.
+    Returns POC, VAH, VAL and full price/volume profile.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_profile(symbol=target, timeframe_seconds=timeframe)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/delta-divergence")
+async def delta_divergence(
+    window: int = Query(default=300, le=3600),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_delta_divergence(window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/large-trades")
+async def large_trades(
+    window: int = Query(default=300, le=3600),
+    min_usd: float = Query(default=10000, le=1000000),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_large_trades(window_seconds=window, min_usd=min_usd, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
 
 
 @router.get("/metrics/summary")

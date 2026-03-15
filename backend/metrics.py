@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 from storage import (
     get_trades_for_cvd,
+    get_trades_for_volume_profile,
     get_oi_history,
     get_latest_orderbook,
     get_funding_history,
@@ -149,6 +150,267 @@ async def classify_market_phase(symbol: str = None) -> Dict:
             "oi_pct_change": round(oi_pct, 4),
         },
         "description": _phase_description(phase),
+    }
+
+
+async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None) -> Dict:
+    """
+    Delta divergence: price moving up but CVD moving down (or vice versa).
+    Returns severity: none | weak | strong
+    """
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since, symbol=symbol)
+    ob = await get_latest_orderbook(symbol=symbol, limit=5)
+
+    if len(trades) < 20 or len(ob) < 2:
+        return {"divergence": "none", "severity": 0, "description": "Insufficient data"}
+
+    # Split into two halves
+    mid = len(trades) // 2
+    first_half = trades[:mid]
+    second_half = trades[mid:]
+
+    def cvd_of(ts_list):
+        c = 0.0
+        for t in ts_list:
+            c += t["qty"] if t["side"] in ("buy", "Buy") else -t["qty"]
+        return c
+
+    cvd1 = cvd_of(first_half)
+    cvd2 = cvd_of(second_half)
+    cvd_change = cvd2 - cvd1  # positive = CVD rising
+
+    # Price change
+    p_start = ob[-1].get("mid_price") or 0
+    p_end = ob[0].get("mid_price") or 0
+    price_change = p_end - p_start if p_start else 0
+    price_pct = (price_change / p_start * 100) if p_start else 0
+
+    # Normalize CVD change relative to total volume
+    total_vol = sum(t["qty"] for t in trades) or 1
+    cvd_norm = cvd_change / total_vol  # -1 to +1
+
+    divergence = "none"
+    severity = 0
+    description = "No divergence"
+
+    if price_pct > 0.05 and cvd_norm < -0.05:
+        divergence = "bearish"
+        severity = min(1.0, abs(price_pct) * 0.3 + abs(cvd_norm) * 0.7)
+        description = f"⚠ Price up {price_pct:.2f}% but CVD falling — bearish divergence"
+    elif price_pct < -0.05 and cvd_norm > 0.05:
+        divergence = "bullish"
+        severity = min(1.0, abs(price_pct) * 0.3 + abs(cvd_norm) * 0.7)
+        description = f"⚠ Price down {abs(price_pct):.2f}% but CVD rising — bullish divergence"
+
+    return {
+        "divergence": divergence,
+        "severity": round(severity, 3),
+        "price_change_pct": round(price_pct, 4),
+        "cvd_norm": round(cvd_norm, 4),
+        "description": description,
+        "window_seconds": window_seconds,
+    }
+
+
+async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000, symbol: str = None) -> Dict:
+    """
+    Detect large individual trades > min_usd.
+    """
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since, symbol=symbol)
+
+    large = []
+    for t in trades:
+        value = t["price"] * t["qty"]
+        if value >= min_usd:
+            large.append({
+                "ts": t["ts"],
+                "price": t["price"],
+                "qty": t["qty"],
+                "side": t["side"],
+                "value_usd": round(value, 2),
+            })
+
+    large.sort(key=lambda x: x["value_usd"], reverse=True)
+
+    buy_vol = sum(l["value_usd"] for l in large if l["side"] in ("buy", "Buy"))
+    sell_vol = sum(l["value_usd"] for l in large if l["side"] not in ("buy", "Buy"))
+
+    return {
+        "count": len(large),
+        "trades": large[:20],  # top 20 by size
+        "total_buy_usd": round(buy_vol, 2),
+        "total_sell_usd": round(sell_vol, 2),
+        "min_usd_threshold": min_usd,
+        "window_seconds": window_seconds,
+    }
+
+
+async def compute_volume_profile(window_seconds: int = 3600, bins: int = 50, symbol: str = None) -> Dict:
+    """
+    Volume Profile: aggregate traded volume by price level.
+    Returns POC (Point of Control), VAH (Value Area High), VAL (Value Area Low),
+    and the full histogram of bins.
+    """
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since, symbol=symbol)
+
+    if not trades:
+        return {"poc": None, "vah": None, "val": None, "bins": [], "total_volume": 0}
+
+    prices = [t["price"] for t in trades]
+    min_p, max_p = min(prices), max(prices)
+
+    if min_p == max_p:
+        return {
+            "poc": min_p,
+            "vah": min_p,
+            "val": min_p,
+            "bins": [{"price": min_p, "volume": sum(t["qty"] for t in trades), "buy_vol": 0, "sell_vol": 0}],
+            "total_volume": sum(t["qty"] for t in trades),
+        }
+
+    bin_size = (max_p - min_p) / bins
+
+    # Build histogram
+    histogram = {}
+    for t in trades:
+        bin_idx = min(int((t["price"] - min_p) / bin_size), bins - 1)
+        if bin_idx not in histogram:
+            histogram[bin_idx] = {"volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0}
+        histogram[bin_idx]["volume"] += t["qty"]
+        if t["side"] in ("buy", "Buy"):
+            histogram[bin_idx]["buy_vol"] += t["qty"]
+        else:
+            histogram[bin_idx]["sell_vol"] += t["qty"]
+
+    # Fill gaps and sort
+    full_hist = []
+    for i in range(bins):
+        p = min_p + (i + 0.5) * bin_size
+        h = histogram.get(i, {"volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0})
+        full_hist.append({
+            "price": round(p, 8),
+            "volume": round(h["volume"], 6),
+            "buy_vol": round(h["buy_vol"], 6),
+            "sell_vol": round(h["sell_vol"], 6),
+        })
+
+    total_vol = sum(h["volume"] for h in full_hist)
+
+    # POC: highest volume bin
+    poc_entry = max(full_hist, key=lambda h: h["volume"])
+    poc = poc_entry["price"]
+
+    # Value Area: 70% of total volume centered on POC
+    target = total_vol * 0.70
+    poc_idx = full_hist.index(poc_entry)
+    accumulated = poc_entry["volume"]
+    lo_idx, hi_idx = poc_idx, poc_idx
+
+    while accumulated < target:
+        expand_down = lo_idx > 0
+        expand_up = hi_idx < len(full_hist) - 1
+        if not expand_down and not expand_up:
+            break
+        vol_down = full_hist[lo_idx - 1]["volume"] if expand_down else -1
+        vol_up = full_hist[hi_idx + 1]["volume"] if expand_up else -1
+        if vol_down >= vol_up:
+            lo_idx -= 1
+            accumulated += full_hist[lo_idx]["volume"]
+        else:
+            hi_idx += 1
+            accumulated += full_hist[hi_idx]["volume"]
+
+    val = full_hist[lo_idx]["price"]
+    vah = full_hist[hi_idx]["price"]
+
+    return {
+        "poc": round(poc, 8),
+        "vah": round(vah, 8),
+        "val": round(val, 8),
+        "total_volume": round(total_vol, 6),
+        "value_area_pct": round(accumulated / total_vol * 100, 1) if total_vol > 0 else 0,
+        "bins": full_hist,
+        "window_seconds": window_seconds,
+    }
+
+
+async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> dict:
+    """
+    Volume Profile: POC, VAH, VAL over the last timeframe_seconds.
+
+    - POC (Point of Control): price level with highest traded volume
+    - Value Area: price range containing 70% of total volume
+    - VAH (Value Area High): upper bound of value area
+    - VAL (Value Area Low): lower bound of value area
+
+    Returns dict with poc_price, poc_volume, vah, val, and full profile list.
+    """
+    since = time.time() - timeframe_seconds
+    rows = await get_trades_for_volume_profile(since, symbol=symbol)
+
+    if not rows:
+        return {
+            "poc_price": None,
+            "poc_volume": None,
+            "vah": None,
+            "val": None,
+            "profile": [],
+            "total_volume": 0,
+            "timeframe_seconds": timeframe_seconds,
+        }
+
+    # Build profile list sorted by price
+    profile = [{"price": row["price_level"], "volume": row["volume"]} for row in rows]
+    total_volume = sum(p["volume"] for p in profile)
+
+    # POC: level with maximum volume
+    poc = max(profile, key=lambda x: x["volume"])
+    poc_price = poc["price"]
+    poc_volume = poc["volume"]
+
+    # Value Area: 70% of total volume centered around POC
+    value_area_target = total_volume * 0.70
+
+    # Start value area at POC, expand outward (higher/lower) one level at a time
+    # taking the side with greater volume each step
+    poc_idx = next(i for i, p in enumerate(profile) if p["price"] == poc_price)
+    lo_idx = poc_idx
+    hi_idx = poc_idx
+    accumulated = poc_volume
+
+    while accumulated < value_area_target:
+        # Candidate volumes above and below current bounds
+        can_go_up = hi_idx + 1 < len(profile)
+        can_go_down = lo_idx - 1 >= 0
+
+        if not can_go_up and not can_go_down:
+            break
+
+        vol_up = profile[hi_idx + 1]["volume"] if can_go_up else -1
+        vol_down = profile[lo_idx - 1]["volume"] if can_go_down else -1
+
+        if vol_up >= vol_down:
+            hi_idx += 1
+            accumulated += vol_up
+        else:
+            lo_idx -= 1
+            accumulated += vol_down
+
+    vah = profile[hi_idx]["price"]
+    val = profile[lo_idx]["price"]
+
+    return {
+        "poc_price": round(poc_price, 2),
+        "poc_volume": round(poc_volume, 6),
+        "vah": round(vah, 2),
+        "val": round(val, 2),
+        "total_volume": round(total_volume, 6),
+        "value_area_pct": round(accumulated / total_volume * 100, 2) if total_volume else 0,
+        "profile": [{"price": round(p["price"], 2), "volume": round(p["volume"], 6)} for p in profile],
+        "timeframe_seconds": timeframe_seconds,
     }
 
 
