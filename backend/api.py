@@ -15,6 +15,7 @@ from storage import (
     get_funding_history,
     get_recent_liquidations,
     get_orderbook_snapshots_for_heatmap,
+    get_ohlcv,
 )
 from metrics import (
     compute_cvd,
@@ -473,6 +474,55 @@ async def orderbook_heatmap(
         "ask_cumsum": ask_cumsum,    # list[time][bin]
         "price_levels": price_levels,
     }
+
+
+@router.get("/ohlcv")
+async def ohlcv(
+    interval: int = Query(default=60, ge=10, le=3600, description="Candle interval in seconds"),
+    window: int = Query(default=3600, le=86400, description="Lookback window in seconds"),
+    symbol: Optional[str] = None,
+):
+    """OHLCV candles from trade data."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await get_ohlcv(interval_seconds=interval, window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, "interval": interval, "data": data, "count": len(data)}
+
+
+@router.get("/multi-summary")
+async def multi_summary():
+    """Quick stats for all tracked symbols — for overview bar."""
+    syms = get_symbols()
+    results = {}
+    for sym in syms:
+        try:
+            ob = await get_latest_orderbook(symbol=sym, limit=1)
+            price = ob[0].get("mid_price") if ob else None
+
+            # Quick CVD delta
+            cvd_data = await compute_cvd(window_seconds=300, symbol=sym)
+            cvd_delta = 0
+            if cvd_data and len(cvd_data) >= 2:
+                cvd_delta = cvd_data[-1]["cvd"] - cvd_data[0]["cvd"]
+
+            # Funding
+            funding = await get_funding_history(limit=2, symbol=sym)
+            rates = {r["exchange"]: r["rate"] for r in funding}
+            avg_funding = sum(rates.values()) / len(rates) if rates else 0
+
+            # Latest OI momentum
+            oi_mom = await compute_oi_momentum(window_seconds=300, symbol=sym)
+            oi_pct = oi_mom.get("avg_pct_change", 0)
+
+            results[sym] = {
+                "price": price,
+                "cvd_delta": round(cvd_delta, 0),
+                "funding": round(avg_funding, 8),
+                "oi_pct": round(oi_pct, 4),
+            }
+        except Exception as e:
+            results[sym] = {"error": str(e)}
+    return {"status": "ok", "symbols": results}
 
 
 @router.get("/metrics/summary")

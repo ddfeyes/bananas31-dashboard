@@ -358,6 +358,96 @@ async def get_orderbook_history(
             return [dict(r) for r in reversed(rows)]  # chronological
 
 
+async def get_ohlcv(
+    interval_seconds: int = 60,
+    window_seconds: int = 3600,
+    symbol: str = None,
+) -> List[Dict]:
+    """Compute OHLCV candles from trades table using SQLite integer bucketing."""
+    since = time.time() - window_seconds
+    interval = max(1, interval_seconds)
+
+    sym_filter = ""
+    params: list = [since, interval, interval]
+    if symbol:
+        sym_filter = " AND symbol = ?"
+        params.append(symbol)
+
+    q = f"""
+        SELECT
+            CAST(ts / ? AS INTEGER) * ? AS bucket,
+            MIN(ts)   AS ts_open,
+            MAX(ts)   AS ts_close,
+            price     AS open_price,
+            price     AS close_price,
+            MAX(price) AS high,
+            MIN(price) AS low,
+            SUM(qty)  AS volume,
+            SUM(CASE WHEN side = 'buy'  THEN qty ELSE 0 END) AS buy_volume,
+            SUM(CASE WHEN side = 'sell' THEN qty ELSE 0 END) AS sell_volume,
+            COUNT(*)  AS trade_count
+        FROM trades
+        WHERE ts > ?{sym_filter}
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    """
+    # reorder params: interval (x2 for bucket calc) first, then since, then symbol
+    full_params: list = [interval, interval, since]
+    if symbol:
+        full_params.append(symbol)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # We need open/close as first/last prices — get them in a separate pass
+        async with db.execute(q, full_params) as cur:
+            rows = await cur.fetchall()
+            buckets = [dict(r) for r in rows]
+
+    if not buckets:
+        return []
+
+    # Fetch first/last price per bucket for true open/close
+    # Use window functions if SQLite supports them (3.25+), otherwise fallback
+    q2 = f"""
+        SELECT
+            CAST(ts / ? AS INTEGER) * ? AS bucket,
+            FIRST_VALUE(price) OVER (PARTITION BY CAST(ts / ? AS INTEGER) ORDER BY ts ASC)  AS open,
+            LAST_VALUE(price)  OVER (PARTITION BY CAST(ts / ? AS INTEGER) ORDER BY ts ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS close
+        FROM trades
+        WHERE ts > ?{sym_filter}
+        GROUP BY bucket
+    """
+    try:
+        oc_params: list = [interval, interval, interval, interval, since]
+        if symbol:
+            oc_params.append(symbol)
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(q2, oc_params) as cur:
+                oc_rows = await cur.fetchall()
+                oc_map = {r["bucket"]: (r["open"], r["close"]) for r in oc_rows}
+    except Exception:
+        oc_map = {}
+
+    result = []
+    for b in buckets:
+        bucket = b["bucket"]
+        o, c = oc_map.get(bucket, (b["open_price"], b["close_price"]))
+        result.append({
+            "ts": bucket,
+            "open": o,
+            "high": b["high"],
+            "low": b["low"],
+            "close": c,
+            "volume": b["volume"],
+            "buy_volume": b["buy_volume"],
+            "sell_volume": b["sell_volume"],
+            "trade_count": b["trade_count"],
+        })
+    return result
+
+
 async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
     params: list = [since]
     q = "SELECT ts, price, qty, side FROM trades WHERE ts > ?"

@@ -359,6 +359,57 @@
       letter-spacing: 1px;
       margin-bottom: 6px;
     }
+
+    /* ── Multi-symbol overview bar ── */
+    #multi-overview {
+      display: flex;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      flex-wrap: nowrap;
+    }
+    .sym-card {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      min-width: 130px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+    .sym-card:hover { border-color: var(--border2); background: var(--bg4); }
+    .sym-card.active { border-color: var(--accent); }
+    .sym-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sym-card-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .sym-card-price {
+      font-size: 12px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+    }
+    .sym-card-stats {
+      display: flex;
+      gap: 8px;
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .sym-stat { display: flex; flex-direction: column; gap: 1px; }
+    .sym-stat .sv { font-size: 10px; font-variant-numeric: tabular-nums; }
+    .sym-stat .sl { font-size: 8px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -389,7 +440,25 @@
   </div>
 </header>
 
+<!-- Multi-symbol overview bar -->
+<div id="multi-overview"></div>
+
 <div class="grid">
+  <!-- Price Chart -->
+  <div class="card wide">
+    <h2>
+      <span class="card-icon">📉</span>Price (1m candles)
+      <span style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+        <button onclick="setPriceInterval(60)"  id="btn-1m"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 8px;font-size:9px;cursor:pointer;">1m</button>
+        <button onclick="setPriceInterval(300)" id="btn-5m"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 8px;font-size:9px;cursor:pointer;">5m</button>
+        <button onclick="setPriceInterval(900)" id="btn-15m" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 8px;font-size:9px;cursor:pointer;">15m</button>
+        <span id="price-chart-stats" style="font-size:10px; color:var(--muted); margin-left:8px;"></span>
+      </span>
+    </h2>
+    <canvas id="chart-price" style="height:200px !important;"></canvas>
+    <canvas id="chart-volume" style="height:60px !important; margin-top:4px;"></canvas>
+  </div>
+
   <!-- Market Phase + Summary -->
   <div class="card">
     <h2><span class="card-icon">📊</span>Market Phase</h2>
@@ -1030,6 +1099,8 @@ function selectSymbol(sym) {
   renderHeatmap();
   refreshAll();
   refreshHeatmap();
+  refreshPriceChart();
+  refreshMultiOverview();
 }
 
 async function loadSymbols() {
@@ -1343,6 +1414,191 @@ async function refreshHeatmap() {
   }
 }
 
+// ── Price chart (OHLCV) ───────────────────────────────────────────────────────
+let priceInterval = 60;  // seconds per candle
+let chartPrice = null;
+let chartVolume = null;
+
+function initPriceCharts() {
+  const priceCtx = document.getElementById('chart-price').getContext('2d');
+  chartPrice = new Chart(priceCtx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Price',
+          data: [],
+          borderColor: '#f0c040',
+          backgroundColor: 'rgba(240,192,64,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+          tension: 0.2,
+        },
+        {
+          label: 'High',
+          data: [],
+          borderColor: 'rgba(102,187,106,0.4)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+          borderDash: [],
+        },
+        {
+          label: 'Low',
+          data: [],
+          borderColor: 'rgba(239,83,80,0.4)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+        },
+      ]
+    },
+    options: chartDefaults({
+      scales: {
+        x: {
+          display: true,
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 10, maxRotation: 0 },
+          grid: { color: GRID_COLOR }
+        },
+        y: {
+          ticks: { color: TICK_COLOR, font: TICK_FONT, maxTicksLimit: 6 },
+          grid: { color: GRID_COLOR }
+        }
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: {
+          ...chartDefaults().plugins.tooltip,
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.datasetIndex === 0) return ` Close: ${ctx.parsed.y.toFixed(6)}`;
+              if (ctx.datasetIndex === 1) return ` High:  ${ctx.parsed.y.toFixed(6)}`;
+              if (ctx.datasetIndex === 2) return ` Low:   ${ctx.parsed.y.toFixed(6)}`;
+              return '';
+            }
+          }
+        }
+      }
+    })
+  });
+
+  const volCtx = document.getElementById('chart-volume').getContext('2d');
+  chartVolume = new Chart(volCtx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy Vol',  data: [], backgroundColor: 'rgba(102,187,106,0.55)', borderWidth: 0 },
+        { label: 'Sell Vol', data: [], backgroundColor: 'rgba(239,83,80,0.55)',   borderWidth: 0 },
+      ]
+    },
+    options: chartDefaults({
+      scales: {
+        x: { display: false, stacked: true },
+        y: { stacked: true, ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 3 }, grid: { color: GRID_COLOR } }
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: chartDefaults().plugins.tooltip
+      }
+    })
+  });
+}
+
+function setPriceInterval(secs) {
+  priceInterval = secs;
+  ['btn-1m','btn-5m','btn-15m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.style.color = 'var(--muted)'; el.style.borderColor = 'var(--border)'; el.style.background = 'var(--bg3)'; }
+  });
+  const map = {60: 'btn-1m', 300: 'btn-5m', 900: 'btn-15m'};
+  const activeBtn = document.getElementById(map[secs]);
+  if (activeBtn) { activeBtn.style.color = '#fff'; activeBtn.style.borderColor = 'var(--accent)'; activeBtn.style.background = 'var(--bg4)'; }
+  refreshPriceChart();
+}
+
+async function refreshPriceChart() {
+  if (!activeSymbol || !chartPrice) return;
+  const window = priceInterval <= 60 ? 3600 : priceInterval <= 300 ? 14400 : 43200;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/ohlcv?interval=${priceInterval}&window=${window}&symbol=${sym}`);
+  if (!data?.data?.length) return;
+
+  const candles = data.data;
+  const labels  = candles.map(c => fmtTs(c.ts));
+  chartPrice.data.labels = labels;
+  chartPrice.data.datasets[0].data = candles.map(c => c.close);
+  chartPrice.data.datasets[1].data = candles.map(c => c.high);
+  chartPrice.data.datasets[2].data = candles.map(c => c.low);
+  chartPrice.update();
+
+  chartVolume.data.labels = labels;
+  chartVolume.data.datasets[0].data = candles.map(c => c.buy_volume);
+  chartVolume.data.datasets[1].data = candles.map(c => c.sell_volume);
+  chartVolume.update();
+
+  // Stats
+  const first = candles[0], last = candles[candles.length - 1];
+  const pct = ((last.close - first.open) / first.open * 100).toFixed(2);
+  const color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+  const hi = Math.max(...candles.map(c => c.high));
+  const lo = Math.min(...candles.map(c => c.low));
+  document.getElementById('price-chart-stats').innerHTML =
+    `<span style="color:${color};font-weight:700;">${pct >= 0 ? '+' : ''}${pct}%</span>` +
+    `&nbsp;&nbsp;H: <b style="color:var(--green)">${hi.toFixed(6)}</b>` +
+    `&nbsp;L: <b style="color:var(--red)">${lo.toFixed(6)}</b>`;
+}
+
+// ── Multi-symbol overview bar ─────────────────────────────────────────────────
+let multiOverviewData = {};
+
+async function refreshMultiOverview() {
+  const data = await fetchJSON('/api/multi-summary');
+  if (!data?.symbols) return;
+  multiOverviewData = data.symbols;
+
+  const container = document.getElementById('multi-overview');
+  if (!container) return;
+
+  container.innerHTML = Object.entries(data.symbols).map(([sym, d]) => {
+    const base = sym.replace('USDT', '');
+    const price = d.price != null ? d.price.toPrecision(5) : '—';
+    const cvd = d.cvd_delta != null ? fmtK(d.cvd_delta) : '—';
+    const cvdColor = d.cvd_delta > 0 ? 'var(--green)' : d.cvd_delta < 0 ? 'var(--red)' : 'var(--muted)';
+    const fund = d.funding != null ? (d.funding * 100).toFixed(4) + '%' : '—';
+    const fundColor = d.funding > 0.0001 ? 'var(--red)' : d.funding < -0.0001 ? 'var(--green)' : 'var(--muted)';
+    const oi = d.oi_pct != null ? (d.oi_pct > 0 ? '+' : '') + d.oi_pct.toFixed(2) + '%' : '—';
+    const oiColor = d.oi_pct > 0 ? 'var(--green)' : d.oi_pct < 0 ? 'var(--red)' : 'var(--muted)';
+    const isActive = sym === activeSymbol ? ' active' : '';
+    return `<div class="sym-card${isActive}" onclick="selectSymbol('${sym}')">
+      <div class="sym-card-header">
+        <span class="sym-card-name">${base}</span>
+        <span class="sym-card-price">$${price}</span>
+      </div>
+      <div class="sym-card-stats">
+        <div class="sym-stat"><span class="sv" style="color:${cvdColor}">${cvd}</span><span class="sl">CVD 5m</span></div>
+        <div class="sym-stat"><span class="sv" style="color:${fundColor}">${fund}</span><span class="sl">Fund</span></div>
+        <div class="sym-stat"><span class="sv" style="color:${oiColor}">${oi}</span><span class="sl">OI 5m</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ── Periodic symbol sync ──────────────────────────────────────────────────────
 async function syncSymbols() {
   const data = await fetchJSON('/api/symbols');
@@ -1356,15 +1612,19 @@ async function syncSymbols() {
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
+  initPriceCharts();
+  setPriceInterval(60);  // default to 1m active
+
   await loadSymbols();
   if (activeSymbol) {
     connectWS(activeSymbol);
     updateExportLinks(activeSymbol);
   }
-  await refreshAll();
-  await refreshHeatmap();
+  await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview()]);
   setInterval(refreshAll, 5000);
   setInterval(refreshHeatmap, 5000);
+  setInterval(refreshPriceChart, 10000);
+  setInterval(refreshMultiOverview, 15000);
   setInterval(syncSymbols, 30000);
   window.addEventListener('resize', renderHeatmap);
 })();
