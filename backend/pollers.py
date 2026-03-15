@@ -11,7 +11,9 @@ from storage import insert_oi, insert_funding
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
+OI_POLL_INTERVAL = float(os.getenv("OI_POLL_INTERVAL", "5"))       # OI every 5s
+FUNDING_POLL_INTERVAL = float(os.getenv("FUNDING_POLL_INTERVAL", "30"))  # funding every 30s
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", OI_POLL_INTERVAL))  # legacy compat
 
 BINANCE_OI_URL = "https://fapi.binance.com/fapi/v1/openInterest"
 BINANCE_FUNDING_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
@@ -86,21 +88,37 @@ async def poll_bybit_funding(client: httpx.AsyncClient, symbol: str):
         logger.warning(f"[Bybit funding/{symbol}] {e}")
 
 
+async def oi_poller_loop(client: httpx.AsyncClient, symbols: List[str]):
+    """Poll OI every OI_POLL_INTERVAL seconds."""
+    while True:
+        t0 = time.time()
+        tasks = []
+        for sym in symbols:
+            tasks += [poll_binance_oi(client, sym), poll_bybit_oi(client, sym)]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        elapsed = time.time() - t0
+        await asyncio.sleep(max(0, OI_POLL_INTERVAL - elapsed))
+
+
+async def funding_poller_loop(client: httpx.AsyncClient, symbols: List[str]):
+    """Poll funding rates every FUNDING_POLL_INTERVAL seconds."""
+    while True:
+        t0 = time.time()
+        tasks = []
+        for sym in symbols:
+            tasks += [poll_binance_funding(client, sym), poll_bybit_funding(client, sym)]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        elapsed = time.time() - t0
+        await asyncio.sleep(max(0, FUNDING_POLL_INTERVAL - elapsed))
+
+
 async def poller_loop():
-    """Poll OI and funding for all symbols every POLL_INTERVAL seconds."""
+    """Run OI and funding pollers with independent intervals."""
     symbols = get_symbols()
-    logger.info(f"Starting REST pollers for {len(symbols)} symbols: {symbols}")
+    logger.info(f"Starting REST pollers for {len(symbols)} symbols: {symbols} "
+                f"(OI: {OI_POLL_INTERVAL}s, funding: {FUNDING_POLL_INTERVAL}s)")
     async with httpx.AsyncClient() as client:
-        while True:
-            t0 = time.time()
-            tasks = []
-            for sym in symbols:
-                tasks += [
-                    poll_binance_oi(client, sym),
-                    poll_binance_funding(client, sym),
-                    poll_bybit_oi(client, sym),
-                    poll_bybit_funding(client, sym),
-                ]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            elapsed = time.time() - t0
-            await asyncio.sleep(max(0, POLL_INTERVAL - elapsed))
+        await asyncio.gather(
+            oi_poller_loop(client, symbols),
+            funding_poller_loop(client, symbols),
+        )

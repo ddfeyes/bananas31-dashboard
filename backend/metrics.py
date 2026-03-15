@@ -94,7 +94,7 @@ async def compute_oi_momentum(window_seconds: int = 300, symbol: str = None) -> 
     }
 
 
-_phase_history: list = []  # rolling history for smoothing
+_phase_history: dict = {}  # per-symbol rolling history for smoothing
 
 async def classify_market_phase(symbol: str = None) -> Dict:
     """
@@ -117,20 +117,21 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     cvd_results = results[:3]
     oi_results = results[3:]
 
-    ob_data = await get_latest_orderbook(symbol=symbol, limit=10)
+    ob_data = await get_latest_orderbook(symbol=symbol, limit=1)
 
-    # Price change at multiple windows (use ob snapshots)
-    def price_change_from_ob(ob_list):
-        if len(ob_list) < 2:
+    # Price change using trade prices from CVD data (spans the full window)
+    def price_change_from_cvd(data):
+        if isinstance(data, Exception) or len(data) < 2:
             return 0.0
-        p_now = ob_list[0].get("mid_price") or 0
-        p_old = ob_list[-1].get("mid_price") or 0
+        p_now = data[-1].get("price") or 0
+        p_old = data[0].get("price") or 0
         if not p_old:
             return 0.0
         return (p_now - p_old) / p_old * 100
 
-    price_pct_now = price_change_from_ob(ob_data[:2]) if len(ob_data) >= 2 else 0.0
-    price_pct_broad = price_change_from_ob(ob_data) if len(ob_data) >= 5 else price_pct_now
+    # Short-term (1min) and broad (15min) price change
+    price_pct_now   = price_change_from_cvd(cvd_results[0])   # 1min window
+    price_pct_broad = price_change_from_cvd(cvd_results[2])   # 15min window
 
     # CVD deltas
     def cvd_delta_of(data):
@@ -197,15 +198,19 @@ async def classify_market_phase(symbol: str = None) -> Dict:
 
     raw_conf = min(0.99, max(0.1, raw_conf))
 
-    # Exponential smoothing on confidence using rolling history
+    # Exponential smoothing on confidence using per-symbol rolling history
     global _phase_history
-    _phase_history.append({"phase": phase, "conf": raw_conf})
-    if len(_phase_history) > 10:
-        _phase_history = _phase_history[-10:]
+    sym_key = symbol or "__default__"
+    if sym_key not in _phase_history:
+        _phase_history[sym_key] = []
+    _phase_history[sym_key].append({"phase": phase, "conf": raw_conf})
+    if len(_phase_history[sym_key]) > 10:
+        _phase_history[sym_key] = _phase_history[sym_key][-10:]
 
     # Smooth: recent phases that agree boost confidence
-    same_phase_count = sum(1 for h in _phase_history if h["phase"] == phase)
-    smooth_conf = raw_conf * 0.7 + (same_phase_count / len(_phase_history)) * 0.3
+    hist = _phase_history[sym_key]
+    same_phase_count = sum(1 for h in hist if h["phase"] == phase)
+    smooth_conf = raw_conf * 0.7 + (same_phase_count / len(hist)) * 0.3
 
     return {
         "phase": phase,
