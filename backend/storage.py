@@ -624,6 +624,24 @@ async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
             return [dict(r) for r in rows]
 
 
+async def get_orderbook_depth_history(
+    symbol: str, since: float, limit: int = 2000
+) -> List[Dict]:
+    """Get orderbook snapshots with bid_volume and ask_volume for recovery analysis."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        q = """
+            SELECT ts, bid_volume, ask_volume, mid_price
+            FROM orderbook_snapshots
+            WHERE ts > ? AND symbol = ?
+            ORDER BY ts ASC
+            LIMIT ?
+        """
+        async with db.execute(q, [since, symbol, limit]) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_orderbook_snapshots_for_heatmap(
     symbol: str, since: float, sample_interval: int = 10
 ) -> List[Dict]:

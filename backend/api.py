@@ -18,6 +18,7 @@ from storage import (
     get_funding_history,
     get_recent_liquidations,
     get_orderbook_snapshots_for_heatmap,
+    get_orderbook_depth_history,
     get_ohlcv,
     insert_alert,
     get_alert_history,
@@ -58,6 +59,7 @@ from metrics import (
     compute_kalman_price,
     compute_ob_pressure_gradient,
     compute_smart_money_divergence,
+    compute_ob_recovery_speed,
 )
 
 router = APIRouter(prefix="/api")
@@ -3374,4 +3376,53 @@ async def smart_money_divergence_all_endpoint(
         "window_seconds": window,
         "threshold_usd": threshold_usd,
         "symbols": results,
+    }
+
+
+@router.get("/ob-recovery-speed")
+async def ob_recovery_speed_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=900, ge=60, le=3600, description="Lookback in seconds (default 15m)"),
+    threshold_usd: float = Query(default=50000.0, ge=1000.0, description="Minimum trade size to consider (USD)"),
+    recovery_pct: float = Query(default=0.8, ge=0.1, le=1.0, description="Fraction of baseline depth required for recovery"),
+    baseline_window: float = Query(default=30.0, ge=5.0, le=120.0, description="Seconds before trade to measure baseline depth"),
+    alert_seconds: float = Query(default=10.0, ge=1.0, le=120.0, description="Recovery time threshold for slow alert"),
+    max_lookforward: float = Query(default=60.0, ge=5.0, le=300.0, description="Max seconds after trade to look for recovery"),
+):
+    """
+    Order book recovery speed: measures how fast the OB refills after large trades.
+
+    For each trade >= threshold_usd:
+    - buy trade → monitors ask side depth recovery
+    - sell trade → monitors bid side depth recovery
+    - baseline = mean depth in baseline_window seconds before trade
+    - recovery_seconds = time until depth returns to recovery_pct * baseline
+    - slow = recovery_seconds > alert_seconds (or not recovered in max_lookforward)
+
+    Returns:
+      events: [{ts, side, trade_usd, baseline_depth, recovery_seconds, recovered, slow}]
+      avg_recovery_seconds, max_recovery_seconds, slow_count, alert, event_count
+    """
+    since = time.time() - window
+    ob_snapshots, trades = await asyncio.gather(
+        get_orderbook_depth_history(symbol=symbol, since=since - baseline_window),
+        get_recent_trades(symbol=symbol, since=since, limit=10000),
+    )
+
+    result = compute_ob_recovery_speed(
+        ob_snapshots,
+        trades,
+        threshold_usd=threshold_usd,
+        recovery_pct=recovery_pct,
+        baseline_window=baseline_window,
+        alert_seconds=alert_seconds,
+        max_lookforward=max_lookforward,
+    )
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "threshold_usd": threshold_usd,
+        **result,
     }

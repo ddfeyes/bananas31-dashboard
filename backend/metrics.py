@@ -2590,7 +2590,6 @@ def compute_smart_money_divergence(
     smart_count = retail_count = 0
     smart_vol_total = retail_vol_total = 0.0
 
-    # {ts_bucket: {smart_buy, smart_sell, retail_buy, retail_sell}}
     bucket_map: dict = {}
 
     for t in trades:
@@ -2598,7 +2597,6 @@ def compute_smart_money_divergence(
         qty   = float(t["qty"])
         val   = price * qty
 
-        # Determine taker direction
         iba = t.get("is_buyer_aggressor")
         if iba is not None:
             is_buy = bool(iba)
@@ -2635,7 +2633,6 @@ def compute_smart_money_divergence(
     total_vol = abs(smart_cvd) + abs(retail_cvd) + 1e-8
     divergence_score = (smart_cvd - retail_cvd) / total_vol
 
-    # Signal classification
     smart_dir  = 1 if smart_cvd  > 0 else (-1 if smart_cvd  < 0 else 0)
     retail_dir = 1 if retail_cvd > 0 else (-1 if retail_cvd < 0 else 0)
     same_dir   = (smart_dir != 0 and retail_dir != 0 and smart_dir == retail_dir)
@@ -2651,11 +2648,9 @@ def compute_smart_money_divergence(
 
     divergence_detected = signal in ("accumulation", "distribution")
 
-    # smart_pct = smart vol / (smart vol + retail vol)
     all_vol = smart_vol_total + retail_vol_total
     smart_pct = (smart_vol_total / all_vol) if all_vol > 0 else 0.0
 
-    # Build bucket series sorted ascending
     buckets = []
     for ts_b in sorted(bucket_map):
         bm = bucket_map[ts_b]
@@ -2675,4 +2670,105 @@ def compute_smart_money_divergence(
         "smart_pct":          round(smart_pct, 6),
         "divergence_detected": divergence_detected,
         "buckets":            buckets,
+    }
+
+
+def compute_ob_recovery_speed(
+    ob_snapshots: List[dict],
+    trades: List[dict],
+    threshold_usd: float = 50000.0,
+    recovery_pct: float = 0.8,
+    baseline_window: float = 30.0,
+    alert_seconds: float = 10.0,
+    max_lookforward: float = 60.0,
+) -> dict:
+    """Measure how fast the order book refills after large trades.
+
+    For each large trade (price*qty >= threshold_usd):
+    - buy (is_buyer_aggressor=True / side="buy")  -> asks consumed -> monitor ask_volume
+    - sell (is_buyer_aggressor=False / side="sell") -> bids consumed -> monitor bid_volume
+    - baseline_depth = mean of consumed-side volume in [trade_ts - baseline_window, trade_ts)
+    - scan ob_snapshots after trade for first snapshot where depth >= recovery_pct * baseline
+    - recovery_seconds = t_recovery - t_trade  (None if not found within max_lookforward)
+
+    Returns:
+        events:               [{ts, side, trade_usd, baseline_depth,
+                                recovery_seconds, recovered, slow}]
+        avg_recovery_seconds: mean of recovered events (0.0 if none)
+        max_recovery_seconds: max of recovered events (0.0 if none)
+        slow_count:           events where slow=True
+        alert:                True if slow_count > 0
+        event_count:          len(events)
+    """
+    obs_sorted = sorted(ob_snapshots, key=lambda x: float(x["ts"]))
+    trd_sorted = sorted(trades,       key=lambda x: float(x["ts"]))
+
+    events = []
+
+    for t in trd_sorted:
+        val = float(t["price"]) * float(t["qty"])
+        if val < threshold_usd:
+            continue
+
+        t_ts = float(t["ts"])
+
+        iba = t.get("is_buyer_aggressor")
+        if iba is not None:
+            is_buy = bool(iba)
+        else:
+            is_buy = (t.get("side") or "").lower() == "buy"
+
+        side = "ask" if is_buy else "bid"
+        depth_key = "ask_volume" if is_buy else "bid_volume"
+
+        pre = [
+            float(s[depth_key])
+            for s in obs_sorted
+            if t_ts - baseline_window <= float(s["ts"]) < t_ts
+        ]
+        baseline = sum(pre) / len(pre) if pre else 0.0
+
+        recovery_seconds = None
+        recovered = False
+        target = recovery_pct * baseline
+
+        if baseline > 0:
+            for s in obs_sorted:
+                s_ts = float(s["ts"])
+                if s_ts <= t_ts:
+                    continue
+                if s_ts - t_ts >= max_lookforward:
+                    break
+                if float(s[depth_key]) >= target:
+                    recovery_seconds = round(s_ts - t_ts, 4)
+                    recovered = True
+                    break
+
+        slow = (not recovered) or (recovery_seconds is not None and recovery_seconds > alert_seconds)
+
+        events.append({
+            "ts":               t_ts,
+            "side":             side,
+            "trade_usd":        round(val, 2),
+            "baseline_depth":   round(baseline, 4),
+            "recovery_seconds": recovery_seconds,
+            "recovered":        recovered,
+            "slow":             slow,
+        })
+
+    recovered_times = [
+        e["recovery_seconds"] for e in events
+        if e["recovered"] and e["recovery_seconds"] is not None
+    ]
+    avg_rec = sum(recovered_times) / len(recovered_times) if recovered_times else 0.0
+    max_rec = max(recovered_times) if recovered_times else 0.0
+    slow_count = sum(1 for e in events if e["slow"])
+
+    return {
+        "events":               events,
+        "avg_recovery_seconds": round(avg_rec, 4),
+        "max_recovery_seconds": round(max_rec, 4),
+        "slow_count":           slow_count,
+        "alert":                slow_count > 0,
+        "event_count":          len(events),
     }

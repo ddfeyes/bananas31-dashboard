@@ -1090,6 +1090,15 @@
     <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">smart = trades ≥$10k · retail = trades &lt;$10k · divergence = smart buying while retail sells (or vice versa)</div>
     <div id="smd-metrics" style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;"></div>
     <canvas id="chart-smart-money" style="height:130px !important;"></canvas>
+  <!-- OB Recovery Speed -->
+  <div class="card" id="card-ob-recovery">
+    <h2><span class="card-icon">⏱️</span>OB Recovery Speed (15m)
+      <span id="ob-recovery-badge" style="margin-left:8px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;display:none;"></span>
+      <span id="ob-recovery-ts" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">time for OB to refill to 80% depth after large trade (&gt;$50k) · slow = &gt;10s</div>
+    <div id="ob-recovery-metrics" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;"></div>
+    <div id="ob-recovery-list" style="max-height:180px;overflow-y:auto;font-size:11px;"></div>
   </div>
 
   <!-- Whale Trades -->
@@ -3083,6 +3092,7 @@ async function refreshAll() {
   const sym = encodeURIComponent(activeSymbol);
 
   const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, smd] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, obRecovery] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3101,6 +3111,7 @@ async function refreshAll() {
     fetchJSON(`/api/spread-tracker?window=1800&symbol=${sym}`),
     fetchJSON(`/api/flow-imbalance?window=3600&bucket_size=60&symbol=${sym}`),
     fetchJSON(`/api/smart-money-divergence?window=1800&threshold_usd=10000&bucket_seconds=300&symbol=${sym}`),
+    fetchJSON(`/api/ob-recovery-speed?window=900&threshold_usd=50000&alert_seconds=10&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3324,6 +3335,50 @@ async function refreshAll() {
           <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:3px;">Smart Vol %</div>
           <div style="color:var(--yellow);font-size:14px;font-weight:700;">${smartPctPct}%</div>
           <div style="color:var(--muted);font-size:9px;">of total volume</div>
+  // ── OB Recovery Speed ────────────────────────────────────────────────────
+  if (obRecovery) {
+    const badgeEl   = document.getElementById('ob-recovery-badge');
+    const tsEl      = document.getElementById('ob-recovery-ts');
+    const metricsEl = document.getElementById('ob-recovery-metrics');
+    const listEl    = document.getElementById('ob-recovery-list');
+
+    if (tsEl) tsEl.textContent = 'last 15m · >$50k trades';
+
+    if (badgeEl) {
+      if (obRecovery.alert) {
+        badgeEl.textContent = 'SLOW RECOVERY';
+        badgeEl.style.background = 'rgba(220,60,60,0.25)';
+        badgeEl.style.color = 'var(--red)';
+        badgeEl.style.display = 'inline-block';
+      } else if (obRecovery.event_count > 0) {
+        badgeEl.textContent = 'HEALTHY';
+        badgeEl.style.background = 'rgba(0,200,120,0.2)';
+        badgeEl.style.color = 'var(--green)';
+        badgeEl.style.display = 'inline-block';
+      } else {
+        badgeEl.style.display = 'none';
+      }
+    }
+
+    if (metricsEl) {
+      const avgCol = obRecovery.avg_recovery_seconds > 10 ? 'var(--red)' : obRecovery.avg_recovery_seconds > 5 ? 'var(--yellow)' : 'var(--green)';
+      const maxCol = obRecovery.max_recovery_seconds > 10 ? 'var(--red)' : 'var(--muted)';
+      metricsEl.innerHTML = [
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:5px 10px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:2px;">Avg Recovery</div>
+          <div style="color:${avgCol};font-size:13px;font-weight:700;">${obRecovery.avg_recovery_seconds.toFixed(1)}s</div>
+        </div>`,
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:5px 10px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:2px;">Max Recovery</div>
+          <div style="color:${maxCol};font-size:13px;font-weight:700;">${obRecovery.max_recovery_seconds.toFixed(1)}s</div>
+        </div>`,
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:5px 10px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:2px;">Events</div>
+          <div style="color:var(--muted);font-size:13px;font-weight:700;">${obRecovery.event_count}</div>
+        </div>`,
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:5px 10px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:2px;">Slow</div>
+          <div style="color:${obRecovery.slow_count > 0 ? 'var(--red)' : 'var(--muted)'};font-size:13px;font-weight:700;">${obRecovery.slow_count}</div>
         </div>`,
       ].join('');
     }
@@ -3334,6 +3389,22 @@ async function refreshAll() {
       chartSmartMoney.data.datasets[0].data = buckets.map(b => b.smart_cvd);
       chartSmartMoney.data.datasets[1].data = buckets.map(b => b.retail_cvd);
       chartSmartMoney.update('none');
+    if (listEl && obRecovery.events?.length) {
+      listEl.innerHTML = obRecovery.events.slice().reverse().map(e => {
+        const sideCol = e.side === 'ask' ? 'var(--green)' : 'var(--red)';
+        const sideLabel = e.side === 'ask' ? 'BUY' : 'SELL';
+        const recCol = !e.recovered ? 'var(--red)' : e.slow ? 'var(--yellow)' : 'var(--green)';
+        const recLabel = !e.recovered ? 'no refill' : `${e.recovery_seconds.toFixed(1)}s`;
+        return `<div style="display:flex;gap:10px;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);">
+          <span style="color:${sideCol};min-width:28px;font-size:10px;font-weight:700;">${sideLabel}</span>
+          <span style="color:var(--yellow);min-width:60px;">$${(e.trade_usd/1000).toFixed(0)}k</span>
+          <span style="color:${recCol};min-width:55px;font-weight:${e.slow ? '700' : '400'};">${recLabel}</span>
+          <span style="color:var(--muted);font-size:10px;">${fmtTs(e.ts)}</span>
+          ${e.slow ? '<span style="color:var(--red);font-size:10px;font-weight:700;">⚠ SLOW</span>' : ''}
+        </div>`;
+      }).join('') || '<div style="color:var(--muted);padding:8px;">No large trades in last 15m</div>';
+    } else if (listEl) {
+      listEl.innerHTML = '<div style="color:var(--muted);padding:8px;">No large trades in last 15m</div>';
     }
   }
 
