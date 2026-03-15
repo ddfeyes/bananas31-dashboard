@@ -65,6 +65,7 @@ from metrics import (
     compute_net_taker_delta,
     detect_oi_surge_with_crash,
     detect_squeeze_setup,
+    compute_tick_imbalance_bars,
 )
 
 router = APIRouter(prefix="/api")
@@ -4268,6 +4269,29 @@ async def squeeze_setup_endpoint(
         price_drop_pct=price_drop_pct,
         funding_extreme=funding_extreme,
     )
+@router.get("/tick-imbalance")
+async def tick_imbalance_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=300, ge=30, le=3600,
+                        description="Lookback in seconds (default 5m)"),
+    threshold: int = Query(default=20, ge=1, le=500,
+                           description="Tick imbalance required to close a bar"),
+):
+    """
+    Tick imbalance bar detector.
+
+    Assigns each trade a tick direction (+1 uptick, -1 downtick, inherit if flat).
+    A bar closes when the cumulative imbalance >= threshold in absolute value.
+
+    Returns:
+      bars: [{ts_start, ts_end, direction, imbalance, trade_count, open, close}]
+      current_imbalance, current_trade_count, current_direction,
+      threshold, bar_count, alert
+    """
+    since = time.time() - window
+    trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
+
+    result = compute_tick_imbalance_bars(trades, threshold=threshold)
 
     return {
         "status": "ok",
