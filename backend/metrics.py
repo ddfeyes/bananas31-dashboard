@@ -2839,3 +2839,76 @@ def detect_trade_clusters(
 
     deduped.sort(key=lambda c: c["ts_start"])
     return deduped
+
+
+# ── Symbol momentum rank ───────────────────────────────────────────────────────
+
+def compute_momentum_score(candles: List[dict], window_seconds: float) -> float:
+    """Compute % price change over the given window using OHLCV candles.
+
+    Uses the latest candle's close_price vs the oldest candle within
+    ``window_seconds`` of the latest candle.
+
+    Args:
+        candles:        list of candle dicts with ``bucket`` (epoch s) and
+                        ``close_price``; may be unsorted.
+        window_seconds: lookback window in seconds.
+
+    Returns:
+        % change as a float (e.g. 5.0 means +5%). 0.0 if insufficient data.
+    """
+    if len(candles) < 2:
+        return 0.0
+
+    sorted_c = sorted(candles, key=lambda c: c["bucket"])
+    latest_ts = sorted_c[-1]["bucket"]
+    latest_close = float(sorted_c[-1]["close_price"])
+
+    cutoff = latest_ts - window_seconds
+    in_window = [c for c in sorted_c if c["bucket"] >= cutoff]
+
+    if len(in_window) < 1:
+        return 0.0
+
+    base_close = float(in_window[0]["close_price"])
+    if base_close == 0.0:
+        return 0.0
+
+    return round((latest_close - base_close) / base_close * 100.0, 6)
+
+
+def rank_symbols_by_momentum(symbol_candles: Dict[str, List[dict]]) -> List[dict]:
+    """Rank symbols by composite momentum score across 5m / 15m / 1h windows.
+
+    Args:
+        symbol_candles: mapping of symbol -> list of candle dicts
+
+    Returns:
+        List sorted by composite descending (rank 1 = strongest momentum):
+        [{symbol, score_5m, score_15m, score_1h, composite, rank}]
+
+    Composite = 0.5 * score_5m + 0.3 * score_15m + 0.2 * score_1h
+    """
+    if not symbol_candles:
+        return []
+
+    entries = []
+    for symbol, candles in symbol_candles.items():
+        s5m  = compute_momentum_score(candles, window_seconds=300)
+        s15m = compute_momentum_score(candles, window_seconds=900)
+        s1h  = compute_momentum_score(candles, window_seconds=3600)
+        composite = round(0.5 * s5m + 0.3 * s15m + 0.2 * s1h, 6)
+        entries.append({
+            "symbol": symbol,
+            "score_5m": float(s5m),
+            "score_15m": float(s15m),
+            "score_1h": float(s1h),
+            "composite": float(composite),
+            "rank": 0,  # filled below
+        })
+
+    entries.sort(key=lambda e: e["composite"], reverse=True)
+    for i, e in enumerate(entries):
+        e["rank"] = i + 1
+
+    return entries

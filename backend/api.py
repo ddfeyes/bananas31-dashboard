@@ -63,6 +63,8 @@ from metrics import (
     compute_kalman_price,
     compute_ob_pressure_gradient,
     detect_trade_clusters,
+    compute_momentum_score,
+    rank_symbols_by_momentum,
 )
 
 router = APIRouter(prefix="/api")
@@ -3419,4 +3421,39 @@ async def trade_clusters_endpoint(
             "price_tolerance": price_tolerance,
             "min_trades": min_trades,
         },
+    }
+
+
+@router.get("/momentum-rank")
+async def momentum_rank_endpoint(
+    window: int = Query(default=3600, ge=300, le=86400, description="Max lookback for candles (seconds)"),
+):
+    """
+    Rank all tracked symbols by composite momentum score.
+
+    Timeframes: 5m (score_5m), 15m (score_15m), 1h (score_1h).
+    Composite = 0.5*score_5m + 0.3*score_15m + 0.2*score_1h.
+    Rank 1 = strongest upward momentum.
+
+    Returns:
+      rankings: [{symbol, score_5m, score_15m, score_1h, composite, rank}]
+      ts: server timestamp
+    """
+    symbols = get_symbols()
+    if not symbols:
+        return {"error": "No symbols configured"}
+
+    # Fetch 1m candles for each symbol over the full window
+    candle_map: dict = {}
+    for sym in symbols:
+        candles = await get_ohlcv(interval_seconds=60, window_seconds=window, symbol=sym)
+        candle_map[sym] = candles
+
+    rankings = rank_symbols_by_momentum(candle_map)
+
+    return {
+        "status": "ok",
+        "ts": time.time(),
+        "rankings": rankings,
+        "window_seconds": window,
     }

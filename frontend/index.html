@@ -1116,6 +1116,15 @@
     <div id="cluster-list" style="max-height:180px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
   </div>
 
+  <!-- Symbol Momentum Rank -->
+  <div class="card">
+    <h2><span class="card-icon">🏆</span>Momentum Rank (5m/15m/1h)
+      <span id="momentum-rank-ts" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">composite = 0.5×5m + 0.3×15m + 0.2×1h · rank 1 = strongest upward momentum</div>
+    <div id="momentum-rank-list" style="font-size:12px;"></div>
+  </div>
+
   <!-- Whale Trades -->
   <div class="card" id="card-whales">
     <h2><span class="card-icon">🐳</span>Whale Trades &gt;$50k (1h)
@@ -3165,7 +3174,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3186,6 +3195,7 @@ async function refreshAll() {
     fetchJSON(`/api/liquidation-heatmap?window=3600&time_bucket=300&price_bins=20&symbol=${sym}`),
     fetchJSON(`/api/depth-ratio?window=600&levels=5&symbol=${sym}`),
     fetchJSON(`/api/trade-clusters?window=300&cluster_window=30&price_tolerance=0.05&min_trades=5&symbol=${sym}`),
+    fetchJSON(`/api/momentum-rank?window=3600`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3505,6 +3515,33 @@ async function refreshAll() {
           <span style="color:var(--muted);font-size:10px;">${fmtTs(c.ts_start)}</span>
         </div>`;
       }).join('') || '<div style="color:var(--muted);padding:8px;">No clusters detected in last 5m</div>';
+    }
+  }
+
+  // ── Symbol Momentum Rank ──────────────────────────────────────────────────
+  if (momentumRank?.rankings?.length) {
+    const listEl = document.getElementById('momentum-rank-list');
+    const tsEl   = document.getElementById('momentum-rank-ts');
+    if (tsEl) tsEl.textContent = fmtTs(momentumRank.ts);
+    if (listEl) {
+      const medals = ['🥇', '🥈', '🥉', '4️⃣'];
+      listEl.innerHTML = momentumRank.rankings.map((e, i) => {
+        const comp = e.composite;
+        const compCol = comp > 0 ? 'var(--green)' : comp < 0 ? 'var(--red)' : 'var(--muted)';
+        const compSign = comp > 0 ? '+' : '';
+        const bar5m  = e.score_5m  > 0 ? 'var(--green)' : e.score_5m  < 0 ? 'var(--red)' : 'var(--muted)';
+        const bar15m = e.score_15m > 0 ? 'var(--green)' : e.score_15m < 0 ? 'var(--red)' : 'var(--muted)';
+        const bar1h  = e.score_1h  > 0 ? 'var(--green)' : e.score_1h  < 0 ? 'var(--red)' : 'var(--muted)';
+        const medal = medals[i] || `${e.rank}.`;
+        return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);">
+          <span style="min-width:28px;font-size:14px;">${medal}</span>
+          <span style="min-width:72px;font-weight:600;letter-spacing:.5px;">${e.symbol.replace('USDT','')}</span>
+          <span style="min-width:62px;font-weight:700;font-variant-numeric:tabular-nums;color:${compCol};">${compSign}${comp.toFixed(2)}%</span>
+          <span style="font-size:10px;color:var(--muted);min-width:38px;">5m: <span style="color:${bar5m};">${e.score_5m > 0 ? '+' : ''}${e.score_5m.toFixed(2)}%</span></span>
+          <span style="font-size:10px;color:var(--muted);min-width:44px;">15m: <span style="color:${bar15m};">${e.score_15m > 0 ? '+' : ''}${e.score_15m.toFixed(2)}%</span></span>
+          <span style="font-size:10px;color:var(--muted);min-width:40px;">1h: <span style="color:${bar1h};">${e.score_1h > 0 ? '+' : ''}${e.score_1h.toFixed(2)}%</span></span>
+        </div>`;
+      }).join('');
     }
   }
 
