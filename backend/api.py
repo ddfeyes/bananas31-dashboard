@@ -1239,6 +1239,47 @@ async def session_stats(symbol: Optional[str] = None):
     }
 
 
+@router.get("/atr")
+async def atr_endpoint(
+    symbol: Optional[str] = None,
+    period: int = Query(default=14, le=100),
+    interval: int = Query(default=60, le=3600),
+):
+    """ATR(n) for the given symbol, using 1-min (or specified) candles."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    candles = await get_ohlcv(interval_seconds=interval, window_seconds=period * interval * 3, symbol=target)
+    if len(candles) < period + 1:
+        return {"status": "ok", "symbol": target, "atr": None, "atr_pct": None, "period": period}
+
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
+    closes = [c["close"] for c in candles]
+
+    trs = []
+    for i in range(1, len(candles)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+
+    # Wilder smoothed ATR
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+
+    last_close = closes[-1]
+    atr_pct = atr / last_close * 100 if last_close else None
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "atr": round(atr, 8),
+        "atr_pct": round(atr_pct, 4) if atr_pct else None,
+        "last_close": last_close,
+        "period": period,
+        "interval_seconds": interval,
+    }
+
+
 @router.get("/metrics/summary")
 async def metrics_summary(symbol: Optional[str] = None):
     syms = get_symbols()

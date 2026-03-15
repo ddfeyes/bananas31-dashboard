@@ -882,7 +882,9 @@
 
   <!-- Position Sizing Calculator -->
   <div class="card" id="card-position-calc">
-    <h2><span class="card-icon">🧮</span>Position Sizing</h2>
+    <h2><span class="card-icon">🧮</span>Position Sizing
+      <span id="pos-atr-info" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
     <div style="display:flex;flex-direction:column;gap:8px;">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:10px;color:var(--muted);min-width:90px;">Account ($)</label>
@@ -896,13 +898,18 @@
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:10px;color:var(--muted);min-width:90px;">Entry Price</label>
-        <input id="pos-entry" type="number" step="any" placeholder="auto"
+        <input id="pos-entry" type="number" step="any" placeholder="auto (live price)"
           style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:10px;color:var(--muted);min-width:90px;">Stop Loss</label>
-        <input id="pos-stop" type="number" step="any" placeholder="price or % below"
-          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+        <div style="flex:1;display:flex;gap:4px;">
+          <input id="pos-stop" type="number" step="any" placeholder="price (blank=1×ATR)"
+            style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+          <button onclick="setAtrStop(1)" title="Set stop to 1×ATR" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:4px 7px;font-size:10px;cursor:pointer;">1×ATR</button>
+          <button onclick="setAtrStop(1.5)" title="Set stop to 1.5×ATR" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:4px 7px;font-size:10px;cursor:pointer;">1.5×</button>
+          <button onclick="setAtrStop(2)" title="Set stop to 2×ATR" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:4px 7px;font-size:10px;cursor:pointer;">2×</button>
+        </div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:10px;color:var(--muted);min-width:90px;">Leverage</label>
@@ -1723,6 +1730,7 @@ function selectSymbol(sym) {
   refreshTradeDist();
   refreshCvdMomentum();
   refreshMarketRegime();
+  refreshAtr();
   initTape();
 }
 
@@ -3350,6 +3358,31 @@ function checkPriceAlerts(price) {
 }
 
 // ── Position Sizing Calculator ────────────────────────────────────────────────
+let _lastAtr = null;
+
+async function refreshAtr() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/atr?symbol=${sym}&period=14&interval=60`);
+  if (data?.atr) {
+    _lastAtr = data;
+    const atrEl = document.getElementById('pos-atr-info');
+    if (atrEl) atrEl.textContent = `ATR(14): ${(data.atr_pct || 0).toFixed(3)}%`;
+    calcPositionSize();
+  }
+}
+
+function setAtrStop(multiplier) {
+  if (!_lastAtr?.atr) return;
+  const entryEl = document.getElementById('pos-entry');
+  const stopEl  = document.getElementById('pos-stop');
+  if (!stopEl) return;
+  const curPrice = parseFloat(entryEl?.value) || parseFloat(document.getElementById('price-display')?.textContent?.replace(/[^0-9.]/g,''));
+  if (!curPrice) return;
+  stopEl.value = (curPrice - _lastAtr.atr * multiplier).toPrecision(6);
+  calcPositionSize();
+}
+
 function calcPositionSize() {
   const el = document.getElementById('pos-result');
   if (!el) return;
@@ -3367,8 +3400,12 @@ function calcPositionSize() {
   let stopRaw = parseFloat(document.getElementById('pos-stop')?.value);
   let stopPrice;
   if (!stopRaw) {
-    // Default: 1 ATR below entry (use 1% if ATR unavailable)
-    stopPrice = entry * 0.99;
+    // Default: 1×ATR below entry if available, else 1%
+    if (_lastAtr?.atr) {
+      stopPrice = entry - _lastAtr.atr;
+    } else {
+      stopPrice = entry * 0.99;
+    }
   } else if (stopRaw > 0 && stopRaw < entry * 0.5) {
     // Interpreted as % distance (e.g., 1.5 = 1.5% stop)
     stopPrice = entry * (1 - stopRaw / 100);
@@ -3657,6 +3694,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshHealthBar, 60000);
   setCvdMomWindow(60);  // sets active button + calls refresh
   setInterval(refreshCvdMomentum, 10000);
+  refreshAtr();
+  setInterval(refreshAtr, 60000);
   refreshSignalsScanner();
   setInterval(refreshSignalsScanner, 15000);
   refreshMarketRegime();
