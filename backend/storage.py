@@ -346,6 +346,36 @@ async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
             return [dict(r) for r in rows]
 
 
+async def get_orderbook_snapshots_for_heatmap(
+    symbol: str, since: float, sample_interval: int = 10
+) -> List[Dict]:
+    """Get orderbook snapshots sampled every sample_interval seconds for heatmap."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        q = """
+            SELECT ts, bids, asks, mid_price
+            FROM orderbook_snapshots
+            WHERE ts > ? AND symbol = ?
+            ORDER BY ts ASC
+        """
+        async with db.execute(q, [since, symbol]) as cur:
+            rows = await cur.fetchall()
+            rows = [dict(r) for r in rows]
+
+    if not rows:
+        return []
+
+    # Sample every sample_interval seconds
+    sampled = []
+    last_ts = None
+    for row in rows:
+        if last_ts is None or row["ts"] - last_ts >= sample_interval:
+            sampled.append(row)
+            last_ts = row["ts"]
+
+    return sampled
+
+
 async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     cutoff = time.time() - max_age_seconds
     async with aiosqlite.connect(DB_PATH) as db:

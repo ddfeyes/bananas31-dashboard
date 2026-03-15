@@ -89,6 +89,13 @@
   <h1 id="header-title">🍌 Dashboard</h1>
   <div id="symbol-tabs"></div>
   <div id="price-display">—</div>
+  <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+    <span style="font-size:10px; color:var(--muted);">Export:</span>
+    <a id="exp-trades" href="#" style="font-size:10px; color:var(--blue); text-decoration:none;">trades</a>
+    <a id="exp-oi" href="#" style="font-size:10px; color:var(--blue); text-decoration:none;">oi</a>
+    <a id="exp-cvd" href="#" style="font-size:10px; color:var(--blue); text-decoration:none;">cvd</a>
+    <a id="exp-liqs" href="#" style="font-size:10px; color:var(--blue); text-decoration:none;">liqs</a>
+  </div>
   <div id="status"><span class="refresh-dot"></span>Connecting...</div>
 </header>
 
@@ -163,6 +170,10 @@
   <!-- Alerts: OI Spike + Delta Divergence + Large Trades -->
   <div class="card">
     <h2>Alerts</h2>
+    <div id="alert-liq-cascade" style="margin-bottom:8px; padding:10px; border-radius:6px; background:var(--bg3); font-size:12px; border-left:3px solid var(--border);">
+      <div style="font-size:10px; color:var(--muted); margin-bottom:4px;">LIQ CASCADE (&gt;$50k / 60s)</div>
+      <div id="liq-cascade-text" style="color:var(--muted)">Loading...</div>
+    </div>
     <div id="alert-oi-spike" style="margin-bottom:8px; padding:10px; border-radius:6px; background:var(--bg3); font-size:12px; border-left:3px solid var(--border);">
       <div style="font-size:10px; color:var(--muted); margin-bottom:4px;">OI SPIKE (&gt;3% / 5min)</div>
       <div id="oi-spike-text" style="color:var(--muted)">Loading...</div>
@@ -463,6 +474,15 @@ function updateSummary(summary) {
 }
 
 // ── Symbol tabs ──────────────────────────────────────────────────────────────
+function updateExportLinks(sym) {
+  const base = `/api/export`;
+  const s = encodeURIComponent(sym);
+  document.getElementById('exp-trades').href = `${base}/trades?symbol=${s}&window=3600`;
+  document.getElementById('exp-oi').href = `${base}/oi?symbol=${s}&window=3600`;
+  document.getElementById('exp-cvd').href = `${base}/cvd?symbol=${s}&window=3600`;
+  document.getElementById('exp-liqs').href = `${base}/liquidations?symbol=${s}&window=3600`;
+}
+
 function renderSymbolTabs() {
   const container = document.getElementById('symbol-tabs');
   container.innerHTML = allSymbols.map(sym =>
@@ -482,6 +502,7 @@ function selectSymbol(sym) {
   document.getElementById('vp-poc').textContent = '—';
   document.getElementById('vp-vah').textContent = '—';
   document.getElementById('vp-val').textContent = '—';
+  document.getElementById('liq-cascade-text').textContent = 'Loading...';
   document.getElementById('oi-spike-text').textContent = 'Loading...';
   document.getElementById('div-text').textContent = 'Loading...';
   document.getElementById('div-text').style.color = 'var(--muted)';
@@ -490,6 +511,7 @@ function selectSymbol(sym) {
   document.getElementById('lt-list').innerHTML = '';
   document.getElementById('price-display').textContent = '—';
   renderSymbolTabs();
+  updateExportLinks(sym);
   document.getElementById('header-title').textContent = '🍌 ' + sym;
   document.title = sym + ' Dashboard';
   connectWS(sym);
@@ -515,7 +537,7 @@ async function refreshAll() {
   const sym = encodeURIComponent(activeSymbol);
 
   // summary comes via WebSocket (live); charts poll every 5s
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -524,6 +546,7 @@ async function refreshAll() {
     fetchJSON(`/api/delta-divergence?window=300&symbol=${sym}`),
     fetchJSON(`/api/large-trades?window=300&min_usd=10000&symbol=${sym}`),
     fetchJSON(`/api/oi-spike?window=300&threshold=3&symbol=${sym}`),
+    fetchJSON(`/api/liq-cascade?window=60&threshold_usd=50000&symbol=${sym}`),
   ]);
 
   // Price
@@ -627,6 +650,22 @@ async function refreshAll() {
     charts.liq.update('none');
   }
 
+  // Liq Cascade
+  if (liqcas) {
+    const lcEl = document.getElementById('liq-cascade-text');
+    const lcBox = document.getElementById('alert-liq-cascade');
+    if (liqcas.cascade) {
+      const cascadeColor = liqcas.dominant === 'longs' ? 'var(--red)' : 'var(--green)';
+      lcEl.style.color = cascadeColor;
+      lcEl.textContent = liqcas.description || 'Cascade detected';
+      lcBox.style.borderLeftColor = cascadeColor;
+    } else {
+      lcEl.style.color = 'var(--muted)';
+      lcEl.textContent = liqcas.description || 'No cascade';
+      lcBox.style.borderLeftColor = 'var(--border)';
+    }
+  }
+
   // OI Spike
   if (oisp) {
     const spikeEl = document.getElementById('oi-spike-text');
@@ -710,7 +749,10 @@ async function syncSymbols() {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   await loadSymbols();
-  if (activeSymbol) connectWS(activeSymbol);
+  if (activeSymbol) {
+    connectWS(activeSymbol);
+    updateExportLinks(activeSymbol);
+  }
   await refreshAll();
   setInterval(refreshAll, 5000);
   setInterval(syncSymbols, 30000);  // check for new symbols every 30s

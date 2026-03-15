@@ -204,6 +204,55 @@ async def detect_oi_spike(window_seconds: int = 300, threshold_pct: float = 3.0,
     }
 
 
+async def detect_liquidation_cascade(window_seconds: int = 60, threshold_usd: float = 50000, symbol: str = None) -> Dict:
+    """
+    Liquidation cascade: detect bursts of liquidations > threshold_usd in window.
+    A cascade is when liquidation value spikes >threshold_usd in 60s.
+    """
+    since = time.time() - window_seconds
+    from storage import get_recent_liquidations
+    liqs = await get_recent_liquidations(limit=500, since=since, symbol=symbol)
+
+    if not liqs:
+        return {"cascade": False, "total_usd": 0, "buy_usd": 0, "sell_usd": 0, "description": "No liquidations"}
+
+    buy_usd = sum(l.get("value", 0) for l in liqs if l.get("side") == "buy")
+    sell_usd = sum(l.get("value", 0) for l in liqs if l.get("side") != "buy")
+    total_usd = buy_usd + sell_usd
+
+    cascade = total_usd >= threshold_usd
+    dominant = "longs" if sell_usd > buy_usd else "shorts"
+    dominant_val = max(buy_usd, sell_usd)
+
+    if cascade:
+        description = f"🚨 Cascade: ${total_usd:,.0f} liquidated in {window_seconds}s ({dominant} dominant: ${dominant_val:,.0f})"
+    else:
+        description = f"${total_usd:,.0f} liquidated (threshold: ${threshold_usd:,.0f})"
+
+    # Bucket by 10s for sparkline
+    buckets = {}
+    for l in liqs:
+        bucket = int((l["ts"] - since) / 10)
+        if bucket not in buckets:
+            buckets[bucket] = 0.0
+        buckets[bucket] += l.get("value", 0)
+
+    sparkline = [round(buckets.get(i, 0), 2) for i in range(int(window_seconds / 10))]
+
+    return {
+        "cascade": cascade,
+        "total_usd": round(total_usd, 2),
+        "buy_usd": round(buy_usd, 2),
+        "sell_usd": round(sell_usd, 2),
+        "count": len(liqs),
+        "dominant": dominant,
+        "description": description,
+        "sparkline": sparkline,
+        "threshold_usd": threshold_usd,
+        "window_seconds": window_seconds,
+    }
+
+
 async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None) -> Dict:
     """
     Delta divergence: price moving up but CVD moving down (or vice versa).

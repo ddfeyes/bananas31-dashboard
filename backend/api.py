@@ -24,6 +24,7 @@ from metrics import (
     detect_delta_divergence,
     detect_large_trades,
     detect_oi_spike,
+    detect_liquidation_cascade,
 )
 
 router = APIRouter(prefix="/api")
@@ -180,6 +181,18 @@ async def market_depth(symbol: Optional[str] = None):
     }
 
 
+@router.get("/liq-cascade")
+async def liq_cascade(
+    window: int = Query(default=60, le=600),
+    threshold_usd: float = Query(default=50000, le=10000000),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_liquidation_cascade(window_seconds=window, threshold_usd=threshold_usd, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/oi-spike")
 async def oi_spike(
     window: int = Query(default=300, le=3600),
@@ -300,6 +313,53 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 await asyncio.sleep(2.0)
     finally:
         manager.disconnect(ws, symbol)
+
+
+@router.get("/export/{metric}")
+async def export_csv(
+    metric: str,
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, le=86400),
+):
+    """Export metric data as CSV. metric: trades|oi|funding|liquidations|cvd"""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - window
+
+    if metric == "trades":
+        rows = await get_recent_trades(limit=10000, since=since, symbol=target)
+        fields = ["ts", "exchange", "symbol", "price", "qty", "side"]
+    elif metric == "oi":
+        rows = await get_oi_history(limit=10000, since=since, symbol=target)
+        fields = ["ts", "exchange", "symbol", "oi_value"]
+    elif metric == "funding":
+        rows = await get_funding_history(limit=10000, since=since, symbol=target)
+        fields = ["ts", "exchange", "symbol", "rate", "next_funding_ts"]
+    elif metric == "liquidations":
+        rows = await get_recent_liquidations(limit=10000, since=since, symbol=target)
+        fields = ["ts", "exchange", "symbol", "side", "price", "qty", "value"]
+    elif metric == "cvd":
+        rows = await compute_cvd(window_seconds=window, symbol=target)
+        fields = ["ts", "price", "cvd", "delta"]
+    else:
+        return JSONResponse({"error": "Unknown metric. Use: trades|oi|funding|liquidations|cvd"}, status_code=400)
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+
+    filename = f"{target}_{metric}_{int(time.time())}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 @router.get("/metrics/summary")
