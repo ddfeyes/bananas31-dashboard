@@ -952,3 +952,81 @@ async def compute_market_regime(symbol: str = None) -> Dict:
         "weights": weights,
         "symbol": symbol,
     }
+
+
+async def detect_cross_symbol_oi_spike(
+    symbols: List[str],
+    window_seconds: int = 300,
+    threshold_pct: float = 2.5,
+    min_correlated: int = 2,
+) -> Dict:
+    """
+    Inter-symbol correlation alert: detect when multiple symbols spike OI simultaneously.
+    If >= min_correlated symbols show OI spike within the same window → fire alert.
+    """
+    since = time.time() - window_seconds
+
+    spikes = {}
+    for sym in symbols:
+        oi_data = await get_oi_history(limit=200, since=since, symbol=sym)
+        if len(oi_data) < 2:
+            spikes[sym] = {"spike": False, "pct_change": 0.0, "reason": "insufficient data"}
+            continue
+
+        # group by exchange, take first exchange we find with data
+        by_exchange = {}
+        for row in oi_data:
+            ex = row["exchange"]
+            by_exchange.setdefault(ex, []).append(row)
+
+        best_pct = 0.0
+        best_ex = None
+        for ex, rows in by_exchange.items():
+            if len(rows) < 2:
+                continue
+            oi_start = rows[0]["oi_value"]
+            oi_end = rows[-1]["oi_value"]
+            if oi_start == 0:
+                continue
+            pct = (oi_end - oi_start) / oi_start * 100
+            if abs(pct) > abs(best_pct):
+                best_pct = pct
+                best_ex = ex
+
+        is_spike = abs(best_pct) >= threshold_pct
+        spikes[sym] = {
+            "spike": is_spike,
+            "pct_change": round(best_pct, 4),
+            "exchange": best_ex,
+            "direction": "up" if best_pct > 0 else "down",
+        }
+
+    spiking_syms = [s for s, v in spikes.items() if v["spike"]]
+    correlated = len(spiking_syms) >= min_correlated
+
+    # Check directional agreement (most go same way = stronger signal)
+    if correlated:
+        directions = [spikes[s]["direction"] for s in spiking_syms]
+        dominant = max(set(directions), key=directions.count)
+        agree_pct = directions.count(dominant) / len(directions) * 100
+    else:
+        dominant = None
+        agree_pct = 0.0
+
+    description = ""
+    if correlated:
+        parts = [f"{s} OI {spikes[s]['direction']} {abs(spikes[s]['pct_change']):.2f}%" for s in spiking_syms]
+        description = f"Correlated OI spike: {', '.join(parts)} | direction agreement {agree_pct:.0f}%"
+    else:
+        description = f"No correlated OI spike (only {len(spiking_syms)}/{len(symbols)} symbols spiking)"
+
+    return {
+        "correlated": correlated,
+        "spiking_symbols": spiking_syms,
+        "dominant_direction": dominant,
+        "direction_agreement_pct": round(agree_pct, 1),
+        "all_symbols": spikes,
+        "description": description,
+        "threshold_pct": threshold_pct,
+        "window_seconds": window_seconds,
+    }

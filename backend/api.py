@@ -37,6 +37,7 @@ from metrics import (
     detect_cvd_momentum,
     compute_market_regime,
     detect_accumulation_distribution_pattern,
+    detect_cross_symbol_oi_spike,
 )
 
 router = APIRouter(prefix="/api")
@@ -410,6 +411,27 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 if isinstance(funding_ex_result, dict) and funding_ex_result.get("extreme"):
                     fired_alerts.append(("funding_extreme", "high", funding_ex_result.get("description", ""), funding_ex_result))
 
+                # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
+                cross_sym_result = None
+                if symbol == get_symbols()[0]:  # only run once per tick cycle from primary symbol
+                    try:
+                        all_syms = get_symbols()
+                        cross_sym_result = await detect_cross_symbol_oi_spike(
+                            symbols=all_syms,
+                            window_seconds=300,
+                            threshold_pct=2.5,
+                            min_correlated=2,
+                        )
+                        if isinstance(cross_sym_result, dict) and cross_sym_result.get("correlated"):
+                            fired_alerts.append((
+                                "cross_symbol_oi_spike",
+                                "high",
+                                cross_sym_result.get("description", ""),
+                                cross_sym_result,
+                            ))
+                    except Exception:
+                        pass
+
                 # Phase change detection
                 if not hasattr(ws, "_last_phase"):
                     ws._last_phase = {}
@@ -461,6 +483,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "vol_spike": vol_result if isinstance(vol_result, dict) else None,
                     "liq_cascade": liq_result if isinstance(liq_result, dict) else None,
                     "delta_divergence": div_result if isinstance(div_result, dict) else None,
+                    "cross_symbol_oi_spike": cross_sym_result if isinstance(cross_sym_result, dict) else None,
                     "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))
@@ -483,6 +506,23 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 await asyncio.sleep(2.0)
     finally:
         manager.disconnect(ws, symbol)
+
+
+@router.get("/cross-symbol-oi")
+async def cross_symbol_oi_endpoint(
+    window: int = Query(default=300, le=3600),
+    threshold: float = Query(default=2.5),
+    min_correlated: int = Query(default=2),
+):
+    """Check if multiple symbols are simultaneously spiking OI (correlated OI alert)."""
+    syms = get_symbols()
+    result = await detect_cross_symbol_oi_spike(
+        symbols=syms,
+        window_seconds=window,
+        threshold_pct=threshold,
+        min_correlated=min_correlated,
+    )
+    return {"status": "ok", "data": result}
 
 
 @router.get("/alerts")
