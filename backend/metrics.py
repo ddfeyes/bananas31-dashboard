@@ -177,15 +177,29 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     if price_up and cvd_pos and oi_up:
         phase = "Markup"
         raw_conf = 0.6 + abs(w_price) * 0.08 + abs(cvd_norm) * 0.3
+    elif price_up and cvd_pos:
+        phase = "Markup"
+        raw_conf = 0.55 + abs(w_price) * 0.06 + abs(cvd_norm) * 0.2
     elif price_dn and cvd_neg:
         phase = "Markdown"
         raw_conf = 0.6 + abs(w_price) * 0.08 + abs(cvd_norm) * 0.3
+    elif price_dn and not cvd_neg:
+        phase = "Markdown"
+        raw_conf = 0.5 + abs(w_price) * 0.06
     elif price_flat and oi_up and cvd_pos:
         phase = "Accumulation"
-        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.5
+        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.3
     elif price_flat and oi_up and cvd_neg:
         phase = "Distribution"
-        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.5
+        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.3
+    elif price_flat and cvd_pos:
+        # Buying pressure on flat price = accumulation
+        phase = "Accumulation"
+        raw_conf = 0.5 + abs(cvd_norm) * 0.2
+    elif price_flat and cvd_neg:
+        # Selling pressure on flat price = distribution
+        phase = "Distribution"
+        raw_conf = 0.5 + abs(cvd_norm) * 0.2
     elif price_up and cvd_neg:
         phase = "Distribution"
         raw_conf = 0.5 + abs(cvd_norm) * 0.4
@@ -195,6 +209,9 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     elif oi_dn:
         phase = "Markdown" if w_price < 0 else "Distribution"
         raw_conf = 0.45
+    else:
+        phase = "Accumulation"
+        raw_conf = 0.4
 
     raw_conf = min(0.99, max(0.1, raw_conf))
 
