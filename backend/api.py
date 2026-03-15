@@ -68,6 +68,7 @@ from metrics import (
     compute_net_taker_delta,
     detect_short_squeeze_setup,
     rank_symbols_by_net_taker_delta,
+    compute_oi_velocity_heatmap,
 )
 
 router = APIRouter(prefix="/api")
@@ -3579,4 +3580,42 @@ async def short_squeeze_endpoint(
             "net": ntd["net"],
             "buckets": ntd["buckets"],
         },
+    }
+
+
+@router.get("/oi-velocity")
+async def oi_velocity_endpoint(
+    window: int = Query(default=7200, ge=300, le=86400, description="Lookback window in seconds (default 2h)"),
+    bucket_seconds: int = Query(default=300, ge=60, le=3600, description="Bucket width in seconds (default 5m)"),
+):
+    """
+    Per-symbol OI velocity heatmap: rate of change of Open Interest per time bucket.
+
+    Fetches OI history for ALL tracked symbols in parallel, then computes
+    oi_delta and oi_delta_pct for each (symbol, bucket) pair.
+
+    Returns:
+      cells:          [{ts_bucket, symbol, oi_delta, oi_delta_pct, oi_start, oi_end}]
+      symbols:        sorted symbol list (y-axis)
+      time_buckets:   sorted bucket timestamps (x-axis)
+      global_max_pct: max oi_delta_pct for color scale
+      global_min_pct: min oi_delta_pct for color scale
+    """
+    symbols = get_symbols()
+    if not symbols:
+        return {"error": "No symbols configured"}
+
+    since = time.time() - window
+    oi_lists = await asyncio.gather(*[
+        get_oi_history(since=since, symbol=sym, limit=10000)
+        for sym in symbols
+    ])
+    oi_by_symbol = {sym: rows for sym, rows in zip(symbols, oi_lists)}
+
+    heatmap = compute_oi_velocity_heatmap(oi_by_symbol, bucket_seconds=bucket_seconds)
+
+    return {
+        "status": "ok",
+        "window_seconds": window,
+        **heatmap,
     }

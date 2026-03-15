@@ -1126,6 +1126,15 @@
     <canvas id="chart-ntd" style="height:130px !important;"></canvas>
   </div>
 
+  <!-- OI Velocity Heatmap -->
+  <div class="card wide" id="card-oi-velocity">
+    <h2><span class="card-icon">🌡️</span>OI Velocity Heatmap (2h · 5m buckets)
+      <span id="oi-vel-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">x=time · y=symbol · green=OI increasing · red=OI decreasing · intensity=magnitude</div>
+    <canvas id="canvas-oi-velocity" style="width:100%;height:140px;display:block;"></canvas>
+  </div>
+
   <!-- Symbol Momentum Rank -->
   <div class="card">
     <h2><span class="card-icon">🏆</span>Momentum Rank (5m/15m/1h)
@@ -2202,6 +2211,98 @@ let chartDepthRatio = null;
     },
   });
 })();
+
+// OI Velocity Heatmap — custom canvas renderer
+function renderOiVelocityHeatmap(data) {
+  const canvas = document.getElementById('canvas-oi-velocity');
+  if (!canvas || !data?.cells?.length) return;
+
+  const ctx2d = canvas.getContext('2d');
+  // Set physical pixels to match CSS size
+  const W = canvas.offsetWidth  || 700;
+  const H = canvas.offsetHeight || 140;
+  canvas.width  = W;
+  canvas.height = H;
+
+  const symbols     = data.symbols;     // y-axis labels
+  const timeBuckets = data.time_buckets; // x-axis labels
+  const nY = symbols.length;
+  const nX = timeBuckets.length;
+  if (nY === 0 || nX === 0) return;
+
+  const LABEL_W = 64;
+  const LABEL_H = 18;
+  const gridW = W - LABEL_W;
+  const gridH = H - LABEL_H;
+  const cellW = gridW / nX;
+  const cellH = gridH / nY;
+
+  // Build lookup: (symbol, ts_bucket) -> oi_delta_pct
+  const lookup = {};
+  for (const c of data.cells) {
+    lookup[`${c.symbol}||${c.ts_bucket}`] = c.oi_delta_pct;
+  }
+
+  // Colour scale: map pct to rgba
+  const maxAbs = Math.max(Math.abs(data.global_max_pct), Math.abs(data.global_min_pct), 0.01);
+  function pctToColor(pct) {
+    const t = Math.min(Math.abs(pct) / maxAbs, 1.0);
+    const alpha = 0.15 + t * 0.80;
+    if (pct > 0) return `rgba(0,210,110,${alpha.toFixed(2)})`;
+    if (pct < 0) return `rgba(220,60,60,${alpha.toFixed(2)})`;
+    return `rgba(80,80,80,0.18)`;
+  }
+
+  ctx2d.clearRect(0, 0, W, H);
+
+  // Draw cells
+  for (let yi = 0; yi < nY; yi++) {
+    const sym = symbols[yi];
+    for (let xi = 0; xi < nX; xi++) {
+      const tb  = timeBuckets[xi];
+      const pct = lookup[`${sym}||${tb}`] ?? null;
+      const x   = LABEL_W + xi * cellW;
+      const y   = yi * cellH;
+      ctx2d.fillStyle = pct !== null ? pctToColor(pct) : 'rgba(40,40,40,0.4)';
+      ctx2d.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+      // Value label if cell is wide enough
+      if (cellW > 32 && pct !== null) {
+        ctx2d.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx2d.font = '9px monospace';
+        ctx2d.textAlign = 'center';
+        ctx2d.fillText((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%', x + cellW / 2, y + cellH / 2 + 3);
+      }
+    }
+    // Y-axis label (symbol)
+    ctx2d.fillStyle = 'rgba(200,200,200,0.7)';
+    ctx2d.font = '10px sans-serif';
+    ctx2d.textAlign = 'right';
+    ctx2d.fillText(sym.replace('USDT', ''), LABEL_W - 4, yi * cellH + cellH / 2 + 4);
+  }
+
+  // X-axis time labels (every Nth bucket to avoid crowding)
+  const labelEvery = Math.max(1, Math.floor(nX / 8));
+  ctx2d.fillStyle = 'rgba(180,180,180,0.55)';
+  ctx2d.font = '8px sans-serif';
+  ctx2d.textAlign = 'center';
+  for (let xi = 0; xi < nX; xi += labelEvery) {
+    const tb = timeBuckets[xi];
+    const x  = LABEL_W + xi * cellW + cellW / 2;
+    const d  = new Date(tb * 1000);
+    const lbl = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+    ctx2d.fillText(lbl, x, H - 3);
+  }
+
+  // Grid lines
+  ctx2d.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx2d.lineWidth = 0.5;
+  for (let yi = 1; yi < nY; yi++) {
+    ctx2d.beginPath();
+    ctx2d.moveTo(LABEL_W, yi * cellH);
+    ctx2d.lineTo(W, yi * cellH);
+    ctx2d.stroke();
+  }
+}
 
 // Trade Clustering scatter chart
 let chartTradeClusters = null;
@@ -3294,7 +3395,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze, ntdAll, ntdSym] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze, ntdAll, ntdSym, oiVel] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3319,6 +3420,7 @@ async function refreshAll() {
     fetchJSON(`/api/short-squeeze?window=3600&symbol=${sym}`),
     fetchJSON(`/api/net-taker-delta?window=60`),
     fetchJSON(`/api/net-taker-delta?window=60&symbol=${sym}`),
+    fetchJSON(`/api/oi-velocity?window=7200&bucket_seconds=300`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3639,6 +3741,18 @@ async function refreshAll() {
         </div>`;
       }).join('') || '<div style="color:var(--muted);padding:8px;">No clusters detected in last 5m</div>';
     }
+  }
+
+  // ── OI Velocity Heatmap ──────────────────────────────────────────────────
+  if (oiVel?.cells?.length) {
+    const infoEl = document.getElementById('oi-vel-info');
+    if (infoEl) {
+      const nCells = oiVel.cells.length;
+      const maxPct = oiVel.global_max_pct.toFixed(3);
+      const minPct = oiVel.global_min_pct.toFixed(3);
+      infoEl.textContent = `${oiVel.symbols.length} symbols · ${oiVel.time_buckets.length} buckets · max +${maxPct}% / min ${minPct}%`;
+    }
+    renderOiVelocityHeatmap(oiVel);
   }
 
   // ── Net Taker Delta card ─────────────────────────────────────────────────

@@ -3179,3 +3179,98 @@ def rank_symbols_by_net_taker_delta(symbol_results: Dict[str, dict]) -> List[dic
         e["rank"] = i + 1
 
     return entries
+
+
+# ── OI velocity heatmap ────────────────────────────────────────────────────────
+
+def compute_oi_velocity_heatmap(
+    oi_rows_by_symbol: Dict[str, List[dict]],
+    bucket_seconds: int = 300,
+) -> dict:
+    """Compute per-symbol OI rate-of-change bucketed into fixed time windows.
+
+    For each (symbol, time_bucket):
+      oi_delta     = last_oi_in_bucket - first_oi_in_bucket
+      oi_delta_pct = oi_delta / first_oi * 100
+
+    When multiple exchanges report OI for the same symbol, their values are
+    summed per timestamp before bucketing (total market OI).
+
+    Args:
+        oi_rows_by_symbol: {symbol: [{"ts", "oi_value", "exchange", ...}]}
+        bucket_seconds:    width of each time bucket (default 300 = 5 min)
+
+    Returns:
+        {
+          cells:          [{ts_bucket, symbol, oi_delta, oi_delta_pct, oi_start, oi_end}]
+          symbols:        sorted list of all symbols
+          time_buckets:   sorted list of all bucket timestamps
+          bucket_seconds: int
+          global_max_pct: float  (max oi_delta_pct, for color scale)
+          global_min_pct: float  (min oi_delta_pct, for color scale)
+        }
+    """
+    if not oi_rows_by_symbol:
+        return {
+            "cells": [], "symbols": [], "time_buckets": [],
+            "bucket_seconds": bucket_seconds,
+            "global_max_pct": 0.0, "global_min_pct": 0.0,
+        }
+
+    cells = []
+    all_buckets: set = set()
+
+    for symbol, rows in oi_rows_by_symbol.items():
+        if not rows:
+            continue
+
+        # Sort by ts
+        sorted_rows = sorted(rows, key=lambda r: r["ts"])
+
+        # Aggregate multiple exchanges: sum oi_value per timestamp
+        ts_aggregated: dict = {}
+        for r in sorted_rows:
+            ts = float(r["ts"])
+            val = float(r["oi_value"])
+            ts_aggregated[ts] = ts_aggregated.get(ts, 0.0) + val
+
+        # Group aggregated values into buckets
+        bucket_map: dict = {}   # ts_bucket -> [(ts, oi_value), ...]
+        for ts, oi_val in sorted(ts_aggregated.items()):
+            b = int(ts // bucket_seconds) * bucket_seconds
+            if b not in bucket_map:
+                bucket_map[b] = []
+            bucket_map[b].append((ts, oi_val))
+
+        for ts_bucket, readings in sorted(bucket_map.items()):
+            readings.sort(key=lambda x: x[0])
+            oi_start = readings[0][1]
+            oi_end   = readings[-1][1]
+            oi_delta = oi_end - oi_start
+            oi_delta_pct = (oi_delta / oi_start * 100.0) if oi_start != 0 else 0.0
+
+            cells.append({
+                "ts_bucket":    float(ts_bucket),
+                "symbol":       symbol,
+                "oi_delta":     round(oi_delta, 4),
+                "oi_delta_pct": round(oi_delta_pct, 6),
+                "oi_start":     round(oi_start, 4),
+                "oi_end":       round(oi_end, 4),
+            })
+            all_buckets.add(float(ts_bucket))
+
+    symbols = sorted(oi_rows_by_symbol.keys())
+    time_buckets = sorted(all_buckets)
+
+    pct_values = [c["oi_delta_pct"] for c in cells]
+    global_max_pct = round(max(pct_values), 6) if pct_values else 0.0
+    global_min_pct = round(min(pct_values), 6) if pct_values else 0.0
+
+    return {
+        "cells":          cells,
+        "symbols":        symbols,
+        "time_buckets":   time_buckets,
+        "bucket_seconds": bucket_seconds,
+        "global_max_pct": global_max_pct,
+        "global_min_pct": global_min_pct,
+    }
