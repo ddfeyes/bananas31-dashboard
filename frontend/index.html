@@ -496,6 +496,12 @@
   </div>
 </header>
 
+<!-- Data freshness bar -->
+<div id="freshness-bar" style="display:flex;gap:12px;padding:4px 18px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);flex-wrap:wrap;align-items:center;">
+  <span style="color:var(--accent);font-weight:600;margin-right:4px;">DATA</span>
+  <span id="freshness-content" style="display:contents;">loading…</span>
+</div>
+
 <!-- Multi-symbol overview bar -->
 <div id="multi-overview"></div>
 
@@ -3754,6 +3760,31 @@ async function refreshOiMcap() {
   }
 }
 
+// ── Data Freshness ────────────────────────────────────────────────────────────
+async function refreshFreshness() {
+  const el = document.getElementById('freshness-content');
+  if (!el) return;
+  const data = await fetchJSON('/api/freshness');
+  if (!data || !data.freshness) { el.innerHTML = '<span>freshness unavailable</span>'; return; }
+  const parts = [];
+  const types = ['trades', 'oi', 'funding', 'liquidations'];
+  const labels = { trades: 'Trades', oi: 'OI', funding: 'Fund', liquidations: 'Liqs' };
+  for (const [sym, info] of Object.entries(data.freshness)) {
+    const short = sym.replace('USDT','');
+    const items = types.map(t => {
+      const age = info[`${t}_age`];
+      if (age === null || age === undefined) return `${labels[t]}:—`;
+      let color = 'var(--green)';
+      if (age > 60) color = 'var(--accent)';
+      if (age > 300) color = 'var(--red)';
+      const ageStr = age < 60 ? `${Math.round(age)}s` : `${Math.round(age/60)}m`;
+      return `<span style="color:${color}">${labels[t]}:${ageStr}</span>`;
+    }).join(' ');
+    parts.push(`<span style="color:var(--text);font-weight:600">${short}</span> ${items}`);
+  }
+  el.innerHTML = parts.join('<span style="color:var(--border2);margin:0 8px">│</span>');
+}
+
 // ── Phase Timeline ───────────────────────────────────────────────────────────
 const PHASE_COLORS = {
   'accumulation':  'var(--green)',
@@ -4357,6 +4388,8 @@ async function refreshSignalsScanner() {
   setInterval(loadPhaseTimeline, 60000);
   refreshOiMcap();
   setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
+  refreshFreshness();
+  setInterval(refreshFreshness, 15000);
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {

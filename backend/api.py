@@ -22,6 +22,7 @@ from storage import (
     insert_pattern,
     get_pattern_history,
     get_phase_snapshots,
+    get_data_freshness,
 )
 from metrics import (
     compute_cvd,
@@ -82,6 +83,13 @@ manager = ConnectionManager()
 async def list_symbols():
     """Return all tracked symbols."""
     return {"status": "ok", "symbols": get_symbols()}
+
+
+@router.get("/freshness")
+async def data_freshness():
+    """Return last update timestamps per symbol per data type."""
+    data = await get_data_freshness()
+    return {"status": "ok", "freshness": data}
 
 
 @router.get("/orderbook/latest")

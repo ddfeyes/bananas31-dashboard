@@ -752,3 +752,36 @@ async def get_phase_snapshots(
                         pass
                 result.append(d)
             return result
+
+
+async def get_data_freshness() -> Dict:
+    """Return last update timestamps per symbol per data type."""
+    tables = {
+        "trades": "trades",
+        "oi": "open_interest",
+        "funding": "funding_rate",
+        "liquidations": "liquidations",
+    }
+    result = {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        for key, table in tables.items():
+            try:
+                async with db.execute(
+                    f"SELECT symbol, MAX(ts) as last_ts FROM {table} GROUP BY symbol"
+                ) as cur:
+                    rows = await cur.fetchall()
+                    for r in rows:
+                        sym = r["symbol"]
+                        if sym not in result:
+                            result[sym] = {}
+                        result[sym][key] = r["last_ts"]
+            except Exception:
+                pass
+    now = time.time()
+    # Add age_seconds
+    for sym in result:
+        for key in list(result[sym].keys()):
+            ts = result[sym][key]
+            result[sym][f"{key}_age"] = round(now - ts, 1) if ts else None
+    return result
