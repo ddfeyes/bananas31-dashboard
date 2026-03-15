@@ -6,14 +6,17 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# Load .env from ~/.lain-secrets/.env
+# Load .env — supports DOTENV_PATH env var (for Docker), fallback to ~/.lain-secrets/.env
 from dotenv import load_dotenv
-_env_path = Path.home() / ".lain-secrets" / ".env"
-if _env_path.exists():
-    load_dotenv(_env_path)
+_dotenv_path = os.environ.get("DOTENV_PATH")
+if _dotenv_path and Path(_dotenv_path).exists():
+    load_dotenv(_dotenv_path)
 else:
-    # Fallback to local .env
-    load_dotenv(".env")
+    _env_path = Path.home() / ".lain-secrets" / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path)
+    else:
+        load_dotenv(".env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
