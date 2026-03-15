@@ -16,6 +16,8 @@ from storage import (
     get_recent_liquidations,
     get_orderbook_snapshots_for_heatmap,
     get_ohlcv,
+    insert_alert,
+    get_alert_history,
 )
 from metrics import (
     compute_cvd,
@@ -137,7 +139,7 @@ async def volume_profile(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_volume_profile(window_seconds=window, bins=bins, symbol=target)
+    data = await compute_volume_profile(symbol=target, window_seconds=window, bins=bins)
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -257,8 +259,11 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
 
                 funding = await get_funding_history(limit=2, symbol=symbol)
                 latest_funding = {}
+                next_funding_ts = None
                 for row in funding:
                     latest_funding[row["exchange"]] = row["rate"]
+                    if row.get("next_funding_ts") and (next_funding_ts is None or row["next_funding_ts"] > next_funding_ts):
+                        next_funding_ts = row["next_funding_ts"]
 
                 # Parse raw orderbook for depth
                 raw_bids, raw_asks = [], []
@@ -289,6 +294,33 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     for t in recent_trades
                 ]
 
+                # Check & persist alerts (every WS tick, but only save on trigger)
+                alert_tasks = await asyncio.gather(
+                    detect_delta_divergence(window_seconds=300, symbol=symbol),
+                    detect_oi_spike(window_seconds=300, threshold_pct=3.0, symbol=symbol),
+                    detect_liquidation_cascade(window_seconds=60, threshold_usd=50000, symbol=symbol),
+                    return_exceptions=True,
+                )
+                div_result, oi_result, liq_result = alert_tasks
+
+                fired_alerts = []
+                if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
+                    sev = "high" if div_result.get("severity", 0) > 0.5 else "medium"
+                    fired_alerts.append(("delta_divergence", sev, div_result.get("description", ""), div_result))
+                if isinstance(oi_result, dict) and oi_result.get("spike"):
+                    fired_alerts.append(("oi_spike", "high", oi_result.get("description", ""), oi_result))
+                if isinstance(liq_result, dict) and liq_result.get("cascade"):
+                    fired_alerts.append(("liq_cascade", "critical", liq_result.get("description", ""), liq_result))
+
+                # Deduplicate: only save if no same-type alert in last 60s
+                for a_type, sev, desc, data in fired_alerts:
+                    if not hasattr(ws, "_last_alert_ts"):
+                        ws._last_alert_ts = {}
+                    last = ws._last_alert_ts.get(a_type, 0)
+                    if time.time() - last > 60:
+                        await insert_alert(symbol, a_type, sev, desc, data)
+                        ws._last_alert_ts[a_type] = time.time()
+
                 msg = {
                     "type": "summary",
                     "ts": time.time(),
@@ -300,11 +332,13 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "volume_imbalance": vol_imb,
                     "oi_momentum": oi_mom,
                     "funding_rates": latest_funding,
+                    "next_funding_ts": next_funding_ts,
                     "depth_bids": depth_bids,
                     "depth_asks": depth_asks,
                     "ob_bids": raw_bids[:10],
                     "ob_asks": raw_asks[:10],
                     "recent_trades": tape_trades,
+                    "active_alerts": [{"type": a, "severity": s, "description": d} for a, s, d, _ in fired_alerts],
                 }
                 await ws.send_text(json.dumps(msg))
 
@@ -326,6 +360,18 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 await asyncio.sleep(2.0)
     finally:
         manager.disconnect(ws, symbol)
+
+
+@router.get("/alerts")
+async def alert_history_endpoint(
+    symbol: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    limit: int = Query(default=100, le=500),
+    since: Optional[float] = None,
+):
+    """Return persisted alert history."""
+    data = await get_alert_history(limit=limit, since=since, symbol=symbol, alert_type=alert_type)
+    return {"status": "ok", "data": data, "count": len(data)}
 
 
 @router.get("/export/{metric}")
@@ -586,7 +632,7 @@ async def multi_summary():
             ob = await get_latest_orderbook(symbol=sym, limit=1)
             price = ob[0].get("mid_price") if ob else None
 
-            # Quick CVD delta
+            # Quick CVD delta (5m)
             cvd_data = await compute_cvd(window_seconds=300, symbol=sym)
             cvd_delta = 0
             if cvd_data and len(cvd_data) >= 2:
@@ -601,15 +647,68 @@ async def multi_summary():
             oi_mom = await compute_oi_momentum(window_seconds=300, symbol=sym)
             oi_pct = oi_mom.get("avg_pct_change", 0)
 
+            # 24h price change
+            candles_24h = await get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=sym)
+            change_24h = 0.0
+            high_24h = None
+            low_24h = None
+            if candles_24h:
+                open_24h = candles_24h[0]["open"]
+                close_24h = candles_24h[-1]["close"]
+                if open_24h:
+                    change_24h = (close_24h - open_24h) / open_24h * 100
+                high_24h = max(c["high"] for c in candles_24h)
+                low_24h  = min(c["low"]  for c in candles_24h)
+
             results[sym] = {
                 "price": price,
                 "cvd_delta": round(cvd_delta, 0),
                 "funding": round(avg_funding, 8),
                 "oi_pct": round(oi_pct, 4),
+                "change_24h": round(change_24h, 4),
+                "high_24h": high_24h,
+                "low_24h": low_24h,
             }
         except Exception as e:
             results[sym] = {"error": str(e)}
     return {"status": "ok", "symbols": results}
+
+
+@router.get("/stats")
+async def symbol_stats(symbol: Optional[str] = None):
+    """24h price stats: open, high, low, close, volume, change%."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    # Get 24h candles
+    candles = await get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=target)
+    if not candles:
+        return {"status": "ok", "symbol": target, "stats": None}
+
+    open_price = candles[0]["open"]
+    close_price = candles[-1]["close"]
+    high = max(c["high"] for c in candles)
+    low = min(c["low"] for c in candles)
+    volume = sum(c["volume"] for c in candles)
+    buy_volume = sum(c["buy_volume"] for c in candles)
+    sell_volume = sum(c["sell_volume"] for c in candles)
+    change_pct = ((close_price - open_price) / open_price * 100) if open_price else 0
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "stats": {
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close_price,
+            "change_pct": round(change_pct, 4),
+            "volume": round(volume, 2),
+            "buy_volume": round(buy_volume, 2),
+            "sell_volume": round(sell_volume, 2),
+            "candles": len(candles),
+        }
+    }
 
 
 @router.get("/metrics/summary")

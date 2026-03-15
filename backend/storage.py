@@ -101,6 +101,20 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_ts ON liquidations(ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_sym ON liquidations(symbol, ts)")
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                description TEXT NOT NULL,
+                data TEXT
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_ts ON alert_history(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_sym ON alert_history(symbol, ts)")
+
         await db.commit()
 
 
@@ -314,7 +328,9 @@ async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_s
     q = f"""
         SELECT
             ROUND(price / ?) * ? AS price_level,
-            SUM(qty) AS volume
+            SUM(qty) AS volume,
+            SUM(CASE WHEN side IN ('buy','Buy') THEN qty ELSE 0 END) AS buy_vol,
+            SUM(CASE WHEN side NOT IN ('buy','Buy') THEN qty ELSE 0 END) AS sell_vol
         FROM trades
         WHERE ts > ?{sym_filter}
         GROUP BY price_level
@@ -490,6 +506,43 @@ async def get_orderbook_snapshots_for_heatmap(
             last_ts = row["ts"]
 
     return sampled
+
+
+async def insert_alert(symbol: str, alert_type: str, severity: str, description: str, data: dict = None):
+    """Persist a fired alert to history."""
+    import json
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO alert_history (ts, symbol, alert_type, severity, description, data)
+            VALUES (?,?,?,?,?,?)
+        """, (ts, symbol, alert_type, severity, description, json.dumps(data or {})))
+        await db.commit()
+
+
+async def get_alert_history(
+    limit: int = 100,
+    since: float = None,
+    symbol: str = None,
+    alert_type: str = None,
+) -> List[Dict]:
+    """Fetch recent alert history."""
+    since = since or (time.time() - 86400)
+    params: list = [since]
+    q = "SELECT * FROM alert_history WHERE ts > ?"
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    if alert_type:
+        q += " AND alert_type = ?"
+        params.append(alert_type)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
 
 
 async def cleanup_old_data(max_age_seconds: int = 86400 * 7):

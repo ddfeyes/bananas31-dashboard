@@ -437,57 +437,84 @@ async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000,
     }
 
 
-async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> dict:
+async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: int = 50) -> dict:
     """
-    Volume Profile: POC, VAH, VAL over the last timeframe_seconds.
+    Volume Profile: POC, VAH, VAL over the last window_seconds.
 
     - POC (Point of Control): price level with highest traded volume
     - Value Area: price range containing 70% of total volume
     - VAH (Value Area High): upper bound of value area
     - VAL (Value Area Low): lower bound of value area
 
-    Returns dict with poc_price, poc_volume, vah, val, and full profile list.
+    Returns dict with poc, vah, val, bins[], value_area_pct.
     """
-    since = time.time() - timeframe_seconds
+    since = time.time() - window_seconds
     rows, tick_size = await get_trades_for_volume_profile(since, symbol=symbol)
 
     if not rows:
         return {
-            "poc_price": None,
-            "poc_volume": None,
+            "poc": None,
             "vah": None,
             "val": None,
-            "profile": [],
+            "bins": [],
             "total_volume": 0,
-            "timeframe_seconds": timeframe_seconds,
+            "value_area_pct": 70,
+            "window_seconds": window_seconds,
             "tick_size": None,
         }
 
     # Determine display precision from tick_size
     import math
-    decimals = max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 2
+    decimals = max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 6
 
-    # Build profile list sorted by price
-    profile = [{"price": row["price_level"], "volume": row["volume"]} for row in rows]
+    # Build profile list sorted by price (include buy/sell split)
+    raw_profile = [
+        {
+            "price": row["price_level"],
+            "volume": row["volume"],
+            "buy_vol": row.get("buy_vol", 0) or 0,
+            "sell_vol": row.get("sell_vol", 0) or 0,
+        }
+        for row in rows
+    ]
+
+    # Downsample to `bins` buckets if we have more raw levels
+    if len(raw_profile) > bins and bins > 0:
+        p_low  = raw_profile[0]["price"]
+        p_high = raw_profile[-1]["price"]
+        p_rng  = p_high - p_low
+        bin_size = p_rng / bins if p_rng > 0 else 1
+
+        bin_map: dict = {}
+        for entry in raw_profile:
+            b_idx = min(bins - 1, int((entry["price"] - p_low) / bin_size))
+            center = round(p_low + (b_idx + 0.5) * bin_size, decimals)
+            if center not in bin_map:
+                bin_map[center] = {"price": center, "volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0}
+            bin_map[center]["volume"]   += entry["volume"]
+            bin_map[center]["buy_vol"]  += entry["buy_vol"]
+            bin_map[center]["sell_vol"] += entry["sell_vol"]
+
+        profile = sorted(bin_map.values(), key=lambda x: x["price"])
+    else:
+        profile = raw_profile
+
     total_volume = sum(p["volume"] for p in profile)
 
     # POC: level with maximum volume
-    poc = max(profile, key=lambda x: x["volume"])
-    poc_price = poc["price"]
-    poc_volume = poc["volume"]
+    poc_entry = max(profile, key=lambda x: x["volume"])
+    poc_price = poc_entry["price"]
+    poc_volume = poc_entry["volume"]
 
     # Value Area: 70% of total volume centered around POC
     value_area_target = total_volume * 0.70
 
-    # Start value area at POC, expand outward (higher/lower) one level at a time
-    # taking the side with greater volume each step
     poc_idx = next(i for i, p in enumerate(profile) if p["price"] == poc_price)
     lo_idx = poc_idx
     hi_idx = poc_idx
     accumulated = poc_volume
 
     while accumulated < value_area_target:
-        # Candidate volumes above and below current bounds
         can_go_up = hi_idx + 1 < len(profile)
         can_go_down = lo_idx - 1 >= 0
 
@@ -508,15 +535,23 @@ async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> 
     val = profile[lo_idx]["price"]
 
     return {
-        "poc_price": round(poc_price, decimals),
+        "poc": round(poc_price, decimals),
         "poc_volume": round(poc_volume, 6),
         "vah": round(vah, decimals),
         "val": round(val, decimals),
         "total_volume": round(total_volume, 6),
         "value_area_pct": round(accumulated / total_volume * 100, 2) if total_volume else 0,
         "tick_size": tick_size,
-        "profile": [{"price": round(p["price"], decimals), "volume": round(p["volume"], 6)} for p in profile],
-        "timeframe_seconds": timeframe_seconds,
+        "bins": [
+            {
+                "price": round(p["price"], decimals),
+                "volume": round(p["volume"], 6),
+                "buy_vol": round(p["buy_vol"], 6),
+                "sell_vol": round(p["sell_vol"], 6),
+            }
+            for p in profile
+        ],
+        "window_seconds": window_seconds,
     }
 
 
