@@ -3333,3 +3333,109 @@ def compute_tick_imbalance_bars(
         "bar_count":           len(bars),
         "alert":               alert,
     }
+
+
+def compute_volume_bars(trades, volume_threshold=1.0):
+    """
+    Volume-based OHLCV bars: each bar closes when accumulated qty >= volume_threshold.
+
+    Args:
+        trades: list of {ts, price, qty, side, [is_buyer_aggressor]}
+        volume_threshold: float — bar closes when sum(qty) >= this value
+
+    Returns dict with:
+        bars:                list of closed bar dicts (asc by ts_start)
+        current_volume:      accumulated qty in open bar
+        current_trade_count: trade count in open bar
+        volume_threshold:    echoed
+        bar_count:           len(bars)
+        pct_to_close:        current_volume / volume_threshold * 100
+    """
+    if not trades:
+        return {
+            "bars":                [],
+            "current_volume":      0.0,
+            "current_trade_count": 0,
+            "volume_threshold":    float(volume_threshold),
+            "bar_count":           0,
+            "pct_to_close":        0.0,
+        }
+
+    sorted_trades = sorted(trades, key=lambda t: t["ts"])
+
+    bars = []
+    # Open bar accumulators
+    bar_open = bar_high = bar_low = bar_close = None
+    bar_ts_start = bar_ts_end = None
+    bar_volume = 0.0
+    bar_buy_volume = 0.0
+    bar_sell_volume = 0.0
+    bar_trade_count = 0
+    bar_pv = 0.0  # sum(price * qty) for vwap
+
+    def _is_buy(trade):
+        iba = trade.get("is_buyer_aggressor")
+        if iba is not None:
+            return bool(iba)
+        return trade.get("side", "buy") == "buy"
+
+    for trade in sorted_trades:
+        ts = float(trade["ts"])
+        price = float(trade["price"])
+        qty = float(trade["qty"])
+
+        # Initialize bar open
+        if bar_open is None:
+            bar_open = price
+            bar_high = price
+            bar_low = price
+            bar_ts_start = ts
+
+        bar_high = max(bar_high, price)
+        bar_low = min(bar_low, price)
+        bar_close = price
+        bar_ts_end = ts
+        bar_volume += qty
+        bar_pv += price * qty
+        bar_trade_count += 1
+        if _is_buy(trade):
+            bar_buy_volume += qty
+        else:
+            bar_sell_volume += qty
+
+        if bar_volume >= volume_threshold:
+            vwap = bar_pv / bar_volume if bar_volume > 0 else price
+            bars.append({
+                "ts_start":    bar_ts_start,
+                "ts_end":      bar_ts_end,
+                "open":        bar_open,
+                "high":        bar_high,
+                "low":         bar_low,
+                "close":       bar_close,
+                "volume":      bar_volume,
+                "buy_volume":  bar_buy_volume,
+                "sell_volume": bar_sell_volume,
+                "trade_count": bar_trade_count,
+                "vwap":        vwap,
+            })
+            # Reset for next bar
+            bar_open = bar_high = bar_low = bar_close = None
+            bar_ts_start = bar_ts_end = None
+            bar_volume = 0.0
+            bar_buy_volume = 0.0
+            bar_sell_volume = 0.0
+            bar_trade_count = 0
+            bar_pv = 0.0
+
+    current_volume = bar_volume
+    current_trade_count = bar_trade_count
+    pct_to_close = current_volume / volume_threshold * 100.0
+
+    return {
+        "bars":                bars,
+        "current_volume":      current_volume,
+        "current_trade_count": current_trade_count,
+        "volume_threshold":    float(volume_threshold),
+        "bar_count":           len(bars),
+        "pct_to_close":        pct_to_close,
+    }

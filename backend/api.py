@@ -66,6 +66,7 @@ from metrics import (
     detect_oi_surge_with_crash,
     detect_squeeze_setup,
     compute_tick_imbalance_bars,
+    compute_volume_bars,
 )
 
 router = APIRouter(prefix="/api")
@@ -4313,6 +4314,16 @@ async def tick_imbalance_endpoint(
     }
 
 
+    result = compute_volume_bars(trades, volume_threshold=volume_threshold)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        **result,
+    }
+
+
 @router.get("/squeeze-setup/all")
 async def squeeze_setup_all_endpoint(
     window: int = Query(default=7200, ge=300, le=86400),
@@ -4343,3 +4354,30 @@ async def squeeze_setup_all_endpoint(
             funding_extreme=funding_extreme,
         )
     return {"status": "ok", "results": results}
+
+
+
+@router.get("/volume-clock")
+async def volume_clock_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=3600, ge=60, le=86400, description="Lookback in seconds (default 1h)"),
+    volume_threshold: float = Query(default=10.0, ge=0.001, description="Volume (qty) to close each bar"),
+):
+    """
+    Volume-based OHLCV bars: each bar closes when accumulated qty >= volume_threshold.
+
+    Returns:
+      bars: [{ts_start, ts_end, open, high, low, close, volume, buy_volume, sell_volume, trade_count, vwap}]
+      current_volume, current_trade_count, volume_threshold, bar_count, pct_to_close
+    """
+    since = time.time() - window
+    trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
+
+    result = compute_volume_bars(trades, volume_threshold=volume_threshold)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        **result,
+    }
