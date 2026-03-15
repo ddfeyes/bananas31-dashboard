@@ -1043,6 +1043,23 @@ function setAlertBadge(n) {
   }
 }
 
+// ── Price direction tracker ───────────────────────────────────────────────────
+let _lastPrice = null;
+
+function updatePriceDisplay(price) {
+  const el = document.getElementById('price-display');
+  if (!el || price == null) return;
+  const formatted = '$' + fmt(price, 4);
+  if (_lastPrice != null) {
+    el.style.color = price > _lastPrice ? 'var(--green)' : price < _lastPrice ? 'var(--red)' : el.style.color;
+    // fade back to green after 400ms
+    clearTimeout(el._colorTimer);
+    el._colorTimer = setTimeout(() => { el.style.color = 'var(--green)'; }, 400);
+  }
+  el.textContent = formatted;
+  _lastPrice = price;
+}
+
 // ── WebSocket for live summary ───────────────────────────────────────────────
 function connectWS(symbol) {
   if (activeWS) {
@@ -1095,7 +1112,7 @@ function connectWS(symbol) {
 
 function updateSummary(summary) {
   if (summary.price) {
-    document.getElementById('price-display').textContent = '$' + fmt(summary.price, 4);
+    updatePriceDisplay(summary.price);
   }
   if (summary.phase) {
     const ph = summary.phase;
@@ -1197,14 +1214,26 @@ function updateSummary(summary) {
   }
 
   if (summary.ob_bids?.length) {
-    document.getElementById('ob-bids').innerHTML = summary.ob_bids.slice(0, 10).map(([p, q]) =>
-      `<div class="ob-row bid"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
-    ).join('');
+    const bids = summary.ob_bids.slice(0, 10);
+    const maxBidQ = Math.max(...bids.map(([_, q]) => parseFloat(q)));
+    document.getElementById('ob-bids').innerHTML = bids.map(([p, q]) => {
+      const qf = parseFloat(q);
+      const isWall = qf > maxBidQ * 0.6 && qf > 0;
+      const wallStyle = isWall ? 'font-weight:700;background:rgba(102,187,106,0.12);' : '';
+      const wallIcon = isWall ? '🧱 ' : '';
+      return `<div class="ob-row bid" style="${wallStyle}"><span>${fmt(p, 4)}</span><span>${wallIcon}${fmt(q, 4)}</span></div>`;
+    }).join('');
   }
   if (summary.ob_asks?.length) {
-    document.getElementById('ob-asks').innerHTML = summary.ob_asks.slice(0, 10).map(([p, q]) =>
-      `<div class="ob-row ask"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
-    ).join('');
+    const asks = summary.ob_asks.slice(0, 10);
+    const maxAskQ = Math.max(...asks.map(([_, q]) => parseFloat(q)));
+    document.getElementById('ob-asks').innerHTML = asks.map(([p, q]) => {
+      const qf = parseFloat(q);
+      const isWall = qf > maxAskQ * 0.6 && qf > 0;
+      const wallStyle = isWall ? 'font-weight:700;background:rgba(239,83,80,0.12);' : '';
+      const wallIcon = isWall ? '🧱 ' : '';
+      return `<div class="ob-row ask" style="${wallStyle}"><span>${fmt(p, 4)}</span><span>${wallIcon}${fmt(q, 4)}</span></div>`;
+    }).join('');
   }
 }
 
@@ -1261,6 +1290,7 @@ function selectSymbol(sym) {
   tfData = null;
   tapeEntries.length = 0;
   _lastTapeTs = 0;
+  _lastPrice = null;
   _nextFundingTs = 0;
   const tapeEl = document.getElementById('tape-list');
   if (tapeEl) tapeEl.innerHTML = '';

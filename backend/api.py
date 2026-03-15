@@ -622,55 +622,65 @@ async def ohlcv(
     return {"status": "ok", "symbol": target, "interval": interval, "data": data, "count": len(data)}
 
 
+async def _sym_summary(sym: str) -> dict:
+    """Gather all quick stats for one symbol in parallel."""
+    try:
+        ob_task       = get_latest_orderbook(symbol=sym, limit=1)
+        cvd_task      = compute_cvd(window_seconds=300, symbol=sym)
+        funding_task  = get_funding_history(limit=2, symbol=sym)
+        oi_task       = compute_oi_momentum(window_seconds=300, symbol=sym)
+        candles_task  = get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=sym)
+
+        ob, cvd_data, funding, oi_mom, candles_24h = await asyncio.gather(
+            ob_task, cvd_task, funding_task, oi_task, candles_task,
+            return_exceptions=True,
+        )
+
+        price = ob[0].get("mid_price") if isinstance(ob, list) and ob else None
+
+        cvd_delta = 0
+        if isinstance(cvd_data, list) and len(cvd_data) >= 2:
+            cvd_delta = cvd_data[-1]["cvd"] - cvd_data[0]["cvd"]
+
+        avg_funding = 0
+        if isinstance(funding, list) and funding:
+            rates = [r["rate"] for r in funding]
+            avg_funding = sum(rates) / len(rates)
+
+        oi_pct = oi_mom.get("avg_pct_change", 0) if isinstance(oi_mom, dict) else 0
+
+        change_24h = 0.0
+        high_24h = None
+        low_24h = None
+        if isinstance(candles_24h, list) and candles_24h:
+            open_24h  = candles_24h[0]["open"]
+            close_24h = candles_24h[-1]["close"]
+            if open_24h:
+                change_24h = (close_24h - open_24h) / open_24h * 100
+            high_24h = max(c["high"] for c in candles_24h)
+            low_24h  = min(c["low"]  for c in candles_24h)
+
+        return {
+            "price": price,
+            "cvd_delta": round(cvd_delta, 0),
+            "funding": round(avg_funding, 8),
+            "oi_pct": round(oi_pct, 4),
+            "change_24h": round(change_24h, 4),
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.get("/multi-summary")
 async def multi_summary():
     """Quick stats for all tracked symbols — for overview bar."""
     syms = get_symbols()
+    summaries = await asyncio.gather(*[_sym_summary(sym) for sym in syms], return_exceptions=True)
     results = {}
-    for sym in syms:
-        try:
-            ob = await get_latest_orderbook(symbol=sym, limit=1)
-            price = ob[0].get("mid_price") if ob else None
-
-            # Quick CVD delta (5m)
-            cvd_data = await compute_cvd(window_seconds=300, symbol=sym)
-            cvd_delta = 0
-            if cvd_data and len(cvd_data) >= 2:
-                cvd_delta = cvd_data[-1]["cvd"] - cvd_data[0]["cvd"]
-
-            # Funding
-            funding = await get_funding_history(limit=2, symbol=sym)
-            rates = {r["exchange"]: r["rate"] for r in funding}
-            avg_funding = sum(rates.values()) / len(rates) if rates else 0
-
-            # Latest OI momentum
-            oi_mom = await compute_oi_momentum(window_seconds=300, symbol=sym)
-            oi_pct = oi_mom.get("avg_pct_change", 0)
-
-            # 24h price change
-            candles_24h = await get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=sym)
-            change_24h = 0.0
-            high_24h = None
-            low_24h = None
-            if candles_24h:
-                open_24h = candles_24h[0]["open"]
-                close_24h = candles_24h[-1]["close"]
-                if open_24h:
-                    change_24h = (close_24h - open_24h) / open_24h * 100
-                high_24h = max(c["high"] for c in candles_24h)
-                low_24h  = min(c["low"]  for c in candles_24h)
-
-            results[sym] = {
-                "price": price,
-                "cvd_delta": round(cvd_delta, 0),
-                "funding": round(avg_funding, 8),
-                "oi_pct": round(oi_pct, 4),
-                "change_24h": round(change_24h, 4),
-                "high_24h": high_24h,
-                "low_24h": low_24h,
-            }
-        except Exception as e:
-            results[sym] = {"error": str(e)}
+    for sym, summary in zip(syms, summaries):
+        results[sym] = summary if isinstance(summary, dict) else {"error": str(summary)}
     return {"status": "ok", "symbols": results}
 
 
