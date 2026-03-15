@@ -4,7 +4,7 @@
 const API = window.location.protocol + '//' + window.location.hostname + ':8765/api';
 const WS  = 'ws://' + window.location.hostname + ':8765';
 
-const REFRESH_MS   = 5000;   // poll interval
+const REFRESH_MS   = 15000;   // poll interval
 const TRADE_MAX    = 100;    // max rows in tape
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
@@ -193,7 +193,8 @@ function initPriceChart() {
     borderUpColor: '#00e082',
     borderDownColor: '#ff4d4f',
     wickUpColor: '#00e082',
-    wickDownColor: '#ff4d4f',
+    wickDownColor: "#ff4d4f",
+    priceFormat: { type: "price", precision: 6, minMove: 0.000001 },
   });
 
   priceChart._volumeSeries = priceChart.addHistogramSeries({
@@ -1412,6 +1413,7 @@ async function refresh() {
     renderCorrelations(),
     renderVpin(),
     renderAdaptiveVolumeProfile(),
+    renderAggressorRatio(),
     renderTapeSpeed(),
   ]);
 }
@@ -1433,3 +1435,17 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+async function renderAggressorRatio() {
+  const sym = activeSymbol;
+  const data = await apiFetch(`/aggressor-ratio?symbol=${sym}&window=1800`);
+  const el = document.getElementById('aggressor-ratio-content');
+  if (!el) return;
+  if (!data?.series?.length) { el.innerHTML = '<div class="no-data">Collecting data...</div>'; return; }
+  const series = data.series;
+  const last = series[series.length - 1];
+  const badge = document.getElementById('aggressor-ratio-badge');
+  if (badge) { badge.style.display = ''; badge.textContent = last.buy_pct.toFixed(1) + '% buy'; badge.className = 'card-badge ' + (last.buy_pct > 60 ? 'badge-green' : last.buy_pct < 40 ? 'badge-red' : 'badge-neutral'); }
+  const rows = series.slice(-15).map(s => { const t = new Date(s.ts*1000); const time = t.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}); return '<div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#6b7280">'+time+'</span><span style="color:#00e082">▲'+s.buy_pct.toFixed(0)+'%</span><span style="color:#ff4d4f">▼'+s.sell_pct.toFixed(0)+'%</span><span style="color:#6b7280">('+s.total+')</span></div>'; }).join('');
+  el.innerHTML = rows + '<div style="font-size:10px;color:#6b7280;margin-top:4px">Signal: '+(data.signal||'n/a')+'</div>';
+}
