@@ -697,3 +697,97 @@ def _phase_description(phase: str) -> str:
         "Markdown": "Sustained downtrend with selling pressure",
         "Unknown": "Insufficient data to classify market phase",
     }.get(phase, "")
+
+
+async def compute_market_regime(symbol: str = None) -> Dict:
+    """
+    Composite market regime score combining all signals.
+    Returns a score from -100 (extreme bear) to +100 (extreme bull)
+    with a confidence level and actionable summary.
+    """
+    syms = [symbol] if symbol else None
+
+    # Gather all signals
+    phase_data = await classify_market_phase(symbol=symbol)
+    cvd_mom    = await detect_cvd_momentum(window_seconds=60, symbol=symbol)
+    cvd_mom5   = await detect_cvd_momentum(window_seconds=300, symbol=symbol)
+    vol_imb    = await compute_volume_imbalance(window_seconds=60, symbol=symbol)
+    oi_mom     = await compute_oi_momentum(window_seconds=300, symbol=symbol)
+    delta_div  = await detect_delta_divergence(window_seconds=300, symbol=symbol)
+
+    score = 0
+    weights = {}
+
+    # Phase: ±30
+    phase = phase_data.get("phase", "Unknown")
+    phase_conf = phase_data.get("confidence", 0.5)
+    phase_map = {"Accumulation": 20, "Markup": 30, "Bull Trend": 30,
+                 "Distribution": -20, "Markdown": -30, "Bear Trend": -30, "Balanced": 0, "Unknown": 0}
+    phase_score = phase_map.get(phase, 0) * phase_conf
+    score += phase_score
+    weights["phase"] = round(phase_score, 1)
+
+    # CVD momentum 1min: ±20
+    cvd_dir = 1 if cvd_mom.get("direction") == "bullish" else -1 if cvd_mom.get("direction") == "bearish" else 0
+    cvd_score = cvd_dir * cvd_mom.get("intensity", 0) * 20
+    if cvd_mom.get("accelerating"):
+        cvd_score *= 1.3
+    score += cvd_score
+    weights["cvd_1m"] = round(cvd_score, 1)
+
+    # CVD momentum 5min: ±15
+    cvd5_dir = 1 if cvd_mom5.get("direction") == "bullish" else -1 if cvd_mom5.get("direction") == "bearish" else 0
+    cvd5_score = cvd5_dir * cvd_mom5.get("intensity", 0) * 15
+    score += cvd5_score
+    weights["cvd_5m"] = round(cvd5_score, 1)
+
+    # Volume imbalance: ±15
+    imb = vol_imb.get("imbalance", 0)  # -1 to 1
+    imb_score = imb * 15
+    score += imb_score
+    weights["vol_imb"] = round(imb_score, 1)
+
+    # OI momentum: ±10 (OI rising = more conviction)
+    oi_pct = 0
+    for ex_data in oi_mom.get("exchanges", {}).values():
+        oi_pct += ex_data.get("pct_change", 0)
+    oi_pct = max(-5, min(5, oi_pct))
+    oi_score = oi_pct * 2  # ±10
+    score += oi_score
+    weights["oi"] = round(oi_score, 1)
+
+    # Delta divergence: −10 (divergence = warning, direction-adjusted)
+    if delta_div.get("divergence"):
+        sev = delta_div.get("severity", 1)
+        div_score = -sev * 5 * (-1 if delta_div.get("cvd_direction") == "bullish" else 1)
+        score += div_score
+        weights["divergence"] = round(div_score, 1)
+
+    # Clamp
+    score = max(-100, min(100, score))
+
+    # Regime label
+    if score >= 60:    regime = "Strong Bull"
+    elif score >= 30:  regime = "Bull"
+    elif score >= 10:  regime = "Mild Bull"
+    elif score > -10:  regime = "Neutral"
+    elif score > -30:  regime = "Mild Bear"
+    elif score > -60:  regime = "Bear"
+    else:              regime = "Strong Bear"
+
+    # Action hint
+    if score >= 30:    action = "Long bias"
+    elif score >= 10:  action = "Cautious long"
+    elif score > -10:  action = "Wait / range trade"
+    elif score > -30:  action = "Cautious short"
+    else:              action = "Short bias"
+
+    return {
+        "score": round(score, 1),
+        "regime": regime,
+        "action": action,
+        "phase": phase,
+        "phase_confidence": phase_conf,
+        "weights": weights,
+        "symbol": symbol,
+    }

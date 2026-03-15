@@ -32,6 +32,7 @@ from metrics import (
     detect_liquidation_cascade,
     detect_funding_extreme,
     detect_cvd_momentum,
+    compute_market_regime,
 )
 
 router = APIRouter(prefix="/api")
@@ -243,6 +244,24 @@ async def cvd_momentum_endpoint(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_cvd_momentum(window_seconds=window, symbol=target)
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/market-regime")
+async def market_regime_endpoint(
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_market_regime(symbol=target)
+    return {"status": "ok", **data}
+
+
+@router.get("/market-regime/all")
+async def market_regime_all():
+    """Composite regime score for all tracked symbols."""
+    syms = get_symbols()
+    results = await asyncio.gather(*[compute_market_regime(symbol=s) for s in syms])
+    return {"status": "ok", "symbols": {s: r for s, r in zip(syms, results)}}
 
 
 @router.get("/volume-spike")

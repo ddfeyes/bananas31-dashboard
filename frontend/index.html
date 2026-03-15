@@ -860,6 +860,14 @@
     <div id="price-alert-log" style="max-height:100px;overflow-y:auto;font-size:10px;font-family:'Menlo','Monaco','Consolas',monospace;color:var(--muted);"></div>
   </div>
 
+  <!-- Market Regime -->
+  <div class="card wide" id="card-market-regime">
+    <h2><span class="card-icon">🎯</span>Market Regime
+      <span id="regime-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="market-regime-content" style="font-size:11px;"></div>
+  </div>
+
   <!-- CVD Momentum -->
   <div class="card" id="card-cvd-momentum">
     <h2><span class="card-icon">🌊</span>CVD Momentum
@@ -1666,6 +1674,7 @@ function selectSymbol(sym) {
   refreshMicrostructure();
   refreshTradeDist();
   refreshCvdMomentum();
+  refreshMarketRegime();
   initTape();
 }
 
@@ -3292,6 +3301,53 @@ function checkPriceAlerts(price) {
   } catch {}
 }
 
+// ── Market Regime ─────────────────────────────────────────────────────────────
+async function refreshMarketRegime() {
+  const el = document.getElementById('market-regime-content');
+  const tsEl = document.getElementById('regime-ts');
+  if (!el) return;
+
+  const data = await fetchJSON('/api/market-regime/all');
+  if (!data?.symbols) return;
+  if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+
+  const scoreColor = (s) => {
+    if (s >= 30) return 'var(--green)';
+    if (s >= 10) return '#66bb6a88';
+    if (s > -10) return 'var(--muted)';
+    if (s > -30) return '#ef535088';
+    return 'var(--red)';
+  };
+  const scoreBar = (s) => {
+    // score -100..100 → width 0..100%, centered at 50%
+    const abs = Math.abs(s);
+    const color = s >= 0 ? 'var(--green)' : 'var(--red)';
+    const offset = s >= 0 ? 50 : 50 - abs/2;
+    const width = abs / 2;
+    return `<div style="position:relative;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-top:3px;">
+      <div style="position:absolute;left:${offset}%;width:${width}%;height:100%;background:${color};border-radius:3px;"></div>
+      <div style="position:absolute;left:50%;width:1px;height:100%;background:var(--border2);"></div>
+    </div>`;
+  };
+
+  const syms = Object.keys(data.symbols);
+  const cols = syms.map(sym => {
+    const r = data.symbols[sym];
+    const base = sym.replace('USDT','');
+    const isActive = sym === activeSymbol;
+    const sc = scoreColor(r.score);
+    return `<div onclick="selectSymbol('${sym}')" style="flex:1;min-width:120px;background:${isActive?'var(--bg3)':'var(--bg2)'};border:1px solid ${isActive?'var(--accent)':'var(--border)'};border-radius:6px;padding:10px;cursor:pointer;transition:border 0.2s;">
+      <div style="font-size:10px;font-weight:700;color:${isActive?'var(--accent)':'var(--muted)'};margin-bottom:4px;">${base}</div>
+      <div style="font-size:18px;font-weight:700;color:${sc};">${r.score > 0 ? '+' : ''}${r.score}</div>
+      <div style="font-size:10px;color:${sc};font-weight:600;margin-bottom:2px;">${r.regime}</div>
+      ${scoreBar(r.score)}
+      <div style="margin-top:6px;font-size:10px;color:var(--muted);">${r.action}</div>
+    </div>`;
+  });
+
+  el.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cols.join('')}</div>`;
+}
+
 // ── CVD Momentum ─────────────────────────────────────────────────────────────
 let _cvdMomWindow = 60;
 function setCvdMomWindow(w) {
@@ -3482,6 +3538,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshCvdMomentum, 10000);
   refreshSignalsScanner();
   setInterval(refreshSignalsScanner, 15000);
+  refreshMarketRegime();
+  setInterval(refreshMarketRegime, 15000);
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {
