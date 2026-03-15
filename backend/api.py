@@ -19,6 +19,8 @@ from storage import (
     insert_alert,
     get_alert_history,
     get_whale_trades,
+    insert_pattern,
+    get_pattern_history,
 )
 from metrics import (
     compute_cvd,
@@ -34,6 +36,7 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
+    detect_accumulation_distribution_pattern,
 )
 
 router = APIRouter(prefix="/api")
@@ -917,6 +920,37 @@ async def health_check():
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@router.get("/pattern")
+async def pattern_live(symbol: Optional[str] = None):
+    """Live accumulation/distribution footprint for a symbol."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_accumulation_distribution_pattern(symbol=target)
+    return {"status": "ok", **data}
+
+
+@router.get("/pattern/all")
+async def pattern_all():
+    """Live pattern for all tracked symbols."""
+    syms = get_symbols()
+    results = await asyncio.gather(*[
+        detect_accumulation_distribution_pattern(symbol=s) for s in syms
+    ])
+    return {"status": "ok", "symbols": {s: r for s, r in zip(syms, results)}}
+
+
+@router.get("/pattern-history")
+async def pattern_history_endpoint(
+    symbol: Optional[str] = None,
+    pattern_type: Optional[str] = None,
+    limit: int = Query(default=100, le=500),
+    since: Optional[float] = None,
+):
+    """Return persisted pattern detection history."""
+    data = await get_pattern_history(limit=limit, since=since, symbol=symbol, pattern_type=pattern_type)
+    return {"status": "ok", "data": data, "count": len(data)}
 
 
 @router.get("/stats")

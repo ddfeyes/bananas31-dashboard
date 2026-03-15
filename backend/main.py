@@ -23,8 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from storage import init_db, cleanup_old_data
-from collectors import run_all_collectors
+from storage import init_db, cleanup_old_data, insert_pattern
+from collectors import run_all_collectors, get_symbols
 from pollers import poller_loop
 from api import router
 
@@ -46,6 +46,52 @@ async def cleanup_loop():
             logger.error(f"DB cleanup error: {e}")
 
 
+async def pattern_detection_loop():
+    """Periodically detect accumulation/distribution patterns and persist them."""
+    from metrics import detect_accumulation_distribution_pattern
+    await asyncio.sleep(60)  # warm-up: wait for data to arrive
+    _last_pattern: dict = {}   # symbol -> last persisted pattern type+ts
+    PERSIST_INTERVAL = 120     # only save if pattern changed or 2 min passed
+    DETECT_INTERVAL  = 30      # run detection every 30s
+
+    while True:
+        try:
+            syms = get_symbols()
+            for sym in syms:
+                try:
+                    result = await detect_accumulation_distribution_pattern(symbol=sym)
+                    pattern = result.get("pattern", "balanced")
+                    confidence = result.get("confidence", 0)
+
+                    # Only persist non-balanced patterns with reasonable confidence
+                    if pattern != "balanced" and confidence >= 0.35:
+                        last = _last_pattern.get(sym, {})
+                        last_ts   = last.get("ts", 0)
+                        last_type = last.get("pattern")
+                        now = result["ts"]
+
+                        # Persist if pattern changed or 2 min elapsed
+                        if last_type != pattern or (now - last_ts) >= PERSIST_INTERVAL:
+                            await insert_pattern(
+                                symbol=sym,
+                                pattern_type=pattern,
+                                confidence=confidence,
+                                signals=result.get("signals", {}),
+                                description=result.get("description", ""),
+                            )
+                            _last_pattern[sym] = {"pattern": pattern, "ts": now}
+                            logger.info(f"Pattern persisted: {sym} {pattern} conf={confidence:.2f}")
+                except Exception as e:
+                    logger.warning(f"Pattern detection failed for {sym}: {e}")
+
+            await asyncio.sleep(DETECT_INTERVAL)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Pattern loop error: {e}")
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing DB...")
@@ -63,6 +109,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_all_collectors(), name="collectors"),
         asyncio.create_task(poller_loop(), name="pollers"),
         asyncio.create_task(cleanup_loop(), name="cleanup"),
+        asyncio.create_task(pattern_detection_loop(), name="pattern_detector"),
     ]
 
     logger.info("All background tasks started")

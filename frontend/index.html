@@ -741,6 +741,16 @@
     <div id="whale-list" style="max-height:220px;overflow-y:auto;font-size:11px;"></div>
   </div>
 
+  <!-- Pattern Detector -->
+  <div class="card" id="card-pattern">
+    <h2><span class="card-icon">🧠</span>Pattern Detector (Accum/Distrib)
+      <span id="pattern-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="pattern-live" style="margin-bottom:10px;"></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">Recent Patterns (2h)</div>
+    <div id="pattern-history" style="max-height:200px;overflow-y:auto;font-size:11px;"></div>
+  </div>
+
   <!-- Correlation Matrix + Momentum -->
   <div class="card" id="card-correlations">
     <h2><span class="card-icon">🔗</span>Price Correlations (1h)
@@ -1779,7 +1789,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -1791,6 +1801,8 @@ async function refreshAll() {
     fetchJSON(`/api/liq-cascade?window=60&threshold_usd=50000&symbol=${sym}`),
     fetchJSON(`/api/volume-spike?window=30&baseline=300&symbol=${sym}`),
     fetchJSON(`/api/whale-history?window=3600&min_usd=50000&limit=50&symbol=${sym}`),
+    fetchJSON(`/api/pattern?symbol=${sym}`),
+    fetchJSON(`/api/pattern-history?symbol=${sym}&limit=20&since=${Math.floor(Date.now()/1000)-7200}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -1880,6 +1892,85 @@ async function refreshAll() {
             </div>`;
           }).join('')
         : '<div style="color:var(--muted);text-align:center;padding:20px 0">No whale trades yet (>$50k)</div>';
+    }
+  }
+
+  // Pattern Detector card
+  if (patternLive) {
+    const pLiveEl = document.getElementById('pattern-live');
+    const pTsEl   = document.getElementById('pattern-ts');
+    if (pTsEl) pTsEl.textContent = fmtTs(patternLive.ts || Date.now()/1000);
+    if (pLiveEl) {
+      const pt  = patternLive.pattern || 'balanced';
+      const conf = ((patternLive.confidence || 0) * 100).toFixed(0);
+      const accS = ((patternLive.accum_score  || 0) * 100).toFixed(0);
+      const disS = ((patternLive.distrib_score || 0) * 100).toFixed(0);
+      const sigs = patternLive.signals || {};
+      const ptColor = pt === 'accumulation' ? 'var(--green)' : pt === 'distribution' ? 'var(--red)' : 'var(--muted)';
+      const ptIcon  = pt === 'accumulation' ? '🟢' : pt === 'distribution' ? '🔴' : '⚪';
+      const sigBadges = Object.entries({
+        oi_rising:             sigs.oi_rising,
+        cvd_buying:            sigs.cvd_buying,
+        cvd_selling:           sigs.cvd_selling,
+        buy_vol_dominant:      sigs.buy_volume_dominant,
+        sell_vol_dominant:     sigs.sell_volume_dominant,
+        funding_neg:           sigs.funding_negative,
+        funding_pos_rising:    sigs.funding_positive_rising,
+        ob_bid_wall:           sigs.ob_bid_wall,
+        ob_ask_wall:           sigs.ob_ask_wall,
+      }).filter(([k,v]) => v).map(([k]) =>
+        `<span style="background:rgba(255,255,255,0.07);border-radius:3px;padding:1px 5px;margin:1px;font-size:10px;">${k.replace(/_/g,' ')}</span>`
+      ).join('');
+      pLiveEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:22px;">${ptIcon}</span>
+          <div>
+            <div style="font-size:16px;font-weight:700;color:${ptColor};text-transform:capitalize;">${pt}</div>
+            <div style="font-size:11px;color:var(--muted);">confidence ${conf}% · accum ${accS}% · distrib ${disS}%</div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">${patternLive.description || ''}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:8px;">${sigBadges || '<span style="color:var(--muted);font-size:10px;">no active signals</span>'}</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;font-size:10px;">
+          <div style="background:rgba(255,255,255,0.04);padding:4px 6px;border-radius:4px;">
+            <div style="color:var(--muted)">OI 5m</div>
+            <div style="color:${sigs.oi_5m_pct>=0?'var(--green)':'var(--red)'}">${sigs.oi_5m_pct!=null?(sigs.oi_5m_pct>=0?'+':'')+sigs.oi_5m_pct+'%':'—'}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.04);padding:4px 6px;border-radius:4px;">
+            <div style="color:var(--muted)">CVD Δ5m</div>
+            <div style="color:${(sigs.cvd_5m_delta||0)>=0?'var(--green)':'var(--red)'}">${sigs.cvd_5m_delta!=null?((sigs.cvd_5m_delta>=0?'+':'')+sigs.cvd_5m_delta.toFixed(2)):'—'}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.04);padding:4px 6px;border-radius:4px;">
+            <div style="color:var(--muted)">Vol Imb</div>
+            <div style="color:${(sigs.vol_imb_5m||0)>=0?'var(--green)':'var(--red)'}">${sigs.vol_imb_5m!=null?((sigs.vol_imb_5m>=0?'+':'')+((sigs.vol_imb_5m||0)*100).toFixed(1)+'%'):'—'}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.04);padding:4px 6px;border-radius:4px;">
+            <div style="color:var(--muted)">Funding</div>
+            <div style="color:${(sigs.avg_funding||0)<=0?'var(--green)':'var(--red)'}">${sigs.avg_funding!=null?((sigs.avg_funding>=0?'+':'')+((sigs.avg_funding||0)*100).toFixed(4)+'%'):'—'}</div>
+          </div>
+        </div>
+      `;
+    }
+  }
+  if (patternHist && patternHist.data) {
+    const phEl = document.getElementById('pattern-history');
+    if (phEl) {
+      const items = patternHist.data;
+      if (!items.length) {
+        phEl.innerHTML = '<div style="color:var(--muted);text-align:center;padding:10px 0">No patterns detected yet</div>';
+      } else {
+        phEl.innerHTML = items.map(p => {
+          const ptColor = p.pattern_type === 'accumulation' ? 'var(--green)' : 'var(--red)';
+          const ptIcon  = p.pattern_type === 'accumulation' ? '🟢' : '🔴';
+          return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+            <span>${ptIcon}</span>
+            <span style="color:${ptColor};min-width:80px;text-transform:capitalize;">${p.pattern_type}</span>
+            <span style="color:var(--muted);">${p.symbol}</span>
+            <span style="color:var(--fg);">${((p.confidence||0)*100).toFixed(0)}%</span>
+            <span style="color:var(--muted);margin-left:auto;font-size:10px;">${fmtTs(p.ts)}</span>
+          </div>`;
+        }).join('');
+      }
     }
   }
 

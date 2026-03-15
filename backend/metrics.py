@@ -699,6 +699,167 @@ def _phase_description(phase: str) -> str:
     }.get(phase, "")
 
 
+async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
+    """
+    ML-style accumulation/distribution footprint detector.
+    
+    Accumulation signals:
+    - OI rising + CVD positive (buyers adding longs)
+    - Large buy trades clustering near lows
+    - Low sell volume on dips (weak selling pressure)
+    - Funding near zero or negative (shorts paying longs)
+    
+    Distribution signals:
+    - OI rising + CVD negative (sellers adding shorts)  
+    - Large sell trades clustering near highs
+    - Low buy volume on rallies (weak buying interest)
+    - Funding positive and rising (longs paying)
+    
+    Returns pattern type, confidence (0-1), and component signals.
+    """
+    now = time.time()
+    since_5m  = now - 300
+    since_15m = now - 900
+    since_1h  = now - 3600
+
+    # Gather inputs in parallel
+    oi_5m, oi_15m, cvd_5m, cvd_15m, vol_imb_5m, vol_imb_15m, funding, ob = await asyncio.gather(
+        compute_oi_momentum(window_seconds=300,  symbol=symbol),
+        compute_oi_momentum(window_seconds=900,  symbol=symbol),
+        compute_cvd(window_seconds=300,  symbol=symbol),
+        compute_cvd(window_seconds=900,  symbol=symbol),
+        compute_volume_imbalance(window_seconds=300, symbol=symbol),
+        compute_volume_imbalance(window_seconds=900, symbol=symbol),
+        get_funding_history(limit=4, symbol=symbol),
+        get_latest_orderbook(symbol=symbol, limit=1),
+    )
+
+    # --- Signal extraction ---
+
+    # 1. OI trend (positive = rising)
+    oi_5m_pct  = oi_5m.get("avg_pct_change", 0)
+    oi_15m_pct = oi_15m.get("avg_pct_change", 0)
+    oi_rising  = oi_5m_pct > 0.5 or oi_15m_pct > 0.3
+
+    # 2. CVD direction and end delta
+    cvd_5m_end  = cvd_5m[-1]["cvd"]  if cvd_5m  else 0
+    cvd_5m_start = cvd_5m[0]["cvd"] if cvd_5m  else 0
+    cvd_15m_end  = cvd_15m[-1]["cvd"] if cvd_15m else 0
+    cvd_15m_start = cvd_15m[0]["cvd"] if cvd_15m else 0
+    cvd_5m_delta  = cvd_5m_end  - cvd_5m_start
+    cvd_15m_delta = cvd_15m_end - cvd_15m_start
+    cvd_positive = cvd_5m_delta > 0 and cvd_15m_delta > 0
+    cvd_negative = cvd_5m_delta < 0 and cvd_15m_delta < 0
+
+    # 3. Volume imbalance
+    imb_5m  = vol_imb_5m.get("imbalance", 0)   # -1 to 1
+    imb_15m = vol_imb_15m.get("imbalance", 0)
+    buy_dominant  = imb_5m > 0.1 and imb_15m > 0.05
+    sell_dominant = imb_5m < -0.1 and imb_15m < -0.05
+
+    # 4. Funding rate analysis
+    avg_funding = 0.0
+    if funding:
+        rates = [r["rate"] for r in funding]
+        avg_funding = sum(rates) / len(rates)
+    funding_negative = avg_funding < -0.01   # shorts paying
+    funding_positive = avg_funding > 0.01    # longs paying
+    funding_rising   = len(funding) >= 2 and funding[-1]["rate"] > funding[0]["rate"]
+
+    # 5. OB imbalance (bid > ask = buy pressure at top of book)
+    ob_imb = ob[0].get("imbalance", 0) if ob else 0
+    ob_bid_heavy = ob_imb > 0.1
+    ob_ask_heavy = ob_imb < -0.1
+
+    # --- Pattern scoring ---
+    accum_score = 0.0
+    distrib_score = 0.0
+    signals = {}
+
+    # Accumulation: OI rising + CVD buying + buy dominant + funding low/negative
+    if oi_rising:
+        accum_score += 0.2 if oi_5m_pct > 0 else 0.1
+        distrib_score += 0.15  # OI rising is shared signal
+        signals["oi_rising"] = True
+    
+    if cvd_positive:
+        accum_score += 0.25
+        signals["cvd_buying"] = True
+    elif cvd_negative:
+        distrib_score += 0.25
+        signals["cvd_selling"] = True
+
+    if buy_dominant:
+        accum_score += 0.2
+        signals["buy_volume_dominant"] = True
+    elif sell_dominant:
+        distrib_score += 0.2
+        signals["sell_volume_dominant"] = True
+
+    if funding_negative:
+        accum_score += 0.15  # smart money long while shorts pay
+        signals["funding_negative"] = True
+    elif funding_positive and funding_rising:
+        distrib_score += 0.15  # longs overextended
+        signals["funding_positive_rising"] = True
+
+    if ob_bid_heavy:
+        accum_score += 0.1
+        signals["ob_bid_wall"] = True
+    elif ob_ask_heavy:
+        distrib_score += 0.1
+        signals["ob_ask_wall"] = True
+
+    # Add raw values for context
+    signals["oi_5m_pct"]   = round(oi_5m_pct, 4)
+    signals["oi_15m_pct"]  = round(oi_15m_pct, 4)
+    signals["cvd_5m_delta"]  = round(cvd_5m_delta, 4)
+    signals["cvd_15m_delta"] = round(cvd_15m_delta, 4)
+    signals["vol_imb_5m"]  = round(imb_5m, 4)
+    signals["vol_imb_15m"] = round(imb_15m, 4)
+    signals["avg_funding"]  = round(avg_funding, 6)
+    signals["ob_imbalance"] = round(ob_imb, 4)
+
+    # Clamp scores
+    accum_score  = min(1.0, accum_score)
+    distrib_score = min(1.0, distrib_score)
+
+    # Determine pattern
+    THRESHOLD = 0.35
+    if accum_score >= distrib_score and accum_score >= THRESHOLD:
+        pattern = "accumulation"
+        confidence = round(accum_score, 3)
+        description = (
+            f"Accumulation footprint (conf={confidence:.0%}): "
+            f"OI+{oi_5m_pct:+.2f}%, CVD Δ{cvd_5m_delta:+.2f}, "
+            f"imb={imb_5m:+.2f}, funding={avg_funding:.4f}%"
+        )
+    elif distrib_score > accum_score and distrib_score >= THRESHOLD:
+        pattern = "distribution"
+        confidence = round(distrib_score, 3)
+        description = (
+            f"Distribution footprint (conf={confidence:.0%}): "
+            f"OI+{oi_5m_pct:+.2f}%, CVD Δ{cvd_5m_delta:+.2f}, "
+            f"imb={imb_5m:+.2f}, funding={avg_funding:.4f}%"
+        )
+    else:
+        # Below threshold — noise/balanced
+        pattern = "balanced"
+        confidence = round(max(accum_score, distrib_score), 3)
+        description = f"No clear accumulation/distribution (max_conf={confidence:.0%})"
+
+    return {
+        "pattern":      pattern,
+        "confidence":   confidence,
+        "accum_score":  round(accum_score, 3),
+        "distrib_score": round(distrib_score, 3),
+        "description":  description,
+        "signals":      signals,
+        "symbol":       symbol,
+        "ts":           now,
+    }
+
+
 async def compute_market_regime(symbol: str = None) -> Dict:
     """
     Composite market regime score combining all signals.

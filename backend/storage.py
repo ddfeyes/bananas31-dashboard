@@ -569,6 +569,75 @@ async def get_alert_history(
             return [dict(r) for r in rows]
 
 
+async def insert_pattern(symbol: str, pattern_type: str, confidence: float, signals: dict, description: str):
+    """Persist a detected market pattern to history."""
+    import json
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                pattern_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                signals TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "INSERT INTO pattern_history (ts, symbol, pattern_type, confidence, signals, description) VALUES (?,?,?,?,?,?)",
+            (ts, symbol, pattern_type, confidence, json.dumps(signals), description)
+        )
+        await db.commit()
+
+
+async def get_pattern_history(
+    limit: int = 100,
+    since: float = None,
+    symbol: str = None,
+    pattern_type: str = None,
+) -> List[Dict]:
+    """Fetch recent pattern detections."""
+    import json
+    since = since or (time.time() - 86400)
+    params: list = [since]
+    q = "SELECT * FROM pattern_history WHERE ts > ?"
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    if pattern_type:
+        q += " AND pattern_type = ?"
+        params.append(pattern_type)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    # Ensure table exists
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                pattern_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                signals TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+        """)
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                try:
+                    d["signals"] = json.loads(d["signals"])
+                except Exception:
+                    pass
+                result.append(d)
+            return result
+
+
 async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     cutoff = time.time() - max_age_seconds
     async with aiosqlite.connect(DB_PATH) as db:
