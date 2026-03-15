@@ -124,8 +124,6 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     cvd_results = results[:3]
     oi_results = results[3:]
 
-    ob_data = await get_latest_orderbook(symbol=symbol, limit=1)
-
     # Price change using trade prices from CVD data (spans the full window)
     def price_change_from_cvd(data):
         if isinstance(data, Exception) or len(data) < 2:
@@ -328,8 +326,8 @@ async def detect_liquidation_cascade(
             "description": "No liquidations",
         }
 
-    buy_usd = sum(l.get("value", 0) for l in liqs if l.get("side") == "buy")
-    sell_usd = sum(l.get("value", 0) for l in liqs if l.get("side") != "buy")
+    buy_usd = sum(liq.get("value", 0) for liq in liqs if liq.get("side") == "buy")
+    sell_usd = sum(liq.get("value", 0) for liq in liqs if liq.get("side") != "buy")
     total_usd = buy_usd + sell_usd
 
     cascade = total_usd >= threshold_usd
@@ -343,11 +341,11 @@ async def detect_liquidation_cascade(
 
     # Bucket by 10s for sparkline
     buckets = {}
-    for l in liqs:
-        bucket = int((l["ts"] - since) / 10)
+    for liq in liqs:
+        bucket = int((liq["ts"] - since) / 10)
         if bucket not in buckets:
             buckets[bucket] = 0.0
-        buckets[bucket] += l.get("value", 0)
+        buckets[bucket] += liq.get("value", 0)
 
     sparkline = [round(buckets.get(i, 0), 2) for i in range(int(window_seconds / 10))]
 
@@ -456,8 +454,8 @@ async def detect_large_trades(
 
     large.sort(key=lambda x: x["value_usd"], reverse=True)
 
-    buy_vol = sum(l["value_usd"] for l in large if l["side"] in ("buy", "Buy"))
-    sell_vol = sum(l["value_usd"] for l in large if l["side"] not in ("buy", "Buy"))
+    buy_vol = sum(t["value_usd"] for t in large if t["side"] in ("buy", "Buy"))
+    sell_vol = sum(t["value_usd"] for t in large if t["side"] not in ("buy", "Buy"))
 
     return {
         "count": len(large),
@@ -936,10 +934,6 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
     Returns pattern type, confidence (0-1), and component signals.
     """
     now = time.time()
-    since_5m = now - 300
-    since_15m = now - 900
-    since_1h = now - 3600
-
     # Gather inputs in parallel
     oi_5m, oi_15m, cvd_5m, cvd_15m, vol_imb_5m, vol_imb_15m, funding, ob = (
         await asyncio.gather(
@@ -1086,8 +1080,6 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     Returns a score from -100 (extreme bear) to +100 (extreme bull)
     with a confidence level and actionable summary.
     """
-    syms = [symbol] if symbol else None
-
     # Gather all signals
     phase_data = await classify_market_phase(symbol=symbol)
     cvd_mom = await detect_cvd_momentum(window_seconds=60, symbol=symbol)
@@ -1475,7 +1467,6 @@ async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
     oi_contracts = latest_oi_row.get("oi_contracts") or latest_oi_row.get("oi_value", 0)
 
     # Get price to compute OI in USD
-    price_data = await get_oi_history(limit=2, symbol=symbol)
     # We'll get price from latest orderbook
     ob = await get_latest_orderbook(symbol=symbol, limit=1)
     price = None
@@ -2471,10 +2462,10 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
 
     # Description
     if divergence == "bearish" and convergence == "strong":
-        desc = f"🐻 STRONG bearish RSI divergence (5m+1h) — price higher, RSI lower"
+        desc = "🐻 STRONG bearish RSI divergence (5m+1h) — price higher, RSI lower"
         severity = "high"
     elif divergence == "bullish" and convergence == "strong":
-        desc = f"🐂 STRONG bullish RSI divergence (5m+1h) — price lower, RSI higher"
+        desc = "🐂 STRONG bullish RSI divergence (5m+1h) — price lower, RSI higher"
         severity = "high"
     elif divergence == "bearish":
         tf = "5m" if div_5m else "1h"
@@ -2764,7 +2755,6 @@ async def compute_ob_pressure_gradient(
     Negative gradient → increasing ask pressure (selling)
     """
     import json
-    import time
     from storage import get_orderbook_history
 
     ob_rows = await get_orderbook_history(limit=200, symbol=symbol)
@@ -3328,9 +3318,9 @@ def compute_tod_volatility(
 
     def _hl_pct(c) -> float:
         h = float(c["high"])
-        l = float(c["low"])
+        lo = float(c["low"])
         cl = float(c["close"])
-        return (h - l) / cl * 100.0 if cl != 0 else 0.0
+        return (h - lo) / cl * 100.0 if cl != 0 else 0.0
 
     # Split into current vs historical
     current_vals: List[float] = []
@@ -4272,4 +4262,102 @@ def compute_whale_clustering(
         "price_min": price_min,
         "price_max": price_max,
         "zone_threshold_usd": zone_threshold,
+    }
+
+
+# ── Tape Speed Indicator ──────────────────────────────────────────────────────
+
+
+def compute_tape_speed(
+    trade_timestamps: List[float],
+    window_seconds: int = 1800,
+    bucket_seconds: int = 60,
+    hot_multiplier: float = 2.0,
+    reference_ts: Optional[float] = None,
+) -> Dict:
+    """
+    Rolling tape speed: trades/minute with high/low watermarks and heat signal.
+
+    Args:
+        trade_timestamps: Unix timestamps of trades (any order; filtered to window)
+        window_seconds:   look-back window for watermarks and avg
+        bucket_seconds:   width of each historical TPM bucket
+        hot_multiplier:   current_tpm > mult*avg → heating_up; < avg/mult → cooling_down
+        reference_ts:     treat as "now" (defaults to time.time(); injectable for tests)
+
+    Returns:
+        current_tpm    float  TPM in sliding [now-bucket_seconds, now]
+        avg_tpm        float  mean TPM across all historical buckets (incl. zeros)
+        high_watermark float  peak TPM among historical buckets
+        low_watermark  float | None  min non-zero TPM (None when all buckets zero)
+        heating_up     bool
+        cooling_down   bool
+        buckets        list[{ts, tpm}]  historical series, sorted ascending
+        total_trades   int
+        window_seconds int
+        bucket_seconds int
+    """
+    now = reference_ts if reference_ts is not None else time.time()
+    since = now - window_seconds
+
+    # Filter to window (strict: ts > since)
+    in_window = [ts for ts in trade_timestamps if ts > since]
+
+    if not in_window:
+        return {
+            "current_tpm": 0.0,
+            "avg_tpm": 0.0,
+            "high_watermark": 0.0,
+            "low_watermark": None,
+            "heating_up": False,
+            "cooling_down": False,
+            "buckets": [],
+            "total_trades": 0,
+            "window_seconds": window_seconds,
+            "bucket_seconds": bucket_seconds,
+        }
+
+    # Current TPM: sliding window [now - bucket_seconds, now]
+    current_count = sum(1 for ts in in_window if ts > now - bucket_seconds)
+    current_tpm = current_count * (60.0 / bucket_seconds)
+
+    # Historical buckets: floor each ts to bucket boundary, count per bucket
+    bucket_map: Dict[float, int] = {}
+    for ts in in_window:
+        b = float(int(ts // bucket_seconds) * bucket_seconds)
+        bucket_map[b] = bucket_map.get(b, 0) + 1
+
+    # Fill gap buckets with zero so the series is continuous
+    start_b = float(int(since // bucket_seconds) * bucket_seconds)
+    end_b = float(int(now // bucket_seconds) * bucket_seconds)
+    b = start_b
+    while b <= end_b:
+        bucket_map.setdefault(b, 0)
+        b += bucket_seconds
+
+    bucket_tpms = [
+        {"ts": bk, "tpm": round(cnt * (60.0 / bucket_seconds), 4)}
+        for bk, cnt in sorted(bucket_map.items())
+    ]
+
+    tpm_values = [bkt["tpm"] for bkt in bucket_tpms]
+    avg_tpm = sum(tpm_values) / len(tpm_values) if tpm_values else 0.0
+    high_watermark = max(tpm_values) if tpm_values else 0.0
+    non_zero = [v for v in tpm_values if v > 0]
+    low_watermark = min(non_zero) if non_zero else None
+
+    heating_up = avg_tpm > 0 and current_tpm > hot_multiplier * avg_tpm
+    cooling_down = avg_tpm > 0 and current_tpm < avg_tpm / hot_multiplier
+
+    return {
+        "current_tpm": round(current_tpm, 4),
+        "avg_tpm": round(avg_tpm, 4),
+        "high_watermark": round(high_watermark, 4),
+        "low_watermark": round(low_watermark, 4) if low_watermark is not None else None,
+        "heating_up": heating_up,
+        "cooling_down": cooling_down,
+        "buckets": bucket_tpms,
+        "total_trades": len(in_window),
+        "window_seconds": window_seconds,
+        "bucket_seconds": bucket_seconds,
     }

@@ -494,6 +494,36 @@ html, body {
 
 .oi-stat span { color: var(--fg); font-weight: 700; }
 
+/* ── Tape Speed ───────────────────────────────────────────────────────────── */
+#card-tape-speed { grid-column: 1 / 3; }
+
+.ts-metrics {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.ts-stat { color: var(--muted); }
+.ts-stat span { color: var(--fg); font-weight: 700; }
+
+.ts-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+  padding: 0 2px;
+}
+
+.ts-bar {
+  flex: 1;
+  min-width: 4px;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.3s ease;
+  opacity: 0.8;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 900px) {
   #main {
