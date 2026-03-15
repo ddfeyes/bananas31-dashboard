@@ -67,6 +67,7 @@ from metrics import (
     rank_symbols_by_momentum,
     compute_net_taker_delta,
     detect_short_squeeze_setup,
+    rank_symbols_by_net_taker_delta,
 )
 
 router = APIRouter(prefix="/api")
@@ -3464,30 +3465,64 @@ async def momentum_rank_endpoint(
 @router.get("/net-taker-delta")
 async def net_taker_delta_endpoint(
     symbol: Optional[str] = Query(default=None),
-    window: int = Query(default=3600, ge=60, le=86400, description="Lookback window in seconds"),
+    window: int = Query(default=60, ge=1, le=1440, description="Lookback window in MINUTES (spec: window=60 = 1h)"),
     bucket_seconds: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),
 ):
     """
-    Net taker delta: buy-taker volume minus sell-taker volume, bucketed by time.
+    Net taker delta per symbol: buy-taker volume minus sell-taker volume.
 
-    Returns:
-      buckets:     [{ts, buy_vol, sell_vol, net_vol}] sorted asc
-      total_buy, total_sell, net
+    When symbol is provided: returns 1-min bucketed series for that symbol.
+    When symbol is omitted:  fetches all tracked symbols in parallel and
+                             returns a ranked leaderboard by net delta.
+
+    window is in MINUTES (e.g. window=60 = last 1 hour).
+
+    Per-symbol response:
+      symbol, buckets [{ts, buy_vol, sell_vol, net_vol}], total_buy, total_sell, net
+
+    All-symbols response:
+      rankings: [{symbol, total_buy, total_sell, net, buy_pct, rank}]
+      per_symbol: {symbol: {buckets, total_buy, total_sell, net}}
     """
-    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
-    if not target:
-        return {"error": "No symbol available"}
+    window_seconds = window * 60
+    since = time.time() - window_seconds
+    symbols = get_symbols()
 
-    since = time.time() - window
-    trades = await get_recent_trades(since=since, symbol=target, limit=50000)
-    result = compute_net_taker_delta(trades, bucket_seconds=bucket_seconds)
+    if symbol:
+        # Single-symbol mode: return bucketed series
+        target = symbol.upper()
+        trades = await get_recent_trades(since=since, symbol=target, limit=50000)
+        result = compute_net_taker_delta(trades, bucket_seconds=bucket_seconds)
+        return {
+            "status": "ok",
+            "symbol": target,
+            "window_minutes": window,
+            "window_seconds": window_seconds,
+            "bucket_seconds": bucket_seconds,
+            **result,
+        }
+
+    # All-symbols mode: fetch in parallel, rank by net delta
+    if not symbols:
+        return {"error": "No symbols configured"}
+
+    trade_lists = await asyncio.gather(*[
+        get_recent_trades(since=since, symbol=sym, limit=50000)
+        for sym in symbols
+    ])
+    symbol_results = {
+        sym: compute_net_taker_delta(trades, bucket_seconds=bucket_seconds)
+        for sym, trades in zip(symbols, trade_lists)
+    }
+    rankings = rank_symbols_by_net_taker_delta(symbol_results)
 
     return {
         "status": "ok",
-        "symbol": target,
-        "window_seconds": window,
+        "window_minutes": window,
+        "window_seconds": window_seconds,
         "bucket_seconds": bucket_seconds,
-        **result,
+        "rankings": rankings,
+        "per_symbol": symbol_results,
     }
 
 

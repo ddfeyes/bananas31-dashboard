@@ -3141,3 +3141,41 @@ def detect_short_squeeze_setup(
         "latest_funding": fr_result["latest_funding"],
         "description": desc,
     }
+
+
+def rank_symbols_by_net_taker_delta(symbol_results: Dict[str, dict]) -> List[dict]:
+    """Rank symbols by net taker delta (buy-taker vol minus sell-taker vol).
+
+    Args:
+        symbol_results: mapping of symbol -> compute_net_taker_delta() result dict
+
+    Returns:
+        List sorted by net descending (rank 1 = strongest buy pressure):
+        [{symbol, total_buy, total_sell, net, buy_pct, rank}]
+
+    buy_pct = total_buy / (total_buy + total_sell) * 100, or 50 when no trades.
+    """
+    if not symbol_results:
+        return []
+
+    entries = []
+    for symbol, r in symbol_results.items():
+        total_buy  = float(r.get("total_buy",  0))
+        total_sell = float(r.get("total_sell", 0))
+        net        = float(r.get("net", total_buy - total_sell))
+        total      = total_buy + total_sell
+        buy_pct    = (total_buy / total * 100.0) if total > 0 else 50.0
+        entries.append({
+            "symbol":     symbol,
+            "total_buy":  round(total_buy,  8),
+            "total_sell": round(total_sell, 8),
+            "net":        round(net,        8),
+            "buy_pct":    round(buy_pct,    4),
+            "rank":       0,
+        })
+
+    entries.sort(key=lambda e: e["net"], reverse=True)
+    for i, e in enumerate(entries):
+        e["rank"] = i + 1
+
+    return entries

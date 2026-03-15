@@ -1116,6 +1116,16 @@
     <div id="cluster-list" style="max-height:180px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
   </div>
 
+  <!-- Net Taker Delta (per symbol) -->
+  <div class="card" id="card-net-taker-delta">
+    <h2><span class="card-icon">⚖️</span>Net Taker Delta (1h)
+      <span id="ntd-ts" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">buy-initiated − sell-initiated volume · rank 1 = strongest buy pressure</div>
+    <div id="ntd-rank-list" style="font-size:12px;margin-bottom:10px;"></div>
+    <canvas id="chart-ntd" style="height:130px !important;"></canvas>
+  </div>
+
   <!-- Symbol Momentum Rank -->
   <div class="card">
     <h2><span class="card-icon">🏆</span>Momentum Rank (5m/15m/1h)
@@ -2226,7 +2236,45 @@ let chartTradeClusters = null;
   });
 })();
 
-// Net Taker Delta stacked bar chart
+// Net Taker Delta dedicated card chart (chart-ntd)
+let chartNtd = null;
+(function initNtdChart() {
+  const ctx = document.getElementById('chart-ntd');
+  if (!ctx) return;
+  chartNtd = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy taker', data: [], backgroundColor: 'rgba(0,200,120,0.65)', stack: 'vol', borderWidth: 0 },
+        { label: 'Sell taker', data: [], backgroundColor: 'rgba(220,60,60,0.65)', stack: 'vol', borderWidth: 0 },
+        {
+          label: 'Net Δ', data: [], type: 'line',
+          borderColor: 'rgba(255,220,50,0.9)', backgroundColor: 'transparent',
+          borderWidth: 1.5, pointRadius: 0, tension: 0.3, yAxisID: 'yNet',
+        },
+      ],
+    },
+    options: {
+      animation: false, responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: 'rgba(200,200,200,0.7)', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: { callbacks: { label: ctx => {
+          const v = ctx.parsed.y;
+          return `${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(4)}`;
+        }}},
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, maxTicksLimit: 10, maxRotation: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { stacked: true, ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        yNet: { display: false, position: 'right' },
+      },
+    },
+  });
+})();
+
+// Net Taker Delta stacked bar chart (squeeze card)
 let chartNetTakerDelta = null;
 (function initNetTakerDeltaChart() {
   const ctx = document.getElementById('chart-net-taker-delta');
@@ -3246,7 +3294,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze, ntdAll, ntdSym] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3269,6 +3317,8 @@ async function refreshAll() {
     fetchJSON(`/api/trade-clusters?window=300&cluster_window=30&price_tolerance=0.05&min_trades=5&symbol=${sym}`),
     fetchJSON(`/api/momentum-rank?window=3600`),
     fetchJSON(`/api/short-squeeze?window=3600&symbol=${sym}`),
+    fetchJSON(`/api/net-taker-delta?window=60`),
+    fetchJSON(`/api/net-taker-delta?window=60&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3588,6 +3638,44 @@ async function refreshAll() {
           <span style="color:var(--muted);font-size:10px;">${fmtTs(c.ts_start)}</span>
         </div>`;
       }).join('') || '<div style="color:var(--muted);padding:8px;">No clusters detected in last 5m</div>';
+    }
+  }
+
+  // ── Net Taker Delta card ─────────────────────────────────────────────────
+  if (ntdAll || ntdSym) {
+    const tsEl   = document.getElementById('ntd-ts');
+    const rankEl = document.getElementById('ntd-rank-list');
+
+    if (tsEl) tsEl.textContent = 'last 1h';
+
+    // Leaderboard: all symbols ranked by net delta
+    if (rankEl && ntdAll?.rankings?.length) {
+      const medals = ['🥇', '🥈', '🥉', '4️⃣'];
+      rankEl.innerHTML = ntdAll.rankings.map((e, i) => {
+        const netCol    = e.net > 0 ? 'var(--green)' : e.net < 0 ? 'var(--red)' : 'var(--muted)';
+        const netSign   = e.net >= 0 ? '+' : '';
+        const buyPctCol = e.buy_pct > 55 ? 'var(--green)' : e.buy_pct < 45 ? 'var(--red)' : 'var(--muted)';
+        const barW      = Math.round(e.buy_pct);
+        return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--border);">
+          <span style="min-width:24px;font-size:13px;">${medals[i] || (e.rank + '.')}</span>
+          <span style="min-width:60px;font-weight:600;">${e.symbol.replace('USDT','')}</span>
+          <span style="min-width:72px;font-weight:700;font-variant-numeric:tabular-nums;color:${netCol};">${netSign}${e.net.toFixed(3)}</span>
+          <div style="flex:1;min-width:80px;background:rgba(220,60,60,0.25);border-radius:3px;height:8px;overflow:hidden;">
+            <div style="width:${barW}%;height:100%;background:rgba(0,200,120,0.7);border-radius:3px;"></div>
+          </div>
+          <span style="font-size:10px;color:${buyPctCol};min-width:38px;">${e.buy_pct.toFixed(1)}% buy</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Stacked bar chart for selected symbol
+    if (chartNtd && ntdSym?.buckets?.length) {
+      const buckets = ntdSym.buckets;
+      chartNtd.data.labels = buckets.map(b => fmtTs(b.ts));
+      chartNtd.data.datasets[0].data = buckets.map(b =>  b.buy_vol);
+      chartNtd.data.datasets[1].data = buckets.map(b => -b.sell_vol);
+      chartNtd.data.datasets[2].data = buckets.map(b =>  b.net_vol);
+      chartNtd.update('none');
     }
   }
 
