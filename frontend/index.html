@@ -1484,11 +1484,12 @@ async function refreshAll() {
   if (vp?.bins?.length) {
     const bins = vp.bins.filter(b => b.volume > 0);
     const pocPrice = vp.poc;
+    const isPoc = (price) => Math.abs(price - pocPrice) < 1e-9;
     const labels   = bins.map(b => fmt(b.price, 6));
     charts.vp.data.labels = labels;
-    charts.vp.data.datasets[0].data = bins.map(b => b.price === pocPrice ? 0 : b.buy_vol);
-    charts.vp.data.datasets[1].data = bins.map(b => b.price === pocPrice ? 0 : b.sell_vol);
-    charts.vp.data.datasets[2].data = bins.map(b => b.price === pocPrice ? b.volume : 0);
+    charts.vp.data.datasets[0].data = bins.map(b => isPoc(b.price) ? 0 : b.buy_vol);
+    charts.vp.data.datasets[1].data = bins.map(b => isPoc(b.price) ? 0 : b.sell_vol);
+    charts.vp.data.datasets[2].data = bins.map(b => isPoc(b.price) ? b.volume : 0);
     charts.vp.update();
     document.getElementById('vp-poc').textContent = fmt(vp.poc, 6);
     document.getElementById('vp-vah').textContent = fmt(vp.vah, 6);
@@ -2097,10 +2098,13 @@ async function refreshPriceChart() {
   const color = pct >= 0 ? 'var(--green)' : 'var(--red)';
   const hi = Math.max(...candles.map(c => c.high));
   const lo = Math.min(...candles.map(c => c.low));
+  const lastVwap = candles[candles.length - 1]?.vwap;
+  const vwapStr = lastVwap ? `&nbsp;VWAP: <b style="color:rgba(66,165,245,0.9)">${lastVwap.toFixed(6)}</b>` : '';
   document.getElementById('price-chart-stats').innerHTML =
     `<span style="color:${color};font-weight:700;">${pct >= 0 ? '+' : ''}${pct}%</span>` +
     `&nbsp;&nbsp;H: <b style="color:var(--green)">${hi.toFixed(6)}</b>` +
-    `&nbsp;L: <b style="color:var(--red)">${lo.toFixed(6)}</b>`;
+    `&nbsp;L: <b style="color:var(--red)">${lo.toFixed(6)}</b>` +
+    vwapStr;
 }
 
 // ── Multi-symbol overview bar ─────────────────────────────────────────────────
@@ -2229,6 +2233,17 @@ async function refreshAlertHistory() {
   setInterval(syncSymbols, 30000);
   setInterval(refreshAlertHistory, 30000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
+
+  // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
+  window.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const n = parseInt(e.key);
+    if (!isNaN(n) && n >= 1 && n <= allSymbols.length) {
+      selectSymbol(allSymbols[n - 1]);
+    } else if (e.key === 's' || e.key === 'S') {
+      toggleAlertSound();
+    }
+  });
 })();
 </script>
 </body>
