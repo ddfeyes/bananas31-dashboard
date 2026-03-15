@@ -848,6 +848,12 @@
       <div id="funding-arb-detail" style="font-size:11px;margin-top:4px;color:var(--muted);"></div>
     </div>
 
+    <div id="alert-funding-divergence" class="alert-box">
+      <div class="alert-label">🔀 FUNDING DIVERGENCE</div>
+      <div id="funding-div-text" style="color:var(--muted)">Loading...</div>
+      <div id="funding-div-rates" style="font-size:11px;margin-top:4px;color:var(--muted);"></div>
+    </div>
+
     <div id="alert-vwap-deviation" class="alert-box">
       <div class="alert-label">📐 VWAP DEVIATION (1h)</div>
       <div id="vwap-dev-text" style="color:var(--muted)">Loading...</div>
@@ -1011,6 +1017,7 @@
       <button class="ah-filter-btn" data-type="volume_spike" onclick="setAlertHistoryFilter('volume_spike',this)">Vol Spike</button>
       <button class="ah-filter-btn" data-type="funding_extreme" onclick="setAlertHistoryFilter('funding_extreme',this)">Funding Extreme</button>
       <button class="ah-filter-btn" data-type="funding_arb" onclick="setAlertHistoryFilter('funding_arb',this)">Funding Arb</button>
+      <button class="ah-filter-btn" data-type="funding_divergence" onclick="setAlertHistoryFilter('funding_divergence',this)">Funding Div</button>
       <button class="ah-filter-btn" data-type="vwap_deviation" onclick="setAlertHistoryFilter('vwap_deviation',this)">VWAP Dev</button>
       <button class="ah-filter-btn" data-type="cascade_predictor" onclick="setAlertHistoryFilter('cascade_predictor',this)">Cascade Pred</button>
       <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
@@ -2347,6 +2354,32 @@ function updateSummary(summary) {
         : '';
     }
   }
+
+  // ── Funding divergence alert ──────────────────────────────────────────────
+  (async () => {
+    try {
+      const fdRes = await fetch('/api/funding-divergence');
+      if (fdRes.ok) {
+        const fd = await fdRes.json();
+        const fdBox = document.getElementById('alert-funding-divergence');
+        const fdText = document.getElementById('funding-div-text');
+        const fdRates = document.getElementById('funding-div-rates');
+        if (fd.divergence) {
+          fdText.style.color = fd.severity === 'high' ? 'var(--red)' : 'var(--yellow, #f0c040)';
+          fdText.textContent = fd.description;
+          fdBox.className = 'alert-box active';
+        } else {
+          fdText.style.color = 'var(--muted)';
+          fdText.textContent = fd.description || 'Normal';
+          fdBox.className = 'alert-box';
+        }
+        if (fd.rates) {
+          const parts = Object.entries(fd.rates).map(([s, r]) => `${s}: ${Number(r).toFixed(4)}%`);
+          fdRates.textContent = parts.join('  |  ');
+        }
+      }
+    } catch(e) { /* silent */ }
+  })();
 
   // ── Phase change from active alerts ───────────────────────────────────────
   if (summary.active_alerts) {

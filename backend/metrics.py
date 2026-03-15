@@ -1502,3 +1502,99 @@ async def compute_max_drawdown(window_seconds: int = 3600, symbol: str = None) -
         }
 
     return results
+
+
+async def detect_funding_divergence(focus_symbol: str = "BANANAS31USDT", divergence_multiplier: float = 2.0) -> Dict:
+    """
+    Funding rate divergence alert: when focus_symbol's funding rate diverges
+    >divergence_multiplier x from the average of the other symbols.
+    Returns alert details + per-symbol rates.
+    """
+    from collectors import get_symbols
+    all_syms = get_symbols()
+    if focus_symbol not in all_syms:
+        all_syms = [focus_symbol] + all_syms
+
+    # Gather latest funding rate per symbol
+    sym_rates = {}
+    for sym in all_syms:
+        rows = await get_funding_history(limit=2, symbol=sym)
+        if rows:
+            # Use first row (most recent)
+            sym_rates[sym] = rows[0]["rate"]
+
+    if len(sym_rates) < 2:
+        return {
+            "divergence": False,
+            "focus": focus_symbol,
+            "focus_rate": sym_rates.get(focus_symbol),
+            "peer_avg": None,
+            "ratio": None,
+            "description": "Insufficient data",
+            "severity": "info",
+        }
+
+    focus_rate = sym_rates.get(focus_symbol)
+    if focus_rate is None:
+        return {
+            "divergence": False,
+            "focus": focus_symbol,
+            "focus_rate": None,
+            "peer_avg": None,
+            "ratio": None,
+            "description": f"No data for {focus_symbol}",
+            "severity": "info",
+        }
+
+    peers = {s: r for s, r in sym_rates.items() if s != focus_symbol}
+    if not peers:
+        return {
+            "divergence": False,
+            "focus": focus_symbol,
+            "focus_rate": round(focus_rate * 100, 6),
+            "peer_avg": None,
+            "ratio": None,
+            "description": "No peer symbols",
+            "severity": "info",
+        }
+
+    peer_avg = sum(peers.values()) / len(peers)
+    focus_pct = focus_rate * 100
+    peer_avg_pct = peer_avg * 100
+
+    # Compute divergence ratio: how many times larger in absolute terms
+    if abs(peer_avg) < 1e-9:
+        # Peer avg near zero — check if focus is significant
+        ratio = abs(focus_rate) / 0.0001 if abs(focus_rate) > 1e-9 else 0.0
+    else:
+        ratio = abs(focus_rate) / abs(peer_avg)
+
+    diverged = ratio >= divergence_multiplier
+    same_sign = (focus_rate >= 0) == (peer_avg >= 0)
+
+    if diverged:
+        direction_note = "same direction" if same_sign else "OPPOSITE direction"
+        severity = "high" if ratio >= 3.0 else "medium"
+        desc = (
+            f"🚨 Funding divergence: {focus_symbol} at {focus_pct:+.4f}% vs peer avg {peer_avg_pct:+.4f}% "
+            f"(ratio {ratio:.1f}x, {direction_note})"
+        )
+    else:
+        severity = "info"
+        desc = (
+            f"Funding normal: {focus_symbol} at {focus_pct:+.4f}% vs peer avg {peer_avg_pct:+.4f}% "
+            f"(ratio {ratio:.1f}x)"
+        )
+
+    return {
+        "divergence": diverged,
+        "focus": focus_symbol,
+        "focus_rate_pct": round(focus_pct, 6),
+        "peer_avg_pct": round(peer_avg_pct, 6),
+        "ratio": round(ratio, 2),
+        "same_sign": same_sign,
+        "severity": severity,
+        "description": desc,
+        "rates": {s: round(r * 100, 6) for s, r in sym_rates.items()},
+        "threshold_multiplier": divergence_multiplier,
+    }

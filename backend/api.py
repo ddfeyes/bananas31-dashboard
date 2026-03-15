@@ -48,6 +48,7 @@ from metrics import (
     compute_vwap_deviation,
     fetch_oi_mcap_ratio,
     predict_liquidation_cascade,
+    detect_funding_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -449,6 +450,19 @@ async def funding_arb_endpoint(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/funding-divergence")
+async def funding_divergence_endpoint(
+    focus: Optional[str] = None,
+    multiplier: float = Query(default=2.0, ge=1.0, le=20.0),
+):
+    """Funding rate divergence: focus symbol vs average of peers."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = focus if focus and focus in syms else syms[0]
+    data = await detect_funding_divergence(focus_symbol=target, divergence_multiplier=multiplier)
+    return {"status": "ok", **data}
 
 
 @router.get("/cvd-momentum")
