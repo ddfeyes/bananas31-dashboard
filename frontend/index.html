@@ -135,6 +135,10 @@
   <!-- Funding -->
   <div class="card">
     <h2>Funding Rate</h2>
+    <div id="funding-annotation" style="font-size:11px; margin-bottom:6px; padding:6px 10px; border-radius:4px; background:var(--bg3);">
+      <span id="funding-signal" style="font-weight:bold;">—</span>
+      <span id="funding-next" style="color:var(--muted); margin-left:8px;"></span>
+    </div>
     <canvas id="chart-funding"></canvas>
     <div id="funding-rates" style="margin-top:10px;"></div>
   </div>
@@ -165,6 +169,24 @@
       <span style="color:var(--muted)" id="vp-va-pct"></span>
     </div>
     <canvas id="chart-vp" style="height:200px !important;"></canvas>
+  </div>
+
+  <!-- Orderbook Heatmap -->
+  <div class="card wide">
+    <h2>Orderbook Heatmap (5min)</h2>
+    <div style="font-size:11px; color:var(--muted); margin-bottom:8px; display:flex; gap:16px; align-items:center;">
+      <span>🔵 Ask walls</span><span>🔴 Bid walls</span>
+      <span style="margin-left:auto;" id="heatmap-mid">mid: —</span>
+      <span id="heatmap-tooltip" style="color:var(--text); min-width:200px; text-align:right;"></span>
+    </div>
+    <div style="position:relative; overflow:hidden;">
+      <canvas id="heatmap-canvas" style="width:100%; height:220px; display:block; cursor:crosshair;"></canvas>
+    </div>
+    <div style="display:flex; justify-content:space-between; margin-top:4px; font-size:10px; color:var(--muted);">
+      <span id="heatmap-t-start">—</span>
+      <span>← 5 min window →</span>
+      <span id="heatmap-t-end">—</span>
+    </div>
   </div>
 
   <!-- Alerts: OI Spike + Delta Divergence + Large Trades -->
@@ -451,6 +473,27 @@ function updateSummary(summary) {
     frDiv.innerHTML = Object.entries(fr).map(([ex, rate]) =>
       `<div class="funding-row"><span>${ex}</span><span class="${rate > 0 ? 'positive' : 'negative'}">${fmt(rate * 100, 6)}%</span></div>`
     ).join('');
+
+    // Funding annotation
+    const rates = Object.values(fr);
+    if (rates.length > 0) {
+      const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+      const sigEl = document.getElementById('funding-signal');
+      const annBox = document.getElementById('funding-annotation');
+      if (avgRate > 0.0001) {
+        sigEl.style.color = 'var(--red)';
+        sigEl.textContent = `⬆ Longs pay shorts (${fmt(avgRate * 100, 4)}%) — bearish pressure`;
+        annBox.style.background = '#4d000033';
+      } else if (avgRate < -0.0001) {
+        sigEl.style.color = 'var(--green)';
+        sigEl.textContent = `⬇ Shorts pay longs (${fmt(Math.abs(avgRate) * 100, 4)}%) — bullish pressure`;
+        annBox.style.background = '#00330033';
+      } else {
+        sigEl.style.color = 'var(--muted)';
+        sigEl.textContent = `Neutral funding (${fmt(avgRate * 100, 6)}%)`;
+        annBox.style.background = 'var(--bg3)';
+      }
+    }
   }
 
   // Market depth chart (from WS)
@@ -515,7 +558,10 @@ function selectSymbol(sym) {
   document.getElementById('header-title').textContent = '🍌 ' + sym;
   document.title = sym + ' Dashboard';
   connectWS(sym);
+  heatmapData = null;
+  renderHeatmap();
   refreshAll();
+  refreshHeatmap();
 }
 
 async function loadSymbols() {
@@ -735,6 +781,151 @@ async function refreshAll() {
   // Orderbook + depth now come via WebSocket (updateSummary)
 }
 
+// ── Orderbook Heatmap ────────────────────────────────────────────────────────
+let heatmapData = null;
+
+function renderHeatmap() {
+  const canvas = document.getElementById('heatmap-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  // Resize canvas to match displayed size
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const W = rect.width * dpr;
+  const H = rect.height * dpr;
+  canvas.width = W;
+  canvas.height = H;
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = rect.height;
+
+  ctx.fillStyle = '#12121a';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!heatmapData || !heatmapData.timestamps?.length) {
+    ctx.fillStyle = '#555';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No heatmap data yet...', w / 2, h / 2);
+    return;
+  }
+
+  const { timestamps, bid_cumsum, ask_cumsum, price_levels } = heatmapData;
+  const numTime = timestamps.length;
+  const numBins = price_levels.length;
+
+  // Find max volume for normalization
+  let maxVol = 0;
+  for (let t = 0; t < numTime; t++) {
+    for (let b = 0; b < numBins; b++) {
+      if (bid_cumsum[t]?.[b] > maxVol) maxVol = bid_cumsum[t][b];
+      if (ask_cumsum[t]?.[b] > maxVol) maxVol = ask_cumsum[t][b];
+    }
+  }
+  if (maxVol === 0) maxVol = 1;
+
+  const cellW = w / numTime;
+  const cellH = h / numBins;
+
+  for (let t = 0; t < numTime; t++) {
+    for (let b = 0; b < numBins; b++) {
+      const bidVol = bid_cumsum[t]?.[b] || 0;
+      const askVol = ask_cumsum[t]?.[b] || 0;
+      const vol = bidVol > askVol ? bidVol : askVol;
+      const isBid = bidVol >= askVol;
+      const intensity = Math.min(1, vol / maxVol);
+
+      if (intensity < 0.01) {
+        ctx.fillStyle = '#12121a';
+      } else if (isBid) {
+        // Red for bids
+        const r = Math.round(60 + 195 * intensity);
+        const g = Math.round(10 + 30 * (1 - intensity));
+        const b2 = Math.round(10 + 20 * (1 - intensity));
+        ctx.fillStyle = `rgb(${r},${g},${b2})`;
+      } else {
+        // Blue for asks
+        const r2 = Math.round(10 + 30 * (1 - intensity));
+        const g2 = Math.round(50 + 100 * intensity);
+        const b3 = Math.round(80 + 175 * intensity);
+        ctx.fillStyle = `rgb(${r2},${g2},${b3})`;
+      }
+
+      // bins are ordered low->high; invert Y so high price is at top
+      const yIdx = numBins - 1 - b;
+      ctx.fillRect(
+        t * cellW,
+        yIdx * cellH,
+        Math.max(1, cellW - 0.5),
+        Math.max(1, cellH - 0.5)
+      );
+    }
+  }
+
+  // Draw mid-price line
+  if (heatmapData.mid_price && price_levels.length > 1) {
+    const pLow = price_levels[0] - (price_levels[1] - price_levels[0]) * 0.5;
+    const pHigh = price_levels[numBins - 1] + (price_levels[1] - price_levels[0]) * 0.5;
+    const mid = heatmapData.mid_price;
+    const midY = h * (1 - (mid - pLow) / (pHigh - pLow));
+    ctx.strokeStyle = '#f0c04066';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(w, midY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Time labels
+  if (timestamps.length > 1) {
+    document.getElementById('heatmap-t-start').textContent = fmtTs(timestamps[0]);
+    document.getElementById('heatmap-t-end').textContent = fmtTs(timestamps[timestamps.length - 1]);
+  }
+  document.getElementById('heatmap-mid').textContent = 'mid: ' + fmt(heatmapData.mid_price, 4);
+}
+
+// Hover tooltip
+(function setupHeatmapHover() {
+  const canvas = document.getElementById('heatmap-canvas');
+  if (!canvas) return;
+  canvas.addEventListener('mousemove', (e) => {
+    if (!heatmapData || !heatmapData.timestamps?.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const numTime = heatmapData.timestamps.length;
+    const numBins = heatmapData.price_levels.length;
+    const tIdx = Math.min(numTime - 1, Math.floor(mx / w * numTime));
+    const bIdxInv = Math.min(numBins - 1, Math.floor(my / h * numBins));
+    const bIdx = numBins - 1 - bIdxInv;
+    const price = heatmapData.price_levels[bIdx];
+    const bidVol = heatmapData.bid_cumsum[tIdx]?.[bIdx] || 0;
+    const askVol = heatmapData.ask_cumsum[tIdx]?.[bIdx] || 0;
+    const ts = heatmapData.timestamps[tIdx];
+    document.getElementById('heatmap-tooltip').textContent =
+      `${fmtTs(ts)} | $${fmt(price, 4)} | bid: ${fmtK(bidVol)} ask: ${fmtK(askVol)}`;
+  });
+  canvas.addEventListener('mouseleave', () => {
+    const el = document.getElementById('heatmap-tooltip');
+    if (el) el.textContent = '';
+  });
+})();
+
+async function refreshHeatmap() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/orderbook-heatmap?symbol=${sym}&minutes=5`);
+  if (data?.status === 'ok') {
+    heatmapData = data;
+    renderHeatmap();
+  }
+}
+
 // ── Periodic symbol sync (pick up new symbols added at runtime) ──────────────
 async function syncSymbols() {
   const data = await fetchJSON('/api/symbols');
@@ -754,8 +945,11 @@ async function syncSymbols() {
     updateExportLinks(activeSymbol);
   }
   await refreshAll();
+  await refreshHeatmap();
   setInterval(refreshAll, 5000);
+  setInterval(refreshHeatmap, 5000);
   setInterval(syncSymbols, 30000);  // check for new symbols every 30s
+  window.addEventListener('resize', renderHeatmap);
 })();
 </script>
 </body>

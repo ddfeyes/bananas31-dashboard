@@ -1,4 +1,5 @@
 """Computed metrics: CVD, volume imbalance, OI momentum, phase classifier — multi-symbol."""
+import asyncio
 import time
 from typing import Dict, List, Optional
 
@@ -93,63 +94,130 @@ async def compute_oi_momentum(window_seconds: int = 300, symbol: str = None) -> 
     }
 
 
+_phase_history: list = []  # rolling history for smoothing
+
 async def classify_market_phase(symbol: str = None) -> Dict:
     """
-    Phase classifier based on OI momentum + price change + CVD.
+    Phase classifier v2: multi-window lookback + confidence smoothing.
 
-    Phases:
-    - Accumulation: price flat/down, OI up, CVD slightly positive
-    - Distribution: price flat/up, OI up, CVD slightly negative or diverging
-    - Markup: price up, OI up, CVD strongly positive
-    - Markdown: price down, OI up or down, CVD strongly negative
+    Uses 3 windows (1min, 5min, 15min) and weights signals by recency.
+    Applies exponential smoothing to confidence to reduce noise.
     """
-    cvd_data = await compute_cvd(window_seconds=300, symbol=symbol)
-    oi_mom = await compute_oi_momentum(window_seconds=300, symbol=symbol)
-    ob_data = await get_latest_orderbook(symbol=symbol, limit=2)
+    # Gather signals at multiple timeframes
+    windows = [60, 300, 900]
+    weights = [0.5, 0.3, 0.2]
 
-    price_change_pct = 0.0
-    if len(ob_data) >= 2:
-        p1 = ob_data[0].get("mid_price") or 0
-        p2 = ob_data[-1].get("mid_price") or 0
-        if p2:
-            price_change_pct = ((p1 - p2) / p2) * 100
+    tasks = [
+        compute_cvd(window_seconds=w, symbol=symbol) for w in windows
+    ] + [
+        compute_oi_momentum(window_seconds=w, symbol=symbol) for w in windows
+    ]
+    results = await asyncio.gather(*[asyncio.create_task(t) for t in tasks], return_exceptions=True)
 
-    cvd_delta = 0.0
-    if len(cvd_data) >= 2:
-        cvd_delta = cvd_data[-1]["cvd"] - cvd_data[0]["cvd"]
+    cvd_results = results[:3]
+    oi_results = results[3:]
 
-    oi_pct = oi_mom.get("avg_pct_change", 0)
+    ob_data = await get_latest_orderbook(symbol=symbol, limit=10)
 
+    # Price change at multiple windows (use ob snapshots)
+    def price_change_from_ob(ob_list):
+        if len(ob_list) < 2:
+            return 0.0
+        p_now = ob_list[0].get("mid_price") or 0
+        p_old = ob_list[-1].get("mid_price") or 0
+        if not p_old:
+            return 0.0
+        return (p_now - p_old) / p_old * 100
+
+    price_pct_now = price_change_from_ob(ob_data[:2]) if len(ob_data) >= 2 else 0.0
+    price_pct_broad = price_change_from_ob(ob_data) if len(ob_data) >= 5 else price_pct_now
+
+    # CVD deltas
+    def cvd_delta_of(data):
+        if isinstance(data, Exception) or len(data) < 2:
+            return 0.0
+        return data[-1]["cvd"] - data[0]["cvd"]
+
+    cvd_deltas = [cvd_delta_of(r) for r in cvd_results]
+    oi_pcts = []
+    for r in oi_results:
+        if isinstance(r, Exception):
+            oi_pcts.append(0.0)
+        else:
+            oi_pcts.append(r.get("avg_pct_change", 0))
+
+    # Weighted aggregation
+    def weighted(vals, ws):
+        total_w = sum(ws[:len(vals)])
+        return sum(v * w for v, w in zip(vals, ws)) / total_w if total_w > 0 else 0
+
+    w_cvd = weighted(cvd_deltas, weights)
+    w_oi = weighted(oi_pcts, weights)
+    w_price = price_pct_now * 0.6 + price_pct_broad * 0.4
+
+    # Normalize CVD by estimating total volume (rough)
+    cvd_norm = 0.0
+    if cvd_results[0] and not isinstance(cvd_results[0], Exception) and len(cvd_results[0]) > 1:
+        total_abs = sum(abs(p.get("delta", 0)) for p in cvd_results[0])
+        cvd_norm = w_cvd / total_abs if total_abs > 0 else 0
+
+    # Classification
     phase = "Unknown"
-    confidence = 0.5
+    raw_conf = 0.5
 
-    if price_change_pct > 0.1 and cvd_delta > 0 and oi_pct > 0:
+    price_up = w_price > 0.05
+    price_dn = w_price < -0.05
+    price_flat = not price_up and not price_dn
+    oi_up = w_oi > 0.01
+    oi_dn = w_oi < -0.01
+    cvd_pos = cvd_norm > 0.02
+    cvd_neg = cvd_norm < -0.02
+
+    if price_up and cvd_pos and oi_up:
         phase = "Markup"
-        confidence = min(0.95, 0.6 + abs(price_change_pct) * 0.1 + abs(cvd_delta) * 0.01)
-    elif price_change_pct < -0.1 and cvd_delta < 0:
+        raw_conf = 0.6 + abs(w_price) * 0.08 + abs(cvd_norm) * 0.3
+    elif price_dn and cvd_neg:
         phase = "Markdown"
-        confidence = min(0.95, 0.6 + abs(price_change_pct) * 0.1 + abs(cvd_delta) * 0.01)
-    elif abs(price_change_pct) <= 0.1 and oi_pct > 0 and cvd_delta >= 0:
+        raw_conf = 0.6 + abs(w_price) * 0.08 + abs(cvd_norm) * 0.3
+    elif price_flat and oi_up and cvd_pos:
         phase = "Accumulation"
-        confidence = 0.55 + oi_pct * 0.5
-    elif abs(price_change_pct) <= 0.1 and oi_pct > 0 and cvd_delta < 0:
+        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.5
+    elif price_flat and oi_up and cvd_neg:
         phase = "Distribution"
-        confidence = 0.55 + oi_pct * 0.5
-    elif oi_pct < -0.05:
-        phase = "Markdown" if cvd_delta < 0 else "Accumulation"
-        confidence = 0.5
+        raw_conf = 0.55 + abs(w_oi) * 2 + abs(cvd_norm) * 0.5
+    elif price_up and cvd_neg:
+        phase = "Distribution"
+        raw_conf = 0.5 + abs(cvd_norm) * 0.4
+    elif price_dn and cvd_pos:
+        phase = "Accumulation"
+        raw_conf = 0.5 + abs(cvd_norm) * 0.3
+    elif oi_dn:
+        phase = "Markdown" if w_price < 0 else "Distribution"
+        raw_conf = 0.45
 
-    confidence = min(0.99, max(0.1, confidence))
+    raw_conf = min(0.99, max(0.1, raw_conf))
+
+    # Exponential smoothing on confidence using rolling history
+    global _phase_history
+    _phase_history.append({"phase": phase, "conf": raw_conf})
+    if len(_phase_history) > 10:
+        _phase_history = _phase_history[-10:]
+
+    # Smooth: recent phases that agree boost confidence
+    same_phase_count = sum(1 for h in _phase_history if h["phase"] == phase)
+    smooth_conf = raw_conf * 0.7 + (same_phase_count / len(_phase_history)) * 0.3
 
     return {
         "phase": phase,
-        "confidence": round(confidence, 3),
+        "confidence": round(min(0.99, smooth_conf), 3),
         "signals": {
-            "price_change_pct": round(price_change_pct, 4),
-            "cvd_delta": round(cvd_delta, 4),
-            "oi_pct_change": round(oi_pct, 4),
+            "price_change_pct": round(w_price, 4),
+            "cvd_delta": round(w_cvd, 4),
+            "cvd_norm": round(cvd_norm, 4),
+            "oi_pct_change": round(w_oi, 4),
         },
         "description": _phase_description(phase),
+        "lookback_windows": windows,
     }
 
 

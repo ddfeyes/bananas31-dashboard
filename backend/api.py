@@ -14,6 +14,7 @@ from storage import (
     get_oi_history,
     get_funding_history,
     get_recent_liquidations,
+    get_orderbook_snapshots_for_heatmap,
 )
 from metrics import (
     compute_cvd,
@@ -360,6 +361,118 @@ async def export_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@router.get("/orderbook-heatmap")
+async def orderbook_heatmap(
+    symbol: Optional[str] = None,
+    minutes: int = Query(default=5, le=30),
+):
+    """
+    Returns cumulative orderbook volume binned over time for heatmap visualization.
+    Y-axis: price levels (±0.5% from mid-price, 20 bins)
+    X-axis: time (sampled every 10s)
+    """
+    import json as _json
+    import math
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - minutes * 60
+
+    snapshots = await get_orderbook_snapshots_for_heatmap(target, since, sample_interval=10)
+
+    if not snapshots:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "mid_price": None,
+            "timestamps": [],
+            "bid_cumsum": [],
+            "ask_cumsum": [],
+            "price_levels": [],
+        }
+
+    NUM_BINS = 20
+    RANGE_PCT = 0.005  # ±0.5%
+
+    # Use latest mid_price as reference
+    ref_mid = next((s["mid_price"] for s in reversed(snapshots) if s["mid_price"]), None)
+    if not ref_mid:
+        return {"status": "ok", "symbol": target, "mid_price": None,
+                "timestamps": [], "bid_cumsum": [], "ask_cumsum": [], "price_levels": []}
+
+    ref_mid = float(ref_mid)
+    price_low = ref_mid * (1 - RANGE_PCT)
+    price_high = ref_mid * (1 + RANGE_PCT)
+    bin_size = (price_high - price_low) / NUM_BINS
+
+    # Build price level centers
+    price_levels = [round(price_low + (i + 0.5) * bin_size, 8) for i in range(NUM_BINS)]
+
+    timestamps = []
+    bid_cumsum = []  # list of NUM_BINS arrays
+    ask_cumsum = []
+
+    for snap in snapshots:
+        ts = snap["ts"]
+        mid = snap["mid_price"]
+        if not mid:
+            continue
+
+        try:
+            raw_bids = _json.loads(snap["bids"] or "[]")
+            raw_asks = _json.loads(snap["asks"] or "[]")
+        except Exception:
+            continue
+
+        # Initialize bins
+        bid_bins = [0.0] * NUM_BINS
+        ask_bins = [0.0] * NUM_BINS
+
+        for p, q in raw_bids:
+            p, q = float(p), float(q)
+            if price_low <= p <= price_high:
+                idx = min(int((p - price_low) / bin_size), NUM_BINS - 1)
+                bid_bins[idx] += q
+
+        for p, q in raw_asks:
+            p, q = float(p), float(q)
+            if price_low <= p <= price_high:
+                idx = min(int((p - price_low) / bin_size), NUM_BINS - 1)
+                ask_bins[idx] += q
+
+        # Convert to cumulative (from mid outward)
+        mid_bin = min(int((float(mid) - price_low) / bin_size), NUM_BINS - 1)
+        mid_bin = max(0, mid_bin)
+
+        # Bids: cumulate downward from mid
+        bid_cum = [0.0] * NUM_BINS
+        running = 0.0
+        for i in range(mid_bin, -1, -1):
+            running += bid_bins[i]
+            bid_cum[i] = running
+
+        # Asks: cumulate upward from mid
+        ask_cum = [0.0] * NUM_BINS
+        running = 0.0
+        for i in range(mid_bin, NUM_BINS):
+            running += ask_bins[i]
+            ask_cum[i] = running
+
+        timestamps.append(ts)
+        bid_cumsum.append([round(v, 4) for v in bid_cum])
+        ask_cumsum.append([round(v, 4) for v in ask_cum])
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "mid_price": ref_mid,
+        "timestamps": timestamps,
+        "bid_cumsum": bid_cumsum,    # list[time][bin]
+        "ask_cumsum": ask_cumsum,    # list[time][bin]
+        "price_levels": price_levels,
+    }
 
 
 @router.get("/metrics/summary")
