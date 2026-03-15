@@ -16,7 +16,8 @@ let priceChart   = null;   // TradingView Lightweight Charts instance
 let oiChart      = null;   // Chart.js
 let cvdChart     = null;   // Chart.js
 let fundingChart = null;   // Chart.js
-let spreadChart  = null;   // Chart.js
+let spreadChart     = null;   // Chart.js
+let adaptiveVpChart = null;   // Chart.js — adaptive volume profile
 let wsAlerts     = null;
 let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
@@ -295,6 +296,116 @@ function initSpreadChart() {
   });
 }
 
+function initAdaptiveVpChart() {
+  const canvas = document.getElementById('adaptive-vp-canvas');
+  if (!canvas || !window.Chart) return;
+  adaptiveVpChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy',  data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
+        { label: 'Sell', data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: '#1c2030',
+          titleColor: '#6b7280',
+          bodyColor: '#e2e8f0',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          callbacks: {
+            title: ctx => `Price: ${ctx[0]?.label ?? ''}`,
+            label: ctx => ` ${ctx.dataset.label}: ${fmtK(ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: { color: '#6b7280', font: { size: 9 }, callback: v => fmtK(v) },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: { color: '#6b7280', font: { size: 8 }, maxTicksLimit: 14 },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+      },
+    },
+  });
+}
+
+// ── Render: Adaptive Volume Profile ──────────────────────────────────────────
+async function renderAdaptiveVolumeProfile() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/volume-profile/adaptive?symbol=${sym}&bins=40`);
+  const metricsEl = document.getElementById('adaptive-vp-metrics');
+  const badge     = document.getElementById('adaptive-vp-badge');
+
+  if (!data?.bins?.length) {
+    if (metricsEl) metricsEl.innerHTML =
+      '<div class="text-muted" style="font-size:11px;">Collecting session data…</div>';
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+
+  // ── Metrics row ────────────────────────────────────────────────────────────
+  if (metricsEl) {
+    const sessionMins = Math.round((data.window_seconds || 0) / 60);
+    metricsEl.innerHTML = `
+      <span style="color:var(--muted)">POC <span style="color:var(--yellow);font-weight:700">${fmtPrice(data.poc)}</span></span>
+      <span style="color:var(--muted)">VAH <span style="color:var(--green)">${fmtPrice(data.vah)}</span></span>
+      <span style="color:var(--muted)">VAL <span style="color:var(--red)">${fmtPrice(data.val)}</span></span>
+      <span style="color:var(--muted)">Vol <span style="color:var(--fg)">${fmtK(data.total_volume)}</span></span>
+      <span style="color:var(--muted)">VA <span style="color:var(--yellow)">${(data.value_area_pct || 70).toFixed(1)}%</span></span>
+      <span style="color:var(--muted)">Session <span style="color:var(--muted)">${sessionMins}m</span></span>
+    `;
+  }
+
+  // ── Badge (POC price) ──────────────────────────────────────────────────────
+  if (badge) {
+    badge.textContent = 'POC ' + fmtPrice(data.poc);
+    badge.style.display = 'inline-block';
+  }
+
+  if (!adaptiveVpChart) return;
+
+  // Sort bins low→high (horizontal bar: bottom=low, top=high)
+  const bins = [...data.bins].sort((a, b) => a.price - b.price);
+
+  const labels   = bins.map(b => fmtPrice(b.price));
+  const buyVols  = bins.map(b => b.buy_vol  || 0);
+  const sellVols = bins.map(b => b.sell_vol || 0);
+
+  // POC highlighted in yellow; value area semi-opaque; outside area faded
+  const buyColors = bins.map(b =>
+    b.is_poc        ? 'rgba(240,192,64,0.95)'
+    : b.in_value_area ? 'rgba(0,224,130,0.55)'
+    : 'rgba(0,224,130,0.20)'
+  );
+  const sellColors = bins.map(b =>
+    b.is_poc        ? 'rgba(240,192,64,0.75)'
+    : b.in_value_area ? 'rgba(255,77,79,0.55)'
+    : 'rgba(255,77,79,0.20)'
+  );
+
+  adaptiveVpChart.data.labels                          = labels;
+  adaptiveVpChart.data.datasets[0].data                = buyVols;
+  adaptiveVpChart.data.datasets[0].backgroundColor     = buyColors;
+  adaptiveVpChart.data.datasets[1].data                = sellVols;
+  adaptiveVpChart.data.datasets[1].backgroundColor     = sellColors;
+  adaptiveVpChart.update('none');
+}
+
 function resetCharts() {
   _lastTradeId = null;
   _lastPrice = null;
@@ -315,6 +426,7 @@ function resetCharts() {
   clearChart(cvdChart);
   clearChart(fundingChart);
   clearChart(spreadChart);
+  clearChart(adaptiveVpChart);
 
   document.getElementById('trade-tape').innerHTML = '';
   document.getElementById('cvd-metrics').innerHTML = '';
@@ -322,6 +434,8 @@ function resetCharts() {
   document.getElementById('spread-metrics').innerHTML = '';
   document.getElementById('vol-imbalance-content').innerHTML = '';
   document.getElementById('oi-metrics').innerHTML = '';
+  const avpMetrics = document.getElementById('adaptive-vp-metrics');
+  if (avpMetrics) avpMetrics.innerHTML = '';
 }
 
 // ── Render: Price Chart (OHLCV) ───────────────────────────────────────────────
@@ -1254,6 +1368,7 @@ async function refresh() {
     renderMomentum(),
     renderCorrelations(),
     renderVpin(),
+    renderAdaptiveVolumeProfile(),
   ]);
 }
 
@@ -1264,6 +1379,7 @@ async function init() {
   initCvdChart();
   initFundingChart();
   initSpreadChart();
+  initAdaptiveVpChart();
   connectAlerts();
 
   await loadSymbols();

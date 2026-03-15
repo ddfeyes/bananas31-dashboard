@@ -528,3 +528,17 @@ html, body {
   color: var(--muted);
   font-size: 11px;
 }
+
+/* ── Adaptive Volume Profile ──────────────────────────────────────────────── */
+#adaptive-vp-container {
+  height: 240px;
+  position: relative;
+}
+
+#adaptive-vp-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 10px;
+}

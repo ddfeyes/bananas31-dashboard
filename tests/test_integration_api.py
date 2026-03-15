@@ -162,6 +162,64 @@ class TestDepthAndVolume:
         data = get(base_url, "/volume-profile", {"symbol": symbol})
         check_keys(data, "status", "symbol", "poc", "poc_volume", "vah", "val")
 
+    def test_adaptive_volume_profile_keys(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        check_keys(
+            data,
+            "status", "symbol",
+            "poc", "poc_volume", "vah", "val",
+            "bins", "total_volume", "value_area_pct",
+            "session_start", "window_seconds",
+        )
+        assert data["status"] == "ok"
+        assert data["symbol"] == symbol
+        assert isinstance(data["bins"], list)
+        assert data["session_start"] > 0
+
+    def test_adaptive_volume_profile_bins_flags(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        if not data.get("bins"):
+            pytest.skip("No session trade data yet")
+        for b in data["bins"]:
+            assert "is_poc" in b, f"bin missing is_poc: {b}"
+            assert "in_value_area" in b, f"bin missing in_value_area: {b}"
+            assert "pct_of_max" in b, f"bin missing pct_of_max: {b}"
+            assert isinstance(b["is_poc"], bool)
+            assert isinstance(b["in_value_area"], bool)
+            assert 0.0 <= b["pct_of_max"] <= 100.0, f"pct_of_max out of range: {b['pct_of_max']}"
+
+    def test_adaptive_volume_profile_poc_unique(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        if not data.get("bins"):
+            pytest.skip("No session trade data yet")
+        poc_bins = [b for b in data["bins"] if b["is_poc"]]
+        assert len(poc_bins) == 1, f"Expected exactly 1 POC bin, got {len(poc_bins)}"
+        assert poc_bins[0]["pct_of_max"] == 100.0, "POC bin must have pct_of_max=100.0"
+
+    def test_adaptive_volume_profile_value_area_coverage(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        if not data.get("bins"):
+            pytest.skip("No session trade data yet")
+        total_vol = sum(b["volume"] for b in data["bins"])
+        va_vol = sum(b["volume"] for b in data["bins"] if b["in_value_area"])
+        if total_vol > 0:
+            pct = va_vol / total_vol * 100
+            assert pct >= 69.0, f"Value area covers only {pct:.1f}% (expected ~70%)"
+
+    def test_adaptive_volume_profile_bins_param(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol, "bins": 20})
+        if not data.get("bins"):
+            pytest.skip("No session trade data yet")
+        assert len(data["bins"]) <= 20, f"bins={len(data['bins'])} exceeds requested max 20"
+
+    def test_adaptive_volume_profile_vah_val_bracket_poc(self, base_url, symbol):
+        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        if not data.get("poc") or not data.get("vah") or not data.get("val"):
+            pytest.skip("No session trade data yet")
+        assert data["val"] <= data["poc"] <= data["vah"], (
+            f"VAL({data['val']}) <= POC({data['poc']}) <= VAH({data['vah']}) violated"
+        )
+
     def test_market_depth(self, base_url, symbol):
         data = get(base_url, "/market-depth", {"symbol": symbol})
         check_keys(data, "status", "symbol", "mid_price", "bids", "asks")

@@ -37,6 +37,7 @@ from metrics import (
     compute_oi_momentum,
     classify_market_phase,
     compute_volume_profile,
+    compute_volume_profile_adaptive,
     detect_delta_divergence,
     detect_large_trades,
     detect_oi_spike,
@@ -345,6 +346,27 @@ async def volume_profile(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_volume_profile(symbol=target, window_seconds=window, bins=bins)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/volume-profile/adaptive")
+async def volume_profile_adaptive(
+    bins: int = Query(default=50, le=200),
+    symbol: Optional[str] = None,
+    value_area_pct: float = Query(default=0.70, ge=0.5, le=0.95),
+):
+    """
+    Adaptive Volume Profile for the current session (midnight UTC → now).
+
+    Each bin includes is_poc, in_value_area, and pct_of_max (0–100) flags so the
+    frontend can highlight the Point of Control and value area without additional
+    computation.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_profile_adaptive(
+        symbol=target, bins=bins, value_area_pct=value_area_pct
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
