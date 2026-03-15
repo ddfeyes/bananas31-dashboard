@@ -67,6 +67,7 @@ from metrics import (
     detect_squeeze_setup,
     compute_tick_imbalance_bars,
     compute_volume_bars,
+    compute_price_ladder,
 )
 
 router = APIRouter(prefix="/api")
@@ -4374,6 +4375,48 @@ async def volume_clock_endpoint(
     trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
 
     result = compute_volume_bars(trades, volume_threshold=volume_threshold)
+@router.get("/price-ladder")
+async def price_ladder_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=300, ge=30, le=1800, description="Lookback in seconds (default 5m)"),
+    num_levels: int = Query(default=20, ge=5, le=50, description="Price levels on each side of mid"),
+    bin_size: float = Query(default=None, description="Price bin width; auto-computed from spread if omitted"),
+    wall_sigma: float = Query(default=1.5, ge=0.5, le=5.0, description="Std-dev multiplier for wall detection"),
+):
+    """
+    Price ladder heatmap: order book density at each price level accumulated over window.
+
+    Returns bid/ask volume per price bin (mean across snapshots), wall detection,
+    and best bid/ask for real-time DOM visualisation.
+    """
+    import json as _json
+    since = time.time() - window
+    snapshots_raw = await get_orderbook_snapshots_for_heatmap(
+        symbol=symbol, since=since, sample_interval=5
+    )
+
+    # Parse bids/asks JSON strings from storage
+    snapshots = []
+    for snap in snapshots_raw:
+        try:
+            bids = _json.loads(snap.get("bids") or "[]")
+            asks = _json.loads(snap.get("asks") or "[]")
+        except Exception:
+            continue
+        if snap.get("mid_price"):
+            snapshots.append({
+                "ts":        snap["ts"],
+                "bids":      bids,
+                "asks":      asks,
+                "mid_price": float(snap["mid_price"]),
+            })
+
+    result = compute_price_ladder(
+        snapshots,
+        num_levels=num_levels,
+        bin_size=bin_size,
+        wall_sigma=wall_sigma,
+    )
 
     return {
         "status": "ok",
