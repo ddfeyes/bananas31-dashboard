@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BANANAS31/USDT Dashboard</title>
+  <title>BANANAS31 Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     :root {
@@ -22,12 +22,20 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; font-size: 13px; }
     header {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
       padding: 12px 20px; background: var(--bg2); border-bottom: 1px solid var(--border);
     }
     header h1 { color: var(--accent); font-size: 18px; letter-spacing: 2px; }
     #price-display { font-size: 24px; font-weight: bold; color: var(--green); }
     #status { color: var(--muted); font-size: 11px; }
+    #symbol-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .sym-tab {
+      padding: 4px 12px; border-radius: 14px; border: 1px solid var(--border);
+      background: var(--bg3); color: var(--muted); cursor: pointer; font-size: 11px;
+      font-family: 'Courier New', monospace; letter-spacing: 0.5px; transition: all 0.15s;
+    }
+    .sym-tab:hover { border-color: var(--accent); color: var(--text); }
+    .sym-tab.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: bold; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -78,7 +86,8 @@
 </head>
 <body>
 <header>
-  <h1>🍌 BANANAS31/USDT</h1>
+  <h1 id="header-title">🍌 Dashboard</h1>
+  <div id="symbol-tabs"></div>
   <div id="price-display">—</div>
   <div id="status"><span class="refresh-dot"></span>Auto-refresh 5s</div>
 </header>
@@ -149,7 +158,11 @@
 <script>
 const API = '';  // same origin
 
-// Chart helpers
+// ── Symbol state ────────────────────────────────────────────────────────────
+let activeSymbol = null;
+let allSymbols = [];
+
+// ── Chart helpers ────────────────────────────────────────────────────────────
 function mkChart(id, label, color, type='line') {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
@@ -236,13 +249,53 @@ async function fetchJSON(url) {
   } catch { return null; }
 }
 
+// ── Symbol tabs ──────────────────────────────────────────────────────────────
+function renderSymbolTabs() {
+  const container = document.getElementById('symbol-tabs');
+  container.innerHTML = allSymbols.map(sym =>
+    `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')">${sym.replace('USDT','')}<span style="font-size:9px;opacity:0.6">/USDT</span></div>`
+  ).join('');
+}
+
+function selectSymbol(sym) {
+  if (sym === activeSymbol) return;
+  activeSymbol = sym;
+  // Clear charts
+  Object.values(charts).forEach(c => {
+    c.data.labels = [];
+    c.data.datasets.forEach(ds => ds.data = []);
+    c.update('none');
+  });
+  renderSymbolTabs();
+  document.getElementById('header-title').textContent = '🍌 ' + sym;
+  document.title = sym + ' Dashboard';
+  refreshAll();
+}
+
+async function loadSymbols() {
+  const data = await fetchJSON('/api/symbols');
+  if (data?.symbols?.length) {
+    allSymbols = data.symbols;
+    if (!activeSymbol || !allSymbols.includes(activeSymbol)) {
+      activeSymbol = allSymbols[0];
+    }
+    renderSymbolTabs();
+    document.getElementById('header-title').textContent = '🍌 ' + activeSymbol;
+    document.title = activeSymbol + ' Dashboard';
+  }
+}
+
+// ── Main refresh ─────────────────────────────────────────────────────────────
 async function refreshAll() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+
   const [summary, cvd, oi, funding, liqs] = await Promise.all([
-    fetchJSON('/api/metrics/summary'),
-    fetchJSON('/api/cvd/history?window=3600'),
-    fetchJSON('/api/oi/history?limit=300'),
-    fetchJSON('/api/funding/history?limit=200'),
-    fetchJSON('/api/liquidations/recent?limit=100'),
+    fetchJSON(`/api/metrics/summary?symbol=${sym}`),
+    fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
+    fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
+    fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
+    fetchJSON(`/api/liquidations/recent?limit=100&symbol=${sym}`),
   ]);
 
   // Price
@@ -306,7 +359,7 @@ async function refreshAll() {
     updateChart(charts.cvd, labels, data, lastCvd >= 0 ? '#ce93d8' : '#ff4444');
   }
 
-  // OI chart (aggregate by ts, prefer binance)
+  // OI chart
   if (oi?.data?.length) {
     const binanceOI = oi.data.filter(d => d.exchange === 'binance');
     const src = binanceOI.length > 0 ? binanceOI : oi.data;
@@ -332,8 +385,7 @@ async function refreshAll() {
       </div>`
     ).join('') || '<div style="color:var(--muted);text-align:center;padding:20px">No liquidations yet</div>';
 
-    // Liq bar chart: bucket by minute, buy vs sell
-    const now = Date.now() / 1000;
+    // Liq bar chart: bucket by minute
     const buckets = {};
     for (const l of liqs.data) {
       const min = Math.floor(l.ts / 60);
@@ -342,13 +394,13 @@ async function refreshAll() {
     }
     const mins = Object.keys(buckets).sort().slice(-30);
     charts.liq.data.labels = mins.map(m => fmtTs(m * 60));
-    charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);  // long liq = sell side forced
+    charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);
     charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
     charts.liq.update('none');
   }
 
   // Orderbook
-  const ob = await fetchJSON('/api/orderbook/latest?limit=1');
+  const ob = await fetchJSON(`/api/orderbook/latest?limit=1&symbol=${sym}`);
   if (ob?.data?.length) {
     let bids = [], asks = [];
     try {
@@ -364,9 +416,24 @@ async function refreshAll() {
   }
 }
 
-// Initial load + auto-refresh
-refreshAll();
-setInterval(refreshAll, 5000);
+// ── Periodic symbol sync (pick up new symbols added at runtime) ──────────────
+async function syncSymbols() {
+  const data = await fetchJSON('/api/symbols');
+  if (data?.symbols?.length) {
+    const prev = JSON.stringify(allSymbols);
+    allSymbols = data.symbols;
+    if (!allSymbols.includes(activeSymbol)) activeSymbol = allSymbols[0];
+    if (JSON.stringify(allSymbols) !== prev) renderSymbolTabs();
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+(async () => {
+  await loadSymbols();
+  await refreshAll();
+  setInterval(refreshAll, 5000);
+  setInterval(syncSymbols, 30000);  // check for new symbols every 30s
+})();
 </script>
 </body>
 </html>
