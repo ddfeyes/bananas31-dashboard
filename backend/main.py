@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from cache import cache_clear
 from storage import init_db, cleanup_old_data, insert_pattern, insert_phase_snapshot
 from collectors import run_all_collectors, get_symbols
 from pollers import poller_loop
@@ -130,6 +131,8 @@ async def phase_snapshot_loop():
 async def lifespan(app: FastAPI):
     logger.info("Initializing DB...")
     await init_db()
+    cache_clear()
+    logger.info("Cache cleared on startup")
     logger.info("DB ready. Running startup cleanup...")
     try:
         await cleanup_old_data()

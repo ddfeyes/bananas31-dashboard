@@ -5,9 +5,13 @@ Validates wall detection, decay tracking, liquidation risk classification,
 and edge cases that mirror app.js renderObWalls().
 """
 import json
+import os
+import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 
 # ── Python mirrors of backend wall detection logic ────────────────────────────

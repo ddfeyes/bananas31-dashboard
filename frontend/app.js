@@ -1801,6 +1801,70 @@ async function renderCorrHeatmap() {
   }
 }
 
+// ── OB Walls ──────────────────────────────────────────────────────────────────
+async function renderObWalls() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/ob-walls?symbol=${sym}`);
+  const el = document.getElementById('ob-walls-content');
+  const badge = document.getElementById('ob-walls-badge');
+  if (!el) return;
+
+  if (!data) {
+    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted">No data yet</div>';
+    return;
+  }
+
+  const walls = data.walls || [];
+  const risk = data.liquidation_risk || 'low';
+
+  if (badge) {
+    badge.textContent = risk + ' risk';
+    badge.className = 'card-badge ' + (
+      risk === 'high' ? 'badge-red' : risk === 'medium' ? 'badge-yellow' : 'badge-blue'
+    );
+    badge.style.display = 'inline-block';
+  }
+
+  if (walls.length === 0) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:8px 0">No walls detected · median ${data.median_size != null ? data.median_size.toFixed(2) : '—'}</div>`;
+    return;
+  }
+
+  function wallColor(d) { return d < 5 ? 'var(--red)' : d < 20 ? 'var(--yellow)' : 'var(--green)'; }
+  function wallLabel(d) { return d < 5 ? 'solid' : d < 20 ? 'weakening' : 'breaking'; }
+  function fmtAge(s) { return s < 60 ? s + 's' : Math.floor(s/60) + 'm' + String(s%60).padStart(2,'0') + 's'; }
+
+  const rows = walls.map(w => {
+    const col = wallColor(w.decay_pct);
+    const sideCol = w.side === 'bid' ? 'var(--green)' : 'var(--red)';
+    const decayBar = Math.min(100, w.decay_pct);
+    return `<tr>
+      <td style="color:${sideCol};font-weight:600;padding:3px 6px 3px 0">${w.side.toUpperCase()}</td>
+      <td style="font-family:monospace;padding:3px 6px 3px 0">${typeof w.price === 'number' ? w.price.toFixed(6) : w.price}</td>
+      <td style="font-family:monospace;padding:3px 6px 3px 0">${w.size.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+      <td style="color:var(--muted);font-size:11px;padding:3px 6px 3px 0">${fmtAge(w.age_sec)}</td>
+      <td style="padding:3px 0">
+        <span style="color:${col};font-size:11px">${wallLabel(w.decay_pct)}</span>
+        <div style="background:var(--bg2);border-radius:2px;height:4px;width:50px;display:inline-block;vertical-align:middle;margin-left:4px">
+          <div style="background:${col};width:${decayBar}%;height:100%;border-radius:2px"></div>
+        </div>
+        <span style="color:var(--muted);font-size:10px;margin-left:4px">${w.decay_pct.toFixed(1)}%</span>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px">threshold: ${data.wall_threshold != null ? data.wall_threshold.toFixed(2) : '—'} · median: ${data.median_size != null ? data.median_size.toFixed(2) : '—'}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="color:var(--muted);font-size:10px;text-align:left">
+        <th style="padding:2px 6px 4px 0">side</th><th style="padding:2px 6px 4px 0">price</th>
+        <th style="padding:2px 6px 4px 0">size</th><th style="padding:2px 6px 4px 0">age</th>
+        <th style="padding:2px 0 4px 0">decay</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1843,6 +1907,7 @@ async function refresh() {
     safe(renderAdaptiveVolumeProfile),
     safe(renderTapeSpeed),
     safe(renderAggressorStreak),
+    safe(renderObWalls),
   ]);
 }
 

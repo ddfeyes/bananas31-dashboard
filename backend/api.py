@@ -10,6 +10,7 @@ import aiosqlite
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from cache import cache_result
 from collectors import get_symbols
 import storage
 from storage import (
@@ -288,6 +289,7 @@ async def trades_recent(
 
 
 @router.get("/oi/history")
+@cache_result(ttl_seconds=60)
 async def oi_history(
     limit: int = Query(default=300, le=2000),
     since: Optional[float] = None,
@@ -341,6 +343,7 @@ async def volume_imbalance_endpoint(
 
 
 @router.get("/volume-profile")
+@cache_result(ttl_seconds=60)
 async def volume_profile(
     window: int = Query(default=3600, le=86400),
     bins: int = Query(default=50, le=200),
@@ -470,6 +473,7 @@ async def delta_divergence(
 
 
 @router.get("/funding-momentum")
+@cache_result(ttl_seconds=60)
 async def funding_momentum(
     symbol: Optional[str] = None,
     periods: int = Query(default=4, ge=2, le=20),
@@ -576,6 +580,7 @@ async def oi_mcap_endpoint(symbol: Optional[str] = None):
 
 
 @router.get("/vwap-deviation")
+@cache_result(ttl_seconds=60)
 async def vwap_deviation_endpoint(
     symbol: Optional[str] = None,
     window: int = Query(default=3600, le=86400),
@@ -1832,6 +1837,7 @@ async def tape_speed_endpoint(
 
 
 @router.get("/spread-history")
+@cache_result(ttl_seconds=60)
 async def spread_history(
     window: int = Query(default=1800, le=86400),
     symbol: Optional[str] = None,
@@ -2071,6 +2077,7 @@ async def price_correlations(window: int = Query(default=3600, le=86400)):
 
 
 @router.get("/correlations/heatmap")
+@cache_result(ttl_seconds=60)
 async def correlations_heatmap():
     """
     20-period rolling correlation matrix using price returns (not raw prices).
