@@ -532,9 +532,9 @@
     </div>
   </div>
 
-  <!-- CVD -->
+  <!-- CVD + Price Overlay -->
   <div class="card">
-    <h2><span class="card-icon">⚖️</span>Cumulative Volume Delta (1h)</h2>
+    <h2><span class="card-icon">⚖️</span>CVD vs Price (1h)</h2>
     <canvas id="chart-cvd"></canvas>
   </div>
 
@@ -858,9 +858,67 @@ function mkDepthChart(id) {
   });
 }
 
+function mkCvdChart(id) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'CVD',
+          data: [],
+          borderColor: '#ab7df8',
+          backgroundColor: 'rgba(171,125,248,0.1)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          yAxisID: 'yCVD',
+        },
+        {
+          label: 'Price',
+          data: [],
+          borderColor: 'rgba(240,192,64,0.8)',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          yAxisID: 'yPrice',
+          borderDash: [],
+        }
+      ]
+    },
+    options: chartDefaults({
+      scales: {
+        x: { display: false, grid: { color: GRID_COLOR } },
+        yCVD: {
+          position: 'left',
+          ticks: { color: '#ab7df8', font: { size: 9 }, maxTicksLimit: 5 },
+          grid: { color: GRID_COLOR },
+        },
+        yPrice: {
+          position: 'right',
+          ticks: { color: 'rgba(240,192,64,0.8)', font: { size: 9 }, maxTicksLimit: 5 },
+          grid: { display: false },
+        }
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: chartDefaults().plugins.tooltip
+      }
+    })
+  });
+}
+
 const charts = {
   oi:      mkChart('chart-oi',      'OI',      '#42a5f5'),
-  cvd:     mkChart('chart-cvd',     'CVD',     '#ab7df8'),
+  cvd:     mkCvdChart('chart-cvd'),
   funding: mkChart('chart-funding', 'Funding', '#f0c040'),
   liq:     mkBarChart('chart-liq'),
   vp:      mkVolumeProfileChart('chart-vp'),
@@ -1179,12 +1237,18 @@ async function refreshAll() {
     fetchJSON(`/api/liq-cascade?window=60&threshold_usd=50000&symbol=${sym}`),
   ]);
 
-  // CVD chart
+  // CVD + Price dual-axis chart
   if (cvd?.data?.length) {
-    const labels = cvd.data.map(d => fmtTs(d.ts));
-    const data   = cvd.data.map(d => d.cvd);
-    const lastCvd = data[data.length - 1] || 0;
-    updateChart(charts.cvd, labels, data, lastCvd >= 0 ? '#ab7df8' : '#ef5350');
+    const labels  = cvd.data.map(d => fmtTs(d.ts));
+    const cvdData = cvd.data.map(d => d.cvd);
+    const priceData = cvd.data.map(d => d.price);
+    const lastCvd = cvdData[cvdData.length - 1] || 0;
+    charts.cvd.data.labels = labels;
+    charts.cvd.data.datasets[0].data = cvdData;
+    charts.cvd.data.datasets[0].borderColor = lastCvd >= 0 ? '#ab7df8' : '#ef5350';
+    charts.cvd.data.datasets[0].backgroundColor = lastCvd >= 0 ? 'rgba(171,125,248,0.08)' : 'rgba(239,83,80,0.08)';
+    charts.cvd.data.datasets[1].data = priceData;
+    charts.cvd.update();
   }
 
   // OI chart
