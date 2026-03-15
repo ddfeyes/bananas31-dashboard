@@ -62,6 +62,7 @@ from metrics import (
     compute_aggressor_ratio_series,
     compute_kalman_price,
     compute_ob_pressure_gradient,
+    detect_trade_clusters,
 )
 
 router = APIRouter(prefix="/api")
@@ -3374,4 +3375,48 @@ async def depth_ratio_endpoint(
         "interpretation": interpretation,
         "window_seconds": window,
         "series": series,
+    }
+
+
+@router.get("/trade-clusters")
+async def trade_clusters_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=300, ge=30, le=3600, description="Lookback window in seconds"),
+    cluster_window: float = Query(default=30.0, ge=1.0, le=300.0, description="Time window for burst detection (seconds)"),
+    price_tolerance: float = Query(default=0.05, ge=0.0, le=5.0, description="Price grouping tolerance (%)"),
+    min_trades: int = Query(default=5, ge=2, le=100, description="Minimum trades to qualify as a cluster"),
+):
+    """
+    Trade clustering detector: finds bursts of trades at the same price level.
+
+    Returns clusters sorted by ts_start desc (most recent first), each with:
+      ts_start, ts_end, price_level, trade_count, total_qty, total_usd,
+      buy_count, sell_count, dominant_side
+    """
+    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    trades = await get_recent_trades(since=since, symbol=target, limit=10000)
+
+    clusters = detect_trade_clusters(
+        trades,
+        window_seconds=cluster_window,
+        price_tolerance=price_tolerance,
+        min_trades=min_trades,
+    )
+    clusters_desc = list(reversed(clusters))
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "cluster_count": len(clusters),
+        "clusters": clusters_desc,
+        "params": {
+            "window_seconds": window,
+            "cluster_window": cluster_window,
+            "price_tolerance": price_tolerance,
+            "min_trades": min_trades,
+        },
     }

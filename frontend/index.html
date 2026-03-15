@@ -1106,6 +1106,16 @@
     <canvas id="chart-liq-heatmap" style="height:200px !important;"></canvas>
   </div>
 
+  <!-- Trade Clustering Detector -->
+  <div class="card">
+    <h2><span class="card-icon">🎯</span>Trade Clusters (5m)
+      <span id="cluster-summary" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Bursts of ≥5 trades at same price within 30s · green=buy-dominant · red=sell-dominant · grey=mixed</div>
+    <canvas id="chart-trade-clusters" style="height:140px !important;"></canvas>
+    <div id="cluster-list" style="max-height:180px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
+  </div>
+
   <!-- Whale Trades -->
   <div class="card" id="card-whales">
     <h2><span class="card-icon">🐳</span>Whale Trades &gt;$50k (1h)
@@ -2162,6 +2172,39 @@ let chartDepthRatio = null;
   });
 })();
 
+// Trade Clustering scatter chart
+let chartTradeClusters = null;
+(function initTradeClustersChart() {
+  const ctx = document.getElementById('chart-trade-clusters');
+  if (!ctx) return;
+  chartTradeClusters = new Chart(ctx, {
+    type: 'bubble',
+    data: { datasets: [
+      { label: 'Buy-dominant', data: [], backgroundColor: 'rgba(0,200,120,0.55)', borderColor: 'rgba(0,200,120,0.8)', borderWidth: 1 },
+      { label: 'Sell-dominant', data: [], backgroundColor: 'rgba(220,60,60,0.55)', borderColor: 'rgba(220,60,60,0.8)', borderWidth: 1 },
+      { label: 'Mixed', data: [], backgroundColor: 'rgba(150,150,150,0.4)', borderColor: 'rgba(180,180,180,0.7)', borderWidth: 1 },
+    ]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: 'rgba(200,200,200,0.7)', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: { callbacks: {
+          label: ctx => {
+            const d = ctx.raw;
+            return [`Price: $${d.y.toFixed(2)}`, `Count: ${d.tradeCount}`, `USD: $${(d.totalUsd/1000).toFixed(1)}k`, `${d.side}`];
+          }
+        }},
+      },
+      scales: {
+        x: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, callback: v => new Date(v*1000).toLocaleTimeString() }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, callback: v => '$'+v.toFixed(1) }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      },
+    },
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -3122,7 +3165,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3142,6 +3185,7 @@ async function refreshAll() {
     fetchJSON(`/api/flow-imbalance?window=3600&bucket_size=60&symbol=${sym}`),
     fetchJSON(`/api/liquidation-heatmap?window=3600&time_bucket=300&price_bins=20&symbol=${sym}`),
     fetchJSON(`/api/depth-ratio?window=600&levels=5&symbol=${sym}`),
+    fetchJSON(`/api/trade-clusters?window=300&cluster_window=30&price_tolerance=0.05&min_trades=5&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3416,6 +3460,51 @@ async function refreshAll() {
       const mn = Math.min(...series.map(d => d.ratio));
       const mx = Math.max(...series.map(d => d.ratio));
       infoEl.textContent = `avg: ${avg.toFixed(3)} · min: ${mn.toFixed(3)} · max: ${mx.toFixed(3)}`;
+    }
+  }
+
+  // ── Trade Clustering chart ────────────────────────────────────────────────
+  if (tradeClusters) {
+    const clusters = tradeClusters.clusters || [];
+    const summaryEl = document.getElementById('cluster-summary');
+    const listEl = document.getElementById('cluster-list');
+
+    if (summaryEl) {
+      const cnt = tradeClusters.cluster_count || 0;
+      const buyClusters = clusters.filter(c => c.dominant_side === 'buy').length;
+      const sellClusters = clusters.filter(c => c.dominant_side === 'sell').length;
+      summaryEl.textContent = `${cnt} clusters · 🟢 ${buyClusters} buy · 🔴 ${sellClusters} sell`;
+    }
+
+    if (chartTradeClusters && clusters.length) {
+      const buyData = [], sellData = [], mixedData = [];
+      for (const c of clusters) {
+        const r = Math.max(4, Math.min(20, Math.sqrt(c.total_usd / 1000) * 2));
+        const pt = { x: c.ts_start, y: c.price_level, r, tradeCount: c.trade_count, totalUsd: c.total_usd, side: c.dominant_side };
+        if (c.dominant_side === 'buy') buyData.push(pt);
+        else if (c.dominant_side === 'sell') sellData.push(pt);
+        else mixedData.push(pt);
+      }
+      chartTradeClusters.data.datasets[0].data = buyData;
+      chartTradeClusters.data.datasets[1].data = sellData;
+      chartTradeClusters.data.datasets[2].data = mixedData;
+      chartTradeClusters.update('none');
+    }
+
+    if (listEl) {
+      listEl.innerHTML = clusters.slice(0, 20).map(c => {
+        const col = c.dominant_side === 'buy' ? 'var(--green)' : c.dominant_side === 'sell' ? 'var(--red)' : 'var(--muted)';
+        const arrow = c.dominant_side === 'buy' ? '▲' : c.dominant_side === 'sell' ? '▼' : '—';
+        const dur = (c.ts_end - c.ts_start).toFixed(1);
+        return `<div style="display:flex;gap:10px;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);">
+          <span style="color:${col};min-width:18px;">${arrow}</span>
+          <span style="font-variant-numeric:tabular-nums;min-width:70px;">$${fmt(c.price_level, 2)}</span>
+          <span style="color:var(--muted);min-width:55px;">${c.trade_count} trades</span>
+          <span style="color:var(--yellow);min-width:60px;">$${fmtK(c.total_usd)}</span>
+          <span style="color:var(--muted);min-width:45px;">${dur}s</span>
+          <span style="color:var(--muted);font-size:10px;">${fmtTs(c.ts_start)}</span>
+        </div>`;
+      }).join('') || '<div style="color:var(--muted);padding:8px;">No clusters detected in last 5m</div>';
     }
   }
 

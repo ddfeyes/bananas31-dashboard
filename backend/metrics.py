@@ -2710,3 +2710,132 @@ async def compute_ob_pressure_gradient(
         "window_seconds": window_seconds,
         "bucket_size": bucket_size,
     }
+
+
+def detect_trade_clusters(
+    trades: List[dict],
+    window_seconds: float = 30,
+    price_tolerance: float = 0.01,
+    min_trades: int = 5,
+) -> List[dict]:
+    """Detect bursts of trades clustering at the same price level within a short window.
+
+    Algorithm:
+      1. Sort trades by ts.
+      2. Sliding window of ``window_seconds``: for each trade i as anchor, collect
+         all trades j where ts[j] - ts[i] <= window_seconds.
+      3. Within that window, group trades into price buckets: two trades are in the
+         same bucket if |price_a - price_b| / price_center <= price_tolerance / 100.
+         (price_tolerance is expressed as a percentage, e.g. 0.01 means 0.01%)
+      4. Any bucket with >= min_trades forms a cluster.
+      5. Deduplicate: if two clusters share the same anchor price group and overlap in
+         time, keep only the one with the most trades (the maximal cluster).
+
+    Returns:
+        List of cluster dicts sorted by ts_start:
+        {ts_start, ts_end, price_level, trade_count, total_qty, total_usd,
+         buy_count, sell_count, dominant_side}
+    """
+    if not trades:
+        return []
+
+    sorted_trades = sorted(trades, key=lambda t: t["ts"])
+    n = len(sorted_trades)
+
+    clusters = []
+    i = 0
+    while i < n:
+        anchor_ts = sorted_trades[i]["ts"]
+        # Collect all trades within [anchor_ts, anchor_ts + window_seconds]
+        window = []
+        for j in range(i, n):
+            if sorted_trades[j]["ts"] - anchor_ts <= window_seconds + 1e-9:
+                window.append(sorted_trades[j])
+            else:
+                break
+
+        if len(window) < min_trades:
+            i += 1
+            continue
+
+        # Group by price bucket using greedy merge: sort by price and
+        # merge trades within tolerance of the running group center.
+        by_price = sorted(window, key=lambda t: t["price"])
+        groups: List[List[dict]] = []
+        for trade in by_price:
+            merged = False
+            for grp in groups:
+                center = sum(t["price"] for t in grp) / len(grp)
+                tol_abs = center * (price_tolerance / 100.0) if price_tolerance > 0 else 0.0
+                if abs(trade["price"] - center) <= tol_abs:
+                    grp.append(trade)
+                    merged = True
+                    break
+            if not merged:
+                groups.append([trade])
+
+        for grp in groups:
+            if len(grp) < min_trades:
+                continue
+            grp_sorted = sorted(grp, key=lambda t: t["ts"])
+            ts_start = grp_sorted[0]["ts"]
+            ts_end = grp_sorted[-1]["ts"]
+            # Trim to window_seconds span
+            if ts_end - ts_start > window_seconds + 1e-9:
+                trimmed = [t for t in grp_sorted if t["ts"] - ts_start <= window_seconds + 1e-9]
+                if len(trimmed) < min_trades:
+                    continue
+                grp_sorted = trimmed
+                ts_end = grp_sorted[-1]["ts"]
+
+            price_level = sum(t["price"] for t in grp_sorted) / len(grp_sorted)
+            total_qty = sum(float(t["qty"]) for t in grp_sorted)
+            total_usd = sum(float(t["price"]) * float(t["qty"]) for t in grp_sorted)
+            buy_count = sum(1 for t in grp_sorted if (t.get("side") or "").lower() == "buy")
+            sell_count = sum(1 for t in grp_sorted if (t.get("side") or "").lower() == "sell")
+            if buy_count > sell_count:
+                dominant_side = "buy"
+            elif sell_count > buy_count:
+                dominant_side = "sell"
+            else:
+                dominant_side = "mixed"
+
+            clusters.append({
+                "ts_start": ts_start,
+                "ts_end": ts_end,
+                "price_level": round(price_level, 8),
+                "trade_count": len(grp_sorted),
+                "total_qty": round(total_qty, 8),
+                "total_usd": round(total_usd, 4),
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+                "dominant_side": dominant_side,
+            })
+
+        i += 1
+
+    if not clusters:
+        return []
+
+    # Deduplicate: keep the maximal cluster (highest trade_count) per (approx price, time overlap).
+    clusters.sort(key=lambda c: (c["ts_start"], c["price_level"]))
+
+    deduped: List[dict] = []
+    for c in clusters:
+        duplicate = False
+        for existing in deduped:
+            price_center = (c["price_level"] + existing["price_level"]) / 2
+            tol = price_center * (price_tolerance / 100.0) if price_tolerance > 0 else 0.0
+            same_price = abs(c["price_level"] - existing["price_level"]) <= tol
+            overlap = c["ts_start"] <= existing["ts_end"] and c["ts_end"] >= existing["ts_start"]
+            if same_price and overlap:
+                if c["trade_count"] > existing["trade_count"]:
+                    deduped.remove(existing)
+                    deduped.append(c)
+                duplicate = True
+                break
+        if not duplicate:
+            deduped.append(c)
+
+    deduped.sort(key=lambda c: c["ts_start"])
+    return deduped
