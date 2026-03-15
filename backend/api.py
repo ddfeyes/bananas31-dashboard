@@ -74,6 +74,8 @@ from metrics import (
     compute_tape_speed,
     compute_aggressor_imbalance_streak,
     compute_oi_weighted_price,
+    compute_realized_volatility_bands,
+    detect_ob_walls,
 )
 
 router = APIRouter(prefix="/api")
@@ -591,6 +593,18 @@ async def oi_weighted_price_endpoint(symbol: Optional[str] = None):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_oi_weighted_price(symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/realized-volatility-bands")
+async def realized_volatility_bands_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=20, ge=5, le=200),
+):
+    """Realized volatility bands: SMA center ± 2× per-candle vol (price units)."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_realized_volatility_bands(symbol=target, window=window)
     return {"status": "ok", "symbol": target, **data}
 
 
@@ -2053,6 +2067,99 @@ async def price_correlations(window: int = Query(default=3600, le=86400)):
         "symbols": list(price_series.keys()),
         "data_points": len(sorted_ts),
         "window": window,
+    }
+
+
+@router.get("/correlations/heatmap")
+async def correlations_heatmap():
+    """
+    20-period rolling correlation matrix using price returns (not raw prices).
+
+    Returns matrix as array of arrays for heatmap rendering.
+    Format: {"symbols": [...], "matrix": [[1, 0.85, ...], ...], "timestamp": int, "quality": int}
+    """
+    syms = get_symbols()
+    n = len(syms)
+
+    def empty_response(quality=0):
+        return {
+            "status": "ok",
+            "symbols": syms,
+            "matrix": [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)],
+            "timestamp": int(time.time()),
+            "quality": quality,
+        }
+
+    if n < 2:
+        return empty_response()
+
+    # Fetch enough candles to compute 20 returns (need 21 closes)
+    candle_tasks = [
+        get_ohlcv(interval_seconds=60, window_seconds=2400, symbol=sym)
+        for sym in syms
+    ]
+    all_candles = await asyncio.gather(*candle_tasks, return_exceptions=True)
+
+    # Build time-indexed close price series per symbol
+    price_series = {}
+    for sym, candles in zip(syms, all_candles):
+        if isinstance(candles, list) and candles:
+            price_series[sym] = {c["ts"]: c["close"] for c in candles}
+
+    if len(price_series) < 2:
+        return empty_response()
+
+    # Find common timestamps across all symbols
+    all_ts = set.intersection(*[set(v.keys()) for v in price_series.values()])
+    sorted_ts = sorted(all_ts)[-21:]  # last 21 for 20 returns
+
+    if len(sorted_ts) < 2:
+        return empty_response()
+
+    # Build aligned close price arrays
+    aligned = {sym: [price_series[sym][ts] for ts in sorted_ts] for sym in price_series}
+
+    # Compute price returns: r[i] = (p[i+1] - p[i]) / p[i]
+    def price_returns(prices):
+        result = []
+        for i in range(1, len(prices)):
+            if prices[i - 1] != 0:
+                result.append((prices[i] - prices[i - 1]) / prices[i - 1])
+        return result
+
+    returns = {sym: price_returns(aligned[sym]) for sym in price_series}
+    quality = min(len(r) for r in returns.values()) if returns else 0
+
+    def pearson_corr(xs, ys):
+        n = len(xs)
+        if n < 2:
+            return 0.0
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        dx = (sum((x - mx) ** 2 for x in xs)) ** 0.5
+        dy = (sum((y - my) ** 2 for y in ys)) ** 0.5
+        if dx == 0 or dy == 0:
+            return 0.0
+        return round(num / (dx * dy), 4)
+
+    ordered_syms = [s for s in syms if s in price_series]
+    matrix = []
+    for sym_a in ordered_syms:
+        row = []
+        for sym_b in ordered_syms:
+            if sym_a == sym_b:
+                row.append(1.0)
+            else:
+                row.append(pearson_corr(returns[sym_a], returns[sym_b]))
+        matrix.append(row)
+
+    return {
+        "status": "ok",
+        "symbols": ordered_syms,
+        "matrix": matrix,
+        "timestamp": int(time.time()),
+        "quality": quality,
     }
 
 
@@ -4857,3 +4964,25 @@ async def whale_clustering_endpoint(
             **result,
         }
     )
+
+
+@router.get("/ob-walls")
+async def ob_walls_endpoint(
+    symbol: Optional[str] = None,
+    lookback_sec: int = Query(default=600, ge=60, le=3600),
+    wall_multiplier: float = Query(default=10.0, ge=2.0, le=50.0),
+):
+    """
+    Detect large static orders (walls) in the order book.
+
+    A wall is a price level where qty >= wall_multiplier * median(all level qtys).
+    Returns walls with decay tracking and liquidation risk classification.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_ob_walls(
+        symbol=target,
+        lookback_sec=lookback_sec,
+        wall_multiplier=wall_multiplier,
+    )
+    return {"status": "ok", "symbol": target, **data}

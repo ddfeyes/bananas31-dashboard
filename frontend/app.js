@@ -1259,6 +1259,79 @@ async function renderOiWeightedPrice() {
   `;
 }
 
+// ── Render: Realized Vol Bands ────────────────────────────────────────────────
+async function renderRealizedVolBands() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/realized-volatility-bands?symbol=${sym}&window=20`);
+  const el    = document.getElementById('realized-vol-bands-content');
+  const badge = document.getElementById('realized-vol-bands-badge');
+  if (!el) return;
+
+  if (!data) {
+    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
+
+  const upper   = data.upper         != null ? fmtPrice(data.upper)         : '—';
+  const center  = data.center        != null ? fmtPrice(data.center)        : '—';
+  const lower   = data.lower         != null ? fmtPrice(data.lower)         : '—';
+  const curP    = data.current_price != null ? fmtPrice(data.current_price) : '—';
+  const vol     = data.realized_vol  != null ? (data.realized_vol * 100).toFixed(4) + '%' : '—';
+  const pct     = data.band_percentile != null ? parseFloat(data.band_percentile) : null;
+  const zone    = data.zone || 'inside';
+
+  const zoneColor = zone === 'above_upper' ? 'var(--red)'
+                  : zone === 'below_lower' ? 'var(--green)'
+                  :                          'var(--yellow)';
+
+  const pctStr = pct != null ? pct.toFixed(1) + '%' : '—';
+
+  // Percentile bar fill
+  const barFill = pct != null ? Math.round(pct) : 50;
+  const barColor = zone === 'above_upper' ? '#e74c3c'
+                 : zone === 'below_lower' ? '#2ecc71'
+                 :                          '#f39c12';
+
+  if (badge) {
+    badge.textContent = zone.replace(/_/g, ' ');
+    badge.className   = 'card-badge ' + (zone === 'above_upper' ? 'badge-red' : zone === 'below_lower' ? 'badge-green' : 'badge-yellow');
+    badge.style.display = 'inline-block';
+  }
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Percentile</div>
+        <div class="metric-value" style="color:${zoneColor};font-size:22px">${pctStr}</div>
+        <div class="metric-label" style="color:${zoneColor}">${zone.replace(/_/g, ' ')}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Upper</div>
+        <div class="metric-value" style="color:var(--red);font-size:13px">${upper}</div>
+        <div class="metric-label">Center</div>
+        <div class="metric-value" style="font-size:13px">${center}</div>
+        <div class="metric-label">Lower</div>
+        <div class="metric-value" style="color:var(--green);font-size:13px">${lower}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Price</div>
+        <div class="metric-value" style="font-size:13px">${curP}</div>
+        <div class="metric-label">RealVol/c</div>
+        <div class="metric-value" style="color:var(--muted);font-size:13px">${vol}</div>
+      </div>
+    </div>
+    <div style="margin-top:6px;padding:0 4px">
+      <div style="background:var(--bg2);border-radius:3px;height:6px;position:relative">
+        <div style="position:absolute;left:0;top:0;height:6px;width:${barFill}%;background:${barColor};border-radius:3px;transition:width 0.4s"></div>
+        <div style="position:absolute;left:50%;top:-2px;width:2px;height:10px;background:var(--muted);opacity:0.4"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">
+        <span>lower</span><span>center</span><span>upper</span>
+      </div>
+    </div>
+  `;
+}
+
 // ── Render: Market Regime ─────────────────────────────────────────────────────
 async function renderMarketRegime() {
   const sym = encodeURIComponent(activeSymbol);
@@ -1665,6 +1738,69 @@ async function renderAggressorStreak() {
   `;
 }
 
+// ── Render: Correlation Heatmap ───────────────────────────────────────────────
+async function renderCorrHeatmap() {
+  const data = await apiFetch('/correlations/heatmap');
+  const el = document.getElementById('corr-heatmap-content');
+  if (!el) return;
+
+  if (!data || !data.matrix || !data.symbols || data.matrix.length === 0) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
+    return;
+  }
+
+  const { symbols, matrix, quality } = data;
+  const short = s => s.replace('USDT', '');
+
+  // Color: red (1.0) → white (0.0) → blue (-1.0)
+  function heatColor(v) {
+    if (v == null || isNaN(v)) return 'rgba(107,114,128,0.1)';
+    const c = Math.max(-1, Math.min(1, v));
+    if (c >= 0) {
+      const g = Math.round(255 * (1 - c));
+      const b = Math.round(255 * (1 - c));
+      return `rgb(255,${g},${b})`;
+    } else {
+      const t = -c;
+      const r = Math.round(255 * (1 - t));
+      const g = Math.round(255 * (1 - t));
+      return `rgb(${r},${g},255)`;
+    }
+  }
+
+  function textColor(v) {
+    return (v != null && Math.abs(v) > 0.5) ? '#000' : 'var(--muted)';
+  }
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:10px;">';
+  html += '<tr><th style="color:var(--muted);padding:2px 4px"></th>';
+  symbols.forEach(s => {
+    html += `<th style="color:var(--muted);padding:2px 6px;text-align:center">${short(s)}</th>`;
+  });
+  html += '</tr>';
+
+  matrix.forEach((row, i) => {
+    html += `<tr><td style="color:var(--muted);padding:3px 4px;white-space:nowrap">${short(symbols[i])}</td>`;
+    row.forEach(v => {
+      const bg = heatColor(v);
+      const fg = textColor(v);
+      const vStr = v != null ? v.toFixed(2) : '—';
+      html += `<td style="background:${bg};color:${fg};padding:3px 6px;text-align:center;border-radius:3px">${vStr}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  html += `<div style="font-size:9px;color:var(--muted);margin-top:4px;text-align:right">${quality} periods · returns</div>`;
+  el.innerHTML = html;
+
+  const badge = document.getElementById('corr-heatmap-badge');
+  if (badge) {
+    badge.style.display = '';
+    badge.textContent = `${quality}p`;
+    badge.className = 'card-badge ' + (quality >= 15 ? 'badge-green' : quality >= 5 ? 'badge-yellow' : 'badge-red');
+  }
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1692,6 +1828,7 @@ async function refresh() {
     safe(renderWhaleClustering),
     safe(renderVwapDeviation),
     safe(renderOiWeightedPrice),
+    safe(renderRealizedVolBands),
     safe(renderMarketRegime),
     safe(renderMomentum),
     safe(renderRegimeTimeline),
@@ -1699,6 +1836,7 @@ async function refresh() {
   // Batch 4: secondary
   await Promise.all([
     safe(renderCorrelations),
+    safe(renderCorrHeatmap),
     safe(renderVolumeProfile),
     safe(renderAggressorRatio),
     safe(renderVpin),

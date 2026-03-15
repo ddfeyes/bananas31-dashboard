@@ -11,6 +11,7 @@ from storage import (
     get_latest_orderbook,
     get_funding_history,
     get_recent_trades,
+    get_orderbook_snapshots_for_heatmap,
 )
 
 
@@ -4562,4 +4563,266 @@ async def compute_oi_weighted_price(symbol: str = None, limit: int = 50) -> Dict
         "bias": bias,
         "oi_count": len(oi_rows),
         "description": f"Price {deviation_pct:+.3f}% vs OI-weighted avg",
+    }
+
+
+async def compute_realized_volatility_bands(
+    symbol: str = None, window: int = 20
+) -> Dict:
+    """
+    Realized volatility bands (Bollinger Band-style).
+
+    Center = SMA of close prices over ``window`` 1-min candles.
+    Realized vol = per-candle std dev of log-returns over the same window.
+    Upper / lower = center ± 2 × (realized_vol × center) — in price units.
+    band_percentile = where current price sits within [lower, upper] (0–100).
+    """
+    import math
+    import time
+    from storage import get_recent_trades
+
+    _empty: Dict = {
+        "upper": None,
+        "center": None,
+        "lower": None,
+        "realized_vol": None,
+        "current_price": None,
+        "band_percentile": None,
+        "zone": None,
+        "window": window,
+        "n_candles": 0,
+        "description": "Insufficient data",
+    }
+
+    # Fetch enough raw trades to build window+10 1-min candles
+    fetch_seconds = (window + 10) * 60
+    since = time.time() - fetch_seconds
+    trades = await get_recent_trades(limit=50000, since=since, symbol=symbol)
+
+    if not trades or len(trades) < 3:
+        return _empty
+
+    trades.sort(key=lambda t: t["ts"])
+
+    # Aggregate into 1-min candles
+    candles: Dict = {}
+    for t in trades:
+        p = float(t.get("price") or 0)
+        if p <= 0:
+            continue
+        bucket = int(t["ts"] // 60) * 60
+        if bucket not in candles:
+            candles[bucket] = {"open": p, "high": p, "low": p, "close": p}
+        else:
+            c = candles[bucket]
+            c["high"] = max(c["high"], p)
+            c["low"] = min(c["low"], p)
+            c["close"] = p
+
+    sorted_candles = [v for _, v in sorted(candles.items())]
+    n_candles = len(sorted_candles)
+
+    if n_candles < 3:
+        return {**_empty, "n_candles": n_candles, "description": "Too few candles"}
+
+    # Use last window+1 candles → window log-returns
+    subset = sorted_candles[-(window + 1):]
+    closes = [c["close"] for c in subset]
+
+    log_returns = []
+    for i in range(1, len(closes)):
+        if closes[i - 1] > 0 and closes[i] > 0:
+            log_returns.append(math.log(closes[i] / closes[i - 1]))
+
+    if len(log_returns) < 2:
+        return {**_empty, "n_candles": n_candles, "description": "Insufficient returns"}
+
+    n = len(log_returns)
+    mean_r = sum(log_returns) / n
+    variance = sum((r - mean_r) ** 2 for r in log_returns) / (n - 1)
+    realized_vol = math.sqrt(variance)  # per-candle std dev of log-returns
+
+    # SMA center from last `window` closes
+    sma_closes = closes[-window:] if len(closes) >= window else closes
+    center = sum(sma_closes) / len(sma_closes)
+
+    current_price = closes[-1]
+
+    # Bands in price units
+    realized_vol_price = realized_vol * center
+    upper = center + 2 * realized_vol_price
+    lower = max(0.0, center - 2 * realized_vol_price)
+
+    # Percentile: where current_price sits in [lower, upper]
+    band_width = upper - lower
+    if band_width > 1e-12:
+        band_pct = (current_price - lower) / band_width * 100.0
+        band_pct = max(0.0, min(100.0, band_pct))
+    else:
+        band_pct = 50.0  # bands collapsed (zero vol)
+
+    # Zone classification
+    if band_pct >= 80:
+        zone = "above_upper"
+        desc = f"Price near upper band (pct={band_pct:.0f})"
+    elif band_pct <= 20:
+        zone = "below_lower"
+        desc = f"Price near lower band (pct={band_pct:.0f})"
+    else:
+        zone = "inside"
+        desc = f"Price inside bands (pct={band_pct:.0f})"
+
+    return {
+        "upper": round(upper, 8),
+        "center": round(center, 8),
+        "lower": round(lower, 8),
+        "realized_vol": round(realized_vol, 8),
+        "current_price": round(current_price, 8),
+        "band_percentile": round(band_pct, 2),
+        "zone": zone,
+        "window": window,
+        "n_candles": n_candles,
+        "description": desc,
+    }
+
+
+async def detect_ob_walls(
+    symbol: str = None,
+    lookback_sec: int = 600,
+    wall_multiplier: float = 10.0,
+) -> Dict:
+    """
+    Detect large static orders (walls) in the order book.
+
+    A wall is any price level where qty >= wall_multiplier * median(all level qtys).
+    Tracks decay by comparing current size against the oldest snapshot where the
+    wall continuously existed.
+
+    Returns:
+      walls: list of {price, size, side, age_sec, decay_pct}
+      liquidation_risk: high/medium/low based on wall proximity to mid price
+    """
+    import json as _json
+
+    since = time.time() - lookback_sec
+    snapshots = await get_orderbook_snapshots_for_heatmap(
+        symbol=symbol, since=since, sample_interval=30
+    )
+
+    if not snapshots:
+        latest = await get_latest_orderbook(symbol=symbol, limit=1)
+        if not latest:
+            return {"walls": [], "liquidation_risk": "low", "description": "No orderbook data"}
+        snapshots = latest
+
+    # Pre-parse all snapshots into {price: qty} dicts for fast lookup
+    parsed = []
+    for snap in snapshots:
+        try:
+            raw_bids = _json.loads(snap.get("bids", "[]"))
+            raw_asks = _json.loads(snap.get("asks", "[]"))
+        except Exception:
+            raw_bids, raw_asks = [], []
+        parsed.append({
+            "ts": snap["ts"],
+            "bids": {float(p): float(q) for p, q in raw_bids},
+            "asks": {float(p): float(q) for p, q in raw_asks},
+            "mid_price": snap.get("mid_price"),
+        })
+
+    if not parsed:
+        return {"walls": [], "liquidation_risk": "low", "description": "No orderbook data"}
+
+    current = parsed[-1]
+    current_ts = current["ts"]
+    mid_price = float(current.get("mid_price") or 0)
+
+    # Compute median size across all levels in current snapshot
+    all_sizes = list(current["bids"].values()) + list(current["asks"].values())
+    if not all_sizes:
+        return {"walls": [], "liquidation_risk": "low", "description": "Empty orderbook"}
+
+    all_sizes_sorted = sorted(all_sizes)
+    n = len(all_sizes_sorted)
+    if n % 2 == 1:
+        median_size = all_sizes_sorted[n // 2]
+    else:
+        median_size = (all_sizes_sorted[n // 2 - 1] + all_sizes_sorted[n // 2]) / 2
+
+    threshold = median_size * wall_multiplier
+
+    # Find walls in current snapshot
+    current_walls: Dict[float, Dict] = {}
+    for price, qty in current["bids"].items():
+        if qty >= threshold:
+            current_walls[price] = {"size": qty, "side": "bid"}
+    for price, qty in current["asks"].items():
+        if qty >= threshold:
+            current_walls[price] = {"size": qty, "side": "ask"}
+
+    # Track decay for each wall by walking backwards through historical snapshots
+    walls_output = []
+    for price, info in current_walls.items():
+        current_size = info["size"]
+        initial_size = current_size
+        first_seen_ts = current_ts
+
+        for snap in reversed(parsed[:-1]):
+            levels = snap["bids"] if info["side"] == "bid" else snap["asks"]
+            historical_qty = levels.get(price)
+            if historical_qty is not None and historical_qty >= threshold:
+                initial_size = historical_qty
+                first_seen_ts = snap["ts"]
+            else:
+                break
+
+        age_sec = int(current_ts - first_seen_ts)
+        decay_pct = (
+            max(0.0, (initial_size - current_size) / initial_size * 100)
+            if initial_size > 0
+            else 0.0
+        )
+
+        walls_output.append({
+            "price": price,
+            "size": round(current_size, 6),
+            "side": info["side"],
+            "age_sec": age_sec,
+            "decay_pct": round(decay_pct, 2),
+        })
+
+    # Sort: bid walls price desc, ask walls price asc
+    bid_walls = sorted(
+        [w for w in walls_output if w["side"] == "bid"], key=lambda w: w["price"], reverse=True
+    )
+    ask_walls = sorted(
+        [w for w in walls_output if w["side"] == "ask"], key=lambda w: w["price"]
+    )
+    walls_output = bid_walls + ask_walls
+
+    # Liquidation risk: proximity of walls to mid price
+    liquidation_risk = "low"
+    if mid_price > 0 and walls_output:
+        bid_dists = [
+            abs(w["price"] - mid_price) / mid_price * 100
+            for w in walls_output if w["side"] == "bid"
+        ]
+        ask_dists = [
+            abs(w["price"] - mid_price) / mid_price * 100
+            for w in walls_output if w["side"] == "ask"
+        ]
+        closest_bid = min(bid_dists, default=100.0)
+        closest_ask = min(ask_dists, default=100.0)
+        if closest_bid < 0.5 and closest_ask < 0.5:
+            liquidation_risk = "high"
+        elif closest_bid < 1.0 or closest_ask < 1.0:
+            liquidation_risk = "medium"
+
+    return {
+        "walls": walls_output,
+        "liquidation_risk": liquidation_risk,
+        "mid_price": round(mid_price, 8) if mid_price else None,
+        "wall_threshold": round(threshold, 6),
+        "median_size": round(median_size, 6),
+        "description": f"{len(walls_output)} wall(s) detected",
     }
