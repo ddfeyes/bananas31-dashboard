@@ -1125,6 +1125,18 @@
     <div id="momentum-rank-list" style="font-size:12px;"></div>
   </div>
 
+  <!-- Short Squeeze Detector -->
+  <div class="card" id="card-short-squeeze">
+    <h2><span class="card-icon">⚡</span>Short Squeeze Detector
+      <span id="squeeze-badge" style="margin-left:8px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;display:none;"></span>
+      <span id="squeeze-ts" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">OI surge during price crash + funding normalizing → squeeze setup</div>
+    <div id="squeeze-status" style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5;"></div>
+    <div id="squeeze-metrics" style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;"></div>
+    <canvas id="chart-net-taker-delta" style="height:120px !important;"></canvas>
+  </div>
+
   <!-- Whale Trades -->
   <div class="card" id="card-whales">
     <h2><span class="card-icon">🐳</span>Whale Trades &gt;$50k (1h)
@@ -2214,6 +2226,66 @@ let chartTradeClusters = null;
   });
 })();
 
+// Net Taker Delta stacked bar chart
+let chartNetTakerDelta = null;
+(function initNetTakerDeltaChart() {
+  const ctx = document.getElementById('chart-net-taker-delta');
+  if (!ctx) return;
+  chartNetTakerDelta = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Buy taker',
+          data: [],
+          backgroundColor: 'rgba(0,200,120,0.65)',
+          stack: 'vol',
+          borderWidth: 0,
+        },
+        {
+          label: 'Sell taker',
+          data: [],
+          backgroundColor: 'rgba(220,60,60,0.65)',
+          stack: 'vol',
+          borderWidth: 0,
+        },
+        {
+          label: 'Net delta',
+          data: [],
+          type: 'line',
+          borderColor: 'rgba(255,220,50,0.9)',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          yAxisID: 'yNet',
+        },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: 'rgba(200,200,200,0.7)', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: { callbacks: {
+          label: ctx => {
+            const v = ctx.parsed.y;
+            return `${ctx.dataset.label}: ${v > 0 ? '+' : ''}${v.toFixed(4)}`;
+          }
+        }},
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, maxTicksLimit: 8, maxRotation: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { stacked: true, ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        yNet: { display: false, position: 'right' },
+      },
+    },
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -3174,7 +3246,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3196,6 +3268,7 @@ async function refreshAll() {
     fetchJSON(`/api/depth-ratio?window=600&levels=5&symbol=${sym}`),
     fetchJSON(`/api/trade-clusters?window=300&cluster_window=30&price_tolerance=0.05&min_trades=5&symbol=${sym}`),
     fetchJSON(`/api/momentum-rank?window=3600`),
+    fetchJSON(`/api/short-squeeze?window=3600&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3542,6 +3615,72 @@ async function refreshAll() {
           <span style="font-size:10px;color:var(--muted);min-width:40px;">1h: <span style="color:${bar1h};">${e.score_1h > 0 ? '+' : ''}${e.score_1h.toFixed(2)}%</span></span>
         </div>`;
       }).join('');
+    }
+  }
+
+  // ── Short Squeeze Detector ───────────────────────────────────────────────
+  if (shortSqueeze) {
+    const ss = shortSqueeze;
+    const statusEl  = document.getElementById('squeeze-status');
+    const badgeEl   = document.getElementById('squeeze-badge');
+    const metricsEl = document.getElementById('squeeze-metrics');
+    const tsEl      = document.getElementById('squeeze-ts');
+
+    if (tsEl) tsEl.textContent = fmtTs(ss.ts || Date.now() / 1000);
+
+    if (badgeEl) {
+      if (ss.squeeze_signal) {
+        badgeEl.textContent = '⚡ SQUEEZE SETUP';
+        badgeEl.style.background = 'rgba(255,200,0,0.15)';
+        badgeEl.style.color = 'var(--yellow)';
+        badgeEl.style.border = '1px solid var(--yellow)';
+        badgeEl.style.display = 'inline-block';
+      } else if (ss.oi_surge_detected) {
+        badgeEl.textContent = '⚠️ OI SURGE';
+        badgeEl.style.background = 'rgba(255,100,0,0.12)';
+        badgeEl.style.color = 'var(--red)';
+        badgeEl.style.border = '1px solid var(--red)';
+        badgeEl.style.display = 'inline-block';
+      } else {
+        badgeEl.style.display = 'none';
+      }
+    }
+
+    if (statusEl) {
+      statusEl.textContent = ss.description || '';
+      statusEl.style.color = ss.squeeze_signal ? 'var(--yellow)'
+                           : ss.oi_surge_detected ? 'var(--red)'
+                           : 'var(--muted)';
+    }
+
+    if (metricsEl) {
+      const mkMetric = (label, val, col) =>
+        `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:5px 10px;text-align:center;">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:2px;">${label}</div>
+          <div style="font-weight:700;color:${col};">${val}</div>
+        </div>`;
+      const oiCol   = ss.oi_change_pct   > 0 ? 'var(--red)' : 'var(--green)';
+      const priceCol = ss.price_change_pct < 0 ? 'var(--red)' : 'var(--green)';
+      const frCol   = ss.funding_normalizing ? 'var(--yellow)' : 'var(--muted)';
+      const ntd = ss.net_taker_delta || {};
+      const netCol = (ntd.net || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+      metricsEl.innerHTML =
+        mkMetric('OI change', (ss.oi_change_pct > 0 ? '+' : '') + ss.oi_change_pct.toFixed(2) + '%', oiCol) +
+        mkMetric('Price change', (ss.price_change_pct > 0 ? '+' : '') + ss.price_change_pct.toFixed(2) + '%', priceCol) +
+        mkMetric('Min funding', ((ss.min_funding || 0) * 100).toFixed(4) + '%', 'var(--red)') +
+        mkMetric('Latest funding', ((ss.latest_funding || 0) * 100).toFixed(4) + '%', frCol) +
+        mkMetric('Net taker δ', (ntd.net >= 0 ? '+' : '') + (ntd.net || 0).toFixed(3), netCol);
+    }
+
+    // Net taker delta stacked bar chart
+    const ntd = ss.net_taker_delta || {};
+    if (chartNetTakerDelta && ntd.buckets?.length) {
+      const buckets = ntd.buckets;
+      chartNetTakerDelta.data.labels = buckets.map(b => fmtTs(b.ts));
+      chartNetTakerDelta.data.datasets[0].data = buckets.map(b => b.buy_vol);
+      chartNetTakerDelta.data.datasets[1].data = buckets.map(b => -b.sell_vol);
+      chartNetTakerDelta.data.datasets[2].data = buckets.map(b => b.net_vol);
+      chartNetTakerDelta.update('none');
     }
   }
 

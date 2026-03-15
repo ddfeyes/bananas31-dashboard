@@ -2912,3 +2912,232 @@ def rank_symbols_by_momentum(symbol_candles: Dict[str, List[dict]]) -> List[dict
         e["rank"] = i + 1
 
     return entries
+
+
+# ── Short Squeeze Detector ────────────────────────────────────────────────────
+
+def compute_net_taker_delta(
+    trades: List[dict],
+    bucket_seconds: int = 60,
+) -> dict:
+    """Bucket trades into buy-taker vs sell-taker volume per time bucket.
+
+    Uses ``is_buyer_aggressor`` field when present; falls back to ``side``.
+
+    Returns:
+        {
+          buckets:    [{ts, buy_vol, sell_vol, net_vol}] sorted asc,
+          total_buy:  float,
+          total_sell: float,
+          net:        float  (total_buy - total_sell),
+        }
+    """
+    if not trades:
+        return {"buckets": [], "total_buy": 0.0, "total_sell": 0.0, "net": 0.0}
+
+    buckets: dict = {}
+    for t in trades:
+        ts_bucket = int(t["ts"] // bucket_seconds) * bucket_seconds
+        qty = float(t["qty"])
+
+        iba = t.get("is_buyer_aggressor")
+        if iba is not None:
+            is_buy = bool(iba)
+        else:
+            is_buy = (t.get("side") or "").lower() == "buy"
+
+        if ts_bucket not in buckets:
+            buckets[ts_bucket] = {"buy_vol": 0.0, "sell_vol": 0.0}
+        if is_buy:
+            buckets[ts_bucket]["buy_vol"] += qty
+        else:
+            buckets[ts_bucket]["sell_vol"] += qty
+
+    result_buckets = []
+    for ts_b in sorted(buckets):
+        b = buckets[ts_b]
+        result_buckets.append({
+            "ts": float(ts_b),
+            "buy_vol": round(b["buy_vol"], 8),
+            "sell_vol": round(b["sell_vol"], 8),
+            "net_vol": round(b["buy_vol"] - b["sell_vol"], 8),
+        })
+
+    total_buy  = sum(b["buy_vol"]  for b in result_buckets)
+    total_sell = sum(b["sell_vol"] for b in result_buckets)
+    return {
+        "buckets": result_buckets,
+        "total_buy": round(total_buy, 8),
+        "total_sell": round(total_sell, 8),
+        "net": round(total_buy - total_sell, 8),
+    }
+
+
+def detect_oi_surge_with_crash(
+    oi_rows: List[dict],
+    candles: List[dict],
+    oi_threshold_pct: float = 20.0,
+    price_threshold_pct: float = 10.0,
+) -> dict:
+    """Detect: OI rises >= oi_threshold_pct% while price falls >= price_threshold_pct%.
+
+    Uses first vs last value in the provided rows (caller controls window via
+    what rows they pass in).
+
+    Args:
+        oi_rows:   list of {ts, oi_value} — compared first to last
+        candles:   list of {bucket, close_price} — compared first to last
+        oi_threshold_pct:    minimum OI increase % to qualify (default 20%)
+        price_threshold_pct: minimum price decrease % to qualify (default 10%)
+
+    Returns:
+        {detected, oi_change_pct, price_change_pct}
+    """
+    base = {"detected": False, "oi_change_pct": 0.0, "price_change_pct": 0.0}
+
+    if len(oi_rows) < 2 or len(candles) < 2:
+        return base
+
+    oi_sorted = sorted(oi_rows, key=lambda r: r["ts"])
+    oi_start = float(oi_sorted[0]["oi_value"])
+    oi_end   = float(oi_sorted[-1]["oi_value"])
+    if oi_start == 0:
+        return base
+    oi_change_pct = (oi_end - oi_start) / oi_start * 100.0
+
+    c_sorted = sorted(candles, key=lambda c: c["bucket"])
+    p_start = float(c_sorted[0]["close_price"])
+    p_end   = float(c_sorted[-1]["close_price"])
+    if p_start == 0:
+        return base
+    price_change_pct = (p_end - p_start) / p_start * 100.0
+
+    detected = (oi_change_pct >= oi_threshold_pct) and (price_change_pct <= -price_threshold_pct)
+    return {
+        "detected": detected,
+        "oi_change_pct": round(oi_change_pct, 4),
+        "price_change_pct": round(price_change_pct, 4),
+    }
+
+
+def detect_funding_normalization(
+    funding_rows: List[dict],
+    extreme_threshold: float = -0.005,
+    recovery_window_seconds: float = 7200,
+) -> dict:
+    """Detect funding rate recovering from extreme negative values toward zero.
+
+    Spec: funding goes from < extreme_threshold (e.g. < -0.5%) back toward 0
+    within recovery_window_seconds.
+
+    Logic:
+      1. Find the minimum (most negative) funding rate in the window.
+      2. If min < extreme_threshold AND the most recent rate is strictly greater
+         than min (recovering), and the extreme event is within the window → normalizing.
+
+    Args:
+        funding_rows:             list of {ts, rate}
+        extreme_threshold:        rate must be below this to count as extreme (default -0.005 = -0.5%)
+        recovery_window_seconds:  only look at rows within this many seconds of latest ts
+
+    Returns:
+        {normalizing, min_funding, latest_funding, recovery_pct}
+    """
+    base = {"normalizing": False, "min_funding": 0.0, "latest_funding": 0.0, "recovery_pct": 0.0}
+    if not funding_rows:
+        return base
+
+    sorted_rows = sorted(funding_rows, key=lambda r: r["ts"])
+    latest_ts = sorted_rows[-1]["ts"]
+    latest_funding = float(sorted_rows[-1]["rate"])
+
+    # Only consider rows within recovery_window_seconds of the latest
+    in_window = [r for r in sorted_rows if latest_ts - r["ts"] <= recovery_window_seconds]
+
+    if not in_window:
+        return {**base, "latest_funding": latest_funding}
+
+    min_funding = min(float(r["rate"]) for r in in_window)
+    recovery_pct = 0.0
+    if min_funding != 0:
+        recovery_pct = round((latest_funding - min_funding) / abs(min_funding) * 100.0, 4)
+
+    # Must have hit extreme AND be recovering (latest > min)
+    normalizing = (min_funding < extreme_threshold) and (latest_funding > min_funding)
+
+    return {
+        "normalizing": normalizing,
+        "min_funding": round(min_funding, 8),
+        "latest_funding": round(latest_funding, 8),
+        "recovery_pct": recovery_pct,
+    }
+
+
+def detect_short_squeeze_setup(
+    oi_rows: List[dict],
+    candles: List[dict],
+    funding_rows: List[dict],
+    oi_threshold_pct: float = 20.0,
+    price_threshold_pct: float = 10.0,
+    extreme_funding_threshold: float = -0.005,
+    recovery_window_seconds: float = 7200,
+    symbol: str = "",
+) -> dict:
+    """Combine OI surge + price crash + funding normalization into a squeeze signal.
+
+    A squeeze setup requires BOTH:
+      - detect_oi_surge_with_crash: OI rose >= oi_threshold_pct% while price fell >= price_threshold_pct%
+      - detect_funding_normalization: funding was extreme and is now recovering
+
+    Returns:
+        {squeeze_signal, oi_surge_detected, funding_normalizing,
+         oi_change_pct, price_change_pct, min_funding, latest_funding, description}
+    """
+    oi_result = detect_oi_surge_with_crash(
+        oi_rows, candles,
+        oi_threshold_pct=oi_threshold_pct,
+        price_threshold_pct=price_threshold_pct,
+    )
+    fr_result = detect_funding_normalization(
+        funding_rows,
+        extreme_threshold=extreme_funding_threshold,
+        recovery_window_seconds=recovery_window_seconds,
+    )
+
+    oi_surge = oi_result["detected"]
+    fr_normalizing = fr_result["normalizing"]
+    squeeze_signal = oi_surge and fr_normalizing
+
+    sym_label = symbol or "unknown"
+    if squeeze_signal:
+        desc = (
+            f"⚡ Short Squeeze Setup: {sym_label} — "
+            f"OI +{oi_result['oi_change_pct']:.1f}% during crash "
+            f"({oi_result['price_change_pct']:.1f}%), funding normalizing "
+            f"({fr_result['min_funding']*100:.3f}% → {fr_result['latest_funding']*100:.3f}%)"
+        )
+    elif oi_surge:
+        desc = (
+            f"⚠️ OI surge with crash: {sym_label} — "
+            f"OI +{oi_result['oi_change_pct']:.1f}%, price {oi_result['price_change_pct']:.1f}%. "
+            f"Watching for funding normalization."
+        )
+    elif fr_normalizing:
+        desc = (
+            f"📊 Funding normalizing: {sym_label} — "
+            f"from {fr_result['min_funding']*100:.3f}% to {fr_result['latest_funding']*100:.3f}%. "
+            f"No OI surge detected."
+        )
+    else:
+        desc = f"No short squeeze setup detected for {sym_label}."
+
+    return {
+        "squeeze_signal": squeeze_signal,
+        "oi_surge_detected": oi_surge,
+        "funding_normalizing": fr_normalizing,
+        "oi_change_pct": oi_result["oi_change_pct"],
+        "price_change_pct": oi_result["price_change_pct"],
+        "min_funding": fr_result["min_funding"],
+        "latest_funding": fr_result["latest_funding"],
+        "description": desc,
+    }

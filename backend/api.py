@@ -65,6 +65,8 @@ from metrics import (
     detect_trade_clusters,
     compute_momentum_score,
     rank_symbols_by_momentum,
+    compute_net_taker_delta,
+    detect_short_squeeze_setup,
 )
 
 router = APIRouter(prefix="/api")
@@ -3456,4 +3458,90 @@ async def momentum_rank_endpoint(
         "ts": time.time(),
         "rankings": rankings,
         "window_seconds": window,
+    }
+
+
+@router.get("/net-taker-delta")
+async def net_taker_delta_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=3600, ge=60, le=86400, description="Lookback window in seconds"),
+    bucket_seconds: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),
+):
+    """
+    Net taker delta: buy-taker volume minus sell-taker volume, bucketed by time.
+
+    Returns:
+      buckets:     [{ts, buy_vol, sell_vol, net_vol}] sorted asc
+      total_buy, total_sell, net
+    """
+    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    trades = await get_recent_trades(since=since, symbol=target, limit=50000)
+    result = compute_net_taker_delta(trades, bucket_seconds=bucket_seconds)
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "window_seconds": window,
+        "bucket_seconds": bucket_seconds,
+        **result,
+    }
+
+
+@router.get("/short-squeeze")
+async def short_squeeze_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=3600, ge=300, le=86400, description="Lookback window in seconds"),
+    oi_threshold_pct: float = Query(default=20.0, ge=1.0, le=200.0),
+    price_threshold_pct: float = Query(default=10.0, ge=1.0, le=100.0),
+    extreme_funding: float = Query(default=-0.005, description="Funding extreme threshold (e.g. -0.005 = -0.5%)"),
+    recovery_window: int = Query(default=7200, ge=600, le=86400),
+):
+    """
+    Short squeeze detector: OI surge during price crash + funding normalizing.
+
+    Returns:
+      squeeze_signal:      True when both conditions met
+      oi_surge_detected:   OI rose >= oi_threshold_pct% while price fell >= price_threshold_pct%
+      funding_normalizing: funding was extreme negative and is recovering
+      description:         human-readable alert string
+      net_taker_delta:     net taker flow summary for context
+    """
+    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    oi_rows, funding_rows, candles, trades = await asyncio.gather(
+        get_oi_history(since=since, symbol=target, limit=5000),
+        get_funding_history(since=since, symbol=target, limit=500),
+        get_ohlcv(interval_seconds=60, window_seconds=window, symbol=target),
+        get_recent_trades(since=since, symbol=target, limit=50000),
+    )
+
+    squeeze = detect_short_squeeze_setup(
+        oi_rows, candles, funding_rows,
+        oi_threshold_pct=oi_threshold_pct,
+        price_threshold_pct=price_threshold_pct,
+        extreme_funding_threshold=extreme_funding,
+        recovery_window_seconds=recovery_window,
+        symbol=target,
+    )
+
+    ntd = compute_net_taker_delta(trades, bucket_seconds=60)
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "window_seconds": window,
+        **squeeze,
+        "net_taker_delta": {
+            "total_buy": ntd["total_buy"],
+            "total_sell": ntd["total_sell"],
+            "net": ntd["net"],
+            "buckets": ntd["buckets"],
+        },
     }
