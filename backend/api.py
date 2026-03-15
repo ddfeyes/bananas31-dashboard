@@ -300,14 +300,21 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
         symbol = syms[0] if syms else "BANANAS31USDT"
 
     await manager.connect(ws, symbol)
+    _tick_count = 0
+    _cached_regime = None
     try:
         while True:
             try:
+                _tick_count += 1
                 phase_task = classify_market_phase(symbol=symbol)
                 vol_task = compute_volume_imbalance(window_seconds=60, symbol=symbol)
                 oi_task = compute_oi_momentum(window_seconds=300, symbol=symbol)
 
                 phase, vol_imb, oi_mom = await asyncio.gather(phase_task, vol_task, oi_task)
+
+                # Regime is expensive, compute every 5 ticks (~5s)
+                if _tick_count % 5 == 1:
+                    _cached_regime = await compute_market_regime(symbol=symbol)
 
                 ob = await get_latest_orderbook(symbol=symbol, limit=1)
                 price = ob[0].get("mid_price") if ob else None
@@ -426,6 +433,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "vol_spike": vol_result if isinstance(vol_result, dict) else None,
                     "liq_cascade": liq_result if isinstance(liq_result, dict) else None,
                     "delta_divergence": div_result if isinstance(div_result, dict) else None,
+                    "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))
 

@@ -880,6 +880,39 @@
     <div id="cvd-mom-content" style="font-size:11px;"></div>
   </div>
 
+  <!-- Position Sizing Calculator -->
+  <div class="card" id="card-position-calc">
+    <h2><span class="card-icon">🧮</span>Position Sizing</h2>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:10px;color:var(--muted);min-width:90px;">Account ($)</label>
+        <input id="pos-account" type="number" value="1000" min="1" step="100"
+          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:10px;color:var(--muted);min-width:90px;">Risk %</label>
+        <input id="pos-risk-pct" type="number" value="1" min="0.1" max="10" step="0.1"
+          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:10px;color:var(--muted);min-width:90px;">Entry Price</label>
+        <input id="pos-entry" type="number" step="any" placeholder="auto"
+          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:10px;color:var(--muted);min-width:90px;">Stop Loss</label>
+        <input id="pos-stop" type="number" step="any" placeholder="price or % below"
+          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:10px;color:var(--muted);min-width:90px;">Leverage</label>
+        <input id="pos-leverage" type="number" value="1" min="1" max="100" step="1"
+          style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" oninput="calcPositionSize()" />
+      </div>
+    </div>
+    <div id="pos-result" style="margin-top:10px;font-size:11px;"></div>
+  </div>
+
   <!-- Signals Scanner (multi-symbol) -->
   <div class="card wide" id="card-signals-scanner">
     <h2><span class="card-icon">🚦</span>Signals Scanner
@@ -1313,6 +1346,9 @@ function updatePriceDisplay(price) {
   }
   el.textContent = formatted;
   _lastPrice = price;
+  // Update position calc if entry field is blank
+  const posEntry = document.getElementById('pos-entry');
+  if (posEntry && !posEntry.value) calcPositionSize();
 }
 
 // ── WebSocket for live summary ───────────────────────────────────────────────
@@ -1553,6 +1589,18 @@ function updateSummary(summary) {
       alertBox.className = 'alert-box ' + (divg.divergence === 'bearish' ? 'active-red' : 'active-green');
     } else {
       alertBox.className = 'alert-box';
+    }
+  }
+
+  // ── Market regime from WS (every 5 ticks) ────────────────────────────────
+  if (summary.market_regime) {
+    const r = summary.market_regime;
+    const scoreColor = s => s >= 30 ? 'var(--green)' : s >= 10 ? '#66bb6a88' : s > -10 ? 'var(--muted)' : s > -30 ? '#ef535088' : 'var(--red)';
+    // Patch just the active symbol card if visible
+    const regimeEl = document.getElementById('market-regime-content');
+    if (regimeEl) {
+      // Find and update the card for activeSymbol (don't full-refresh, just note)
+      refreshMarketRegime();
     }
   }
 
@@ -3299,6 +3347,79 @@ function checkPriceAlerts(price) {
     if (alerts.above && price < alerts.above * 0.999) _priceAlertFiredAbove = false;
     if (alerts.below && price > alerts.below * 1.001) _priceAlertFiredBelow = false;
   } catch {}
+}
+
+// ── Position Sizing Calculator ────────────────────────────────────────────────
+function calcPositionSize() {
+  const el = document.getElementById('pos-result');
+  if (!el) return;
+
+  const account  = parseFloat(document.getElementById('pos-account')?.value) || 1000;
+  const riskPct  = parseFloat(document.getElementById('pos-risk-pct')?.value) || 1;
+  const leverage = parseFloat(document.getElementById('pos-leverage')?.value) || 1;
+
+  // Entry: use current price if blank
+  let entry = parseFloat(document.getElementById('pos-entry')?.value);
+  const curPrice = parseFloat(document.getElementById('price-display')?.textContent?.replace(/[^0-9.]/g, ''));
+  if (!entry && curPrice) entry = curPrice;
+  if (!entry) { el.innerHTML = '<span style="color:var(--muted)">Waiting for price…</span>'; return; }
+
+  let stopRaw = parseFloat(document.getElementById('pos-stop')?.value);
+  let stopPrice;
+  if (!stopRaw) {
+    // Default: 1 ATR below entry (use 1% if ATR unavailable)
+    stopPrice = entry * 0.99;
+  } else if (stopRaw > 0 && stopRaw < entry * 0.5) {
+    // Interpreted as % distance (e.g., 1.5 = 1.5% stop)
+    stopPrice = entry * (1 - stopRaw / 100);
+  } else {
+    stopPrice = stopRaw;
+  }
+
+  const riskUSD   = account * riskPct / 100;
+  const stopDist  = Math.abs(entry - stopPrice);
+  const stopPct   = stopDist / entry * 100;
+
+  if (stopDist <= 0) { el.innerHTML = '<span style="color:var(--red)">Stop must differ from entry</span>'; return; }
+
+  const positionUSD  = riskUSD / (stopDist / entry);     // position size in USD
+  const positionCoins = positionUSD / entry;              // coins
+  const marginReq    = positionUSD / leverage;            // margin required
+  const liqDistance  = entry / leverage;                  // rough liq distance
+  const liqPrice     = entry - liqDistance;               // rough liquidation
+
+  const riskColor = riskPct > 3 ? 'var(--red)' : riskPct > 1.5 ? 'var(--accent)' : 'var(--green)';
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+      <div style="background:var(--bg3);border-radius:4px;padding:8px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px;">POSITION SIZE</div>
+        <div style="font-size:15px;font-weight:700;color:var(--text);">$${positionUSD.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+        <div style="font-size:10px;color:var(--muted);">${positionCoins.toFixed(0)} coins</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;padding:8px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px;">RISK $</div>
+        <div style="font-size:15px;font-weight:700;color:${riskColor};">$${riskUSD.toFixed(2)}</div>
+        <div style="font-size:10px;color:var(--muted);">${riskPct}% of account</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;padding:8px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px;">STOP DISTANCE</div>
+        <div style="font-size:14px;font-weight:700;color:var(--red);">${stopPct.toFixed(2)}%</div>
+        <div style="font-size:10px;color:var(--muted);">at $${stopPrice.toPrecision(5)}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;padding:8px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px;">MARGIN REQ (${leverage}x)</div>
+        <div style="font-size:14px;font-weight:700;color:var(--blue);">$${marginReq.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+        <div style="font-size:10px;color:var(--red);">Liq ~$${liqPrice.toPrecision(4)}</div>
+      </div>
+    </div>`;
+}
+
+// Auto-fill entry price from live price on symbol switch
+function updatePositionEntryPrice() {
+  const el = document.getElementById('pos-entry');
+  if (el && !el.value) calcPositionSize();
+  else calcPositionSize();
 }
 
 // ── Market Regime ─────────────────────────────────────────────────────────────
