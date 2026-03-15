@@ -1097,6 +1097,32 @@
     <div id="stats-summary-content" style="font-size:11px;overflow-x:auto;"></div>
   </div>
 
+  <!-- ── Funding Rate Extremes Heatmap ────────────────────────── -->
+  <div class="card wide" id="card-funding-heatmap">
+    <h2>
+      <span class="card-icon">🌡️</span>Funding Rate Extremes Heatmap
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+        <select id="fh-hours" style="font-size:10px;padding:2px 4px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:3px;">
+          <option value="6">6h</option>
+          <option value="12">12h</option>
+          <option value="24" selected>24h</option>
+          <option value="48">48h</option>
+          <option value="72">72h</option>
+        </select>
+        <span id="fh-ts" style="font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+      </span>
+    </h2>
+    <div id="fh-legend" style="display:flex;gap:16px;align-items:center;margin-bottom:10px;font-size:10px;color:var(--muted);flex-wrap:wrap;">
+      <span>Color: negative ← <span style="display:inline-block;width:60px;height:10px;background:linear-gradient(to right,#2962ff,#263238,#ff6d00);vertical-align:middle;border-radius:2px;"></span> → positive funding</span>
+      <span id="fh-range-label"></span>
+    </div>
+    <div id="fh-grid-wrap" style="overflow-x:auto;">
+      <canvas id="fh-canvas" style="display:block;width:100%;cursor:crosshair;border-radius:4px;"></canvas>
+    </div>
+    <div id="fh-tooltip" style="margin-top:6px;font-size:10px;color:var(--text);min-height:16px;"></div>
+    <div id="fh-extremes" style="margin-top:10px;display:flex;gap:12px;flex-wrap:wrap;font-size:11px;"></div>
+  </div>
+
 </div>
 
 <!-- Footer health bar -->
@@ -4054,6 +4080,170 @@ async function refreshStatsSummary() {
   el.innerHTML = html;
 }
 
+// ── Funding Rate Extremes Heatmap ─────────────────────────────────────────────
+let _fhData = null;
+
+function _fhColorForRate(rate, minR, maxR) {
+  // Negative = blue (#2962ff), zero = bg2 (#263238), positive = orange (#ff6d00)
+  if (rate === null || rate === undefined) return '#1a1e24';
+  const absMax = Math.max(Math.abs(minR), Math.abs(maxR), 1e-9);
+  const t = rate / absMax; // -1 to +1
+  if (t >= 0) {
+    // zero → orange
+    const r = Math.round(0x26 + t * (0xff - 0x26));
+    const g = Math.round(0x32 + t * (0x6d - 0x32));
+    const b = Math.round(0x38 + t * (0x00 - 0x38));
+    return `rgb(${r},${g},${b})`;
+  } else {
+    // zero → blue
+    const u = -t;
+    const r = Math.round(0x26 + u * (0x29 - 0x26));
+    const g = Math.round(0x32 + u * (0x62 - 0x32));
+    const b = Math.round(0x38 + u * (0xff - 0x38));
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
+function _fhRender(data) {
+  const canvas = document.getElementById('fh-canvas');
+  if (!canvas) return;
+  const symbols = data.symbols || [];
+  if (!symbols.length) return;
+  const buckets = data.buckets || 24;
+  const minR = data.global_min || 0;
+  const maxR = data.global_max || 0;
+
+  const CELL_W = Math.max(8, Math.floor((canvas.parentElement.clientWidth - 90) / buckets));
+  const CELL_H = 28;
+  const LABEL_W = 90;
+  const HEADER_H = 20;
+  const W = LABEL_W + buckets * CELL_W;
+  const H = HEADER_H + symbols.length * CELL_H;
+
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw header timestamps (every 4th bucket)
+  ctx.fillStyle = '#7a8599';
+  ctx.font = '9px monospace';
+  const bs = data.bucket_starts || [];
+  for (let b = 0; b < buckets; b += 4) {
+    const ts = bs[b];
+    if (!ts) continue;
+    const d = new Date(ts * 1000);
+    const label = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+    ctx.fillText(label, LABEL_W + b * CELL_W + 2, 13);
+  }
+
+  // Draw rows
+  for (let s = 0; s < symbols.length; s++) {
+    const sym = symbols[s];
+    const row = data.grid[sym] || [];
+    const y = HEADER_H + s * CELL_H;
+
+    // Label
+    ctx.fillStyle = '#b0b8c8';
+    ctx.font = 'bold 10px monospace';
+    const shortSym = sym.replace('USDT', '');
+    ctx.fillText(shortSym, 4, y + CELL_H / 2 + 4);
+
+    // Cells
+    for (let b = 0; b < buckets; b++) {
+      const cell = row[b];
+      const rate = cell ? cell.rate : null;
+      const color = _fhColorForRate(rate, minR, maxR);
+      ctx.fillStyle = color;
+      ctx.fillRect(LABEL_W + b * CELL_W, y + 2, CELL_W - 1, CELL_H - 4);
+    }
+  }
+
+  // Update range label
+  const rangeEl = document.getElementById('fh-range-label');
+  if (rangeEl) {
+    const toFmt = v => {
+      const pct = (v * 100).toFixed(4);
+      return (v >= 0 ? '+' : '') + pct + '%';
+    };
+    rangeEl.textContent = `Range: ${toFmt(minR)} → ${toFmt(maxR)}`;
+  }
+
+  // Extremes summary
+  const extEl = document.getElementById('fh-extremes');
+  if (extEl && data.extremes) {
+    let html = '';
+    for (const sym of symbols) {
+      const ext = data.extremes[sym];
+      if (!ext) continue;
+      const short = sym.replace('USDT','');
+      const latestColor = ext.latest > 0 ? 'var(--green)' : ext.latest < 0 ? 'var(--red)' : 'var(--muted)';
+      const latestSign = ext.latest > 0 ? '+' : '';
+      html += `<span style="background:var(--bg2);padding:4px 8px;border-radius:4px;border:1px solid var(--border);">
+        <b style="color:var(--text)">${short}</b>
+        <span style="color:var(--muted);margin:0 4px">now</span>
+        <span style="color:${latestColor}">${latestSign}${ext.latest.toFixed(4)}%</span>
+        <span style="color:var(--muted);margin-left:4px;font-size:9px">peak ${ext.max_abs.toFixed(4)}%</span>
+      </span>`;
+    }
+    extEl.innerHTML = html;
+  }
+
+  // Tooltip on hover
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
+    if (mx < LABEL_W) { document.getElementById('fh-tooltip').textContent = ''; return; }
+    const bIdx = Math.floor((mx - LABEL_W) / CELL_W);
+    const sIdx = Math.floor((my - HEADER_H) / CELL_H);
+    if (sIdx < 0 || sIdx >= symbols.length || bIdx < 0 || bIdx >= buckets) {
+      document.getElementById('fh-tooltip').textContent = '';
+      return;
+    }
+    const sym = symbols[sIdx];
+    const cell = (data.grid[sym] || [])[bIdx];
+    if (!cell) { document.getElementById('fh-tooltip').textContent = ''; return; }
+    const ts = bs[bIdx];
+    const tStr = ts ? new Date(ts * 1000).toLocaleTimeString() : '?';
+    const rStr = cell.rate !== null ? ((cell.rate * 100).toFixed(5) + '%') : 'no data';
+    const sign = cell.rate > 0 ? '+' : '';
+    const color = cell.rate > 0 ? 'var(--green)' : cell.rate < 0 ? 'var(--red)' : 'var(--muted)';
+    document.getElementById('fh-tooltip').innerHTML =
+      `<b>${sym.replace('USDT','')}</b> @ ${tStr} — rate: <span style="color:${color}">${sign}${rStr}</span> (${cell.count} samples)`;
+  };
+  canvas.onmouseleave = () => { document.getElementById('fh-tooltip').textContent = ''; };
+}
+
+async function refreshFundingHeatmap() {
+  const hoursEl = document.getElementById('fh-hours');
+  const hours = hoursEl ? parseInt(hoursEl.value) : 24;
+  const data = await fetchJSON(`/api/funding-heatmap?hours=${hours}&buckets=48`);
+  if (!data || data.status !== 'ok') return;
+  _fhData = data;
+  const tsEl = document.getElementById('fh-ts');
+  if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+  _fhRender(data);
+}
+
+// Re-render on hours change
+(function() {
+  const waitForFhHours = setInterval(() => {
+    const el = document.getElementById('fh-hours');
+    if (!el) return;
+    clearInterval(waitForFhHours);
+    el.addEventListener('change', () => refreshFundingHeatmap());
+  }, 500);
+})();
+
+// Re-render on window resize
+window.addEventListener('resize', () => { if (_fhData) _fhRender(_fhData); });
+
 // ── Data Freshness ────────────────────────────────────────────────────────────
 async function refreshFreshness() {
   const el = document.getElementById('freshness-content');
@@ -4687,6 +4877,9 @@ async function refreshSignalsScanner() {
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();
   setInterval(refreshStatsSummary, 60000);
+
+  refreshFundingHeatmap();
+  setInterval(refreshFundingHeatmap, 120000);  // every 2 min
 
   // ── Keyboard Shortcut Help Modal ──────────────────────────────────────────
   (function buildHotkeyModal() {

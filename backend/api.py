@@ -1730,3 +1730,84 @@ async def metrics_summary(symbol: Optional[str] = None):
         "oi_momentum": oi_mom,
         "funding_rates": latest_funding,
     }
+
+
+@router.get("/funding-heatmap")
+async def funding_heatmap(
+    hours: int = Query(24, ge=1, le=168),
+    buckets: int = Query(24, ge=6, le=72),
+):
+    """Funding rate extremes heatmap: symbol × time bucket grid.
+    
+    Returns a 2D grid where each cell = average funding rate for
+    (symbol, time_bucket). Used to spot funding rate extremes over time.
+    """
+    symbols = get_symbols()
+    now = time.time()
+    since = now - hours * 3600
+    bucket_size = (hours * 3600) / buckets
+
+    # Fetch all funding data for all symbols in range
+    all_data: dict[str, list] = {}
+    for sym in symbols:
+        rows = await get_funding_history(limit=10000, since=since, symbol=sym)
+        all_data[sym] = rows
+
+    # Build bucket timestamps
+    bucket_starts = [since + i * bucket_size for i in range(buckets)]
+
+    # Aggregate: for each symbol × bucket, compute average rate
+    grid = {}
+    global_min = float("inf")
+    global_max = float("-inf")
+
+    for sym in symbols:
+        grid[sym] = []
+        rows = all_data[sym]
+        for b_idx in range(buckets):
+            b_start = bucket_starts[b_idx]
+            b_end = b_start + bucket_size
+            # All rows in this bucket
+            in_bucket = [r["rate"] for r in rows if b_start <= r["ts"] < b_end]
+            if in_bucket:
+                avg = sum(in_bucket) / len(in_bucket)
+                count = len(in_bucket)
+            else:
+                avg = None
+                count = 0
+            grid[sym].append({"ts": b_start, "rate": avg, "count": count})
+            if avg is not None:
+                if avg < global_min:
+                    global_min = avg
+                if avg > global_max:
+                    global_max = avg
+
+    if global_min == float("inf"):
+        global_min = 0.0
+    if global_max == float("-inf"):
+        global_max = 0.0
+
+    # Compute extremes: max absolute rate per symbol
+    extremes = {}
+    for sym in symbols:
+        rates = [c["rate"] for c in grid[sym] if c["rate"] is not None]
+        if rates:
+            max_abs = max(abs(r) for r in rates)
+            latest = rates[-1] if rates else 0
+            extremes[sym] = {"max_abs": round(max_abs * 100, 6), "latest": round(latest * 100, 6)}
+        else:
+            extremes[sym] = {"max_abs": 0.0, "latest": 0.0}
+
+    return {
+        "status": "ok",
+        "ts": now,
+        "hours": hours,
+        "buckets": buckets,
+        "bucket_size_seconds": bucket_size,
+        "symbols": symbols,
+        "bucket_starts": bucket_starts,
+        "grid": grid,
+        "global_min": global_min,
+        "global_max": global_max,
+        "extremes": extremes,
+    }
