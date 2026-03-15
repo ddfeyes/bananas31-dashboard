@@ -761,6 +761,44 @@
     <div id="alert-history-list" style="max-height:300px;overflow-y:auto;font-size:11px;font-family:'Menlo','Monaco','Consolas',monospace;"></div>
   </div>
 
+  <!-- Market Microstructure -->
+  <div class="card" id="card-micro">
+    <h2><span class="card-icon">🔬</span>Microstructure (5min)
+      <span id="micro-freq" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div class="metrics-grid" style="margin-bottom:8px;">
+      <div class="metric">
+        <div class="val" id="micro-agg" style="font-size:14px;">—</div>
+        <div class="lbl">Aggressor Ratio</div>
+      </div>
+      <div class="metric">
+        <div class="val" id="micro-avg-size" style="font-size:14px;">—</div>
+        <div class="lbl">Avg Trade $</div>
+      </div>
+      <div class="metric">
+        <div class="val positive" id="micro-avg-buy" style="font-size:14px;">—</div>
+        <div class="lbl">Avg Buy $</div>
+      </div>
+      <div class="metric">
+        <div class="val negative" id="micro-avg-sell" style="font-size:14px;">—</div>
+        <div class="lbl">Avg Sell $</div>
+      </div>
+    </div>
+    <div style="margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">
+        <span style="color:var(--green);" id="micro-buy-cnt">Buy 0</span>
+        <span style="font-size:10px;color:var(--muted);">trade count</span>
+        <span style="color:var(--red);" id="micro-sell-cnt">Sell 0</span>
+      </div>
+      <div style="height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;">
+        <div id="micro-agg-bar" style="height:100%;background:linear-gradient(90deg,var(--green),var(--green));width:50%;border-radius:3px;transition:width 0.5s;"></div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;">
+      <span>Large (>$5k): <b id="micro-large-buy" style="color:var(--green);">—</b> buy / <b id="micro-large-sell" style="color:var(--red);">—</b> sell</span>
+    </div>
+  </div>
+
   <!-- Session Stats -->
   <div class="card" id="card-session">
     <h2><span class="card-icon">📋</span>Session (8h)
@@ -1563,6 +1601,7 @@ function selectSymbol(sym) {
   refreshPriceChart();
   refreshMultiOverview();
   refreshSession();
+  refreshMicrostructure();
   initTape();
 }
 
@@ -2940,6 +2979,45 @@ async function refreshMomentum() {
   el.innerHTML = html;
 }
 
+async function refreshMicrostructure() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/microstructure?symbol=${sym}&window=300`);
+  if (!data?.data) return;
+  const d = data.data;
+
+  const aggRatio = d.aggressor_ratio ?? 0.5;
+  const aggColor = aggRatio > 0.55 ? 'var(--green)' : aggRatio < 0.45 ? 'var(--red)' : 'var(--muted)';
+  const aggEl = document.getElementById('micro-agg');
+  if (aggEl) {
+    aggEl.style.color = aggColor;
+    aggEl.textContent = (aggRatio * 100).toFixed(1) + '%';
+  }
+  const set = (id, val, dec=0) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val != null ? fmtK(val) : '—';
+  };
+  set('micro-avg-size', d.avg_trade_usd);
+  set('micro-avg-buy', d.avg_buy_usd);
+  set('micro-avg-sell', d.avg_sell_usd);
+
+  const freqEl = document.getElementById('micro-freq');
+  if (freqEl) freqEl.textContent = `${d.trades_per_min?.toFixed(1)} trades/min · ${d.total_trades?.toLocaleString()} total`;
+
+  const bcEl = document.getElementById('micro-buy-cnt');
+  const scEl = document.getElementById('micro-sell-cnt');
+  if (bcEl) bcEl.textContent = `Buy ${d.buy_count?.toLocaleString()}`;
+  if (scEl) scEl.textContent = `Sell ${d.sell_count?.toLocaleString()}`;
+
+  const barEl = document.getElementById('micro-agg-bar');
+  if (barEl) barEl.style.width = (aggRatio * 100) + '%';
+
+  const lbEl = document.getElementById('micro-large-buy');
+  const lsEl = document.getElementById('micro-large-sell');
+  if (lbEl) lbEl.textContent = d.large_buy_count;
+  if (lsEl) lsEl.textContent = d.large_sell_count;
+}
+
 async function refreshSession() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
@@ -3121,6 +3199,8 @@ function checkPriceAlerts(price) {
   setInterval(refreshMomentum, 30000);
   refreshSession();
   setInterval(refreshSession, 30000);
+  refreshMicrostructure();
+  setInterval(refreshMicrostructure, 10000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute

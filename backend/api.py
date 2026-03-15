@@ -892,6 +892,68 @@ async def symbol_stats(symbol: Optional[str] = None):
     }
 
 
+@router.get("/microstructure")
+async def microstructure(
+    symbol: Optional[str] = None,
+    window: int = Query(default=300, le=3600),
+):
+    """
+    Market microstructure stats: avg trade size, aggressor ratio, trades/min,
+    buy/sell count ratio, tick rule pressure.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - window
+
+    trades = await get_recent_trades(limit=100000, since=since, symbol=target)
+    if not trades:
+        return {"status": "ok", "symbol": target, "data": None}
+
+    total = len(trades)
+    buy_trades  = [t for t in trades if t["side"] in ("buy", "Buy")]
+    sell_trades = [t for t in trades if t["side"] not in ("buy", "Buy")]
+
+    buy_count  = len(buy_trades)
+    sell_count = len(sell_trades)
+    buy_vol    = sum(t["qty"] * t["price"] for t in buy_trades)
+    sell_vol   = sum(t["qty"] * t["price"] for t in sell_trades)
+
+    avg_trade_usd = (buy_vol + sell_vol) / total if total > 0 else 0
+    avg_buy_usd   = buy_vol / buy_count  if buy_count > 0 else 0
+    avg_sell_usd  = sell_vol / sell_count if sell_count > 0 else 0
+
+    trades_per_min = total / (window / 60) if window > 0 else 0
+    aggressor_ratio = buy_count / total if total > 0 else 0.5  # >0.5 = buyer aggressor dominant
+
+    # Large trades (>$5k) breakdown
+    large_threshold = 5000
+    large_buy  = sum(1 for t in buy_trades  if t["qty"] * t["price"] >= large_threshold)
+    large_sell = sum(1 for t in sell_trades if t["qty"] * t["price"] >= large_threshold)
+    large_total = large_buy + large_sell
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "window": window,
+        "data": {
+            "total_trades": total,
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "aggressor_ratio": round(aggressor_ratio, 4),
+            "trades_per_min": round(trades_per_min, 2),
+            "avg_trade_usd": round(avg_trade_usd, 2),
+            "avg_buy_usd": round(avg_buy_usd, 2),
+            "avg_sell_usd": round(avg_sell_usd, 2),
+            "large_buy_count": large_buy,
+            "large_sell_count": large_sell,
+            "large_total": large_total,
+            "large_threshold_usd": large_threshold,
+            "buy_usd": round(buy_vol, 2),
+            "sell_usd": round(sell_vol, 2),
+        }
+    }
+
+
 @router.get("/pivots")
 async def pivot_levels(symbol: Optional[str] = None):
     """
