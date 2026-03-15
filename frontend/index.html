@@ -565,6 +565,15 @@
     <canvas id="chart-cvd"></canvas>
   </div>
 
+  <!-- OB Imbalance History -->
+  <div class="card">
+    <h2><span class="card-icon">🏋️</span>OB Imbalance (live)
+      <span id="imb-current" style="margin-left:auto;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <canvas id="chart-imbalance" style="height:120px !important;"></canvas>
+    <div id="imb-legend" style="margin-top:6px;font-size:10px;color:var(--muted);display:flex;gap:12px;"></div>
+  </div>
+
   <!-- Funding -->
   <div class="card">
     <h2><span class="card-icon">💰</span>Funding Rate</h2>
@@ -1283,6 +1292,7 @@ function updateSummary(summary) {
     const imbEl = document.getElementById('m-ob-imb');
     imbEl.textContent = imb != null ? fmt(imb * 100, 2) + '%' : '—';
     imbEl.className = 'val ' + (imb > 0 ? 'positive' : imb < 0 ? 'negative' : '');
+    if (imb != null) pushImbalance(summary.ts, imb);
 
     const vi = summary.volume_imbalance;
     if (vi) {
@@ -1506,6 +1516,13 @@ function selectSymbol(sym) {
     chartMacd.data.labels = [];
     chartMacd.data.datasets.forEach(ds => { ds.data = []; });
     chartMacd.update('none');
+  }
+  imbHistory.ts.length = 0;
+  imbHistory.val.length = 0;
+  if (chartImbalance) {
+    chartImbalance.data.labels = [];
+    chartImbalance.data.datasets[0].data = [];
+    chartImbalance.update('none');
   }
   Object.values(sparklines).forEach(sc => { if (sc) { sc.data.labels = []; sc.data.datasets[0].data = []; sc.update('none'); } });
   Object.keys(sparkData).forEach(k => { sparkData[k] = []; });
@@ -2425,6 +2442,90 @@ function initMacdChart() {
   });
 }
 
+// ── OB Imbalance History Chart ────────────────────────────────────────────────
+let chartImbalance = null;
+const imbHistory = { ts: [], val: [] };
+const IMB_MAX = 120;
+
+function initImbalanceChart() {
+  const ctx = document.getElementById('chart-imbalance').getContext('2d');
+  chartImbalance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'OB Imbalance',
+        data: [],
+        borderColor: '#42a5f5',
+        backgroundColor: (ctx) => {
+          const v = ctx.parsed?.y ?? 0;
+          return v > 0 ? 'rgba(102,187,106,0.15)' : 'rgba(239,83,80,0.15)';
+        },
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+        segment: {
+          borderColor: ctx => (ctx.p0.parsed.y >= 0 ? 'rgba(102,187,106,0.9)' : 'rgba(239,83,80,0.9)'),
+        }
+      }]
+    },
+    options: chartDefaults({
+      scales: {
+        x: { display: false },
+        y: {
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 4 },
+          grid: { color: GRID_COLOR },
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...chartDefaults().plugins.tooltip,
+          callbacks: { label: ctx => ` Imb: ${(ctx.parsed.y * 100).toFixed(2)}%` }
+        }
+      }
+    })
+  });
+}
+
+function pushImbalance(ts, val) {
+  if (val == null) return;
+  imbHistory.ts.push(fmtTs(ts));
+  imbHistory.val.push(parseFloat(val.toFixed(4)));
+  if (imbHistory.ts.length > IMB_MAX) {
+    imbHistory.ts.shift();
+    imbHistory.val.shift();
+  }
+  if (!chartImbalance) return;
+  chartImbalance.data.labels = imbHistory.ts;
+  chartImbalance.data.datasets[0].data = imbHistory.val;
+  chartImbalance.update('none');
+
+  // Update header stat
+  const el = document.getElementById('imb-current');
+  if (el) {
+    const pct = (val * 100).toFixed(2);
+    el.style.color = val > 0 ? 'var(--green)' : val < 0 ? 'var(--red)' : 'var(--muted)';
+    el.textContent = (val > 0 ? '+' : '') + pct + '%';
+  }
+
+  // Running stats in legend
+  const vals = imbHistory.val;
+  if (vals.length > 1) {
+    const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+    const bullish = vals.filter(v => v > 0.05).length;
+    const bearish = vals.filter(v => v < -0.05).length;
+    const legEl = document.getElementById('imb-legend');
+    if (legEl) {
+      legEl.innerHTML =
+        `<span>Avg: <b style="color:${avg>0?'var(--green)':'var(--red)'}">${(avg*100).toFixed(2)}%</b></span>` +
+        `<span>Bull ticks: <b style="color:var(--green)">${bullish}</b></span>` +
+        `<span>Bear ticks: <b style="color:var(--red)">${bearish}</b></span>`;
+    }
+  }
+}
+
 // EMA helper
 function computeEMA(data, period) {
   const k = 2 / (period + 1);
@@ -2624,11 +2725,43 @@ async function refreshPriceChart() {
   const lo = Math.min(...candles.map(c => c.low));
   const lastVwap = candles[candles.length - 1]?.vwap;
   const vwapStr = lastVwap ? `&nbsp;VWAP: <b style="color:rgba(66,165,245,0.9)">${lastVwap.toFixed(6)}</b>` : '';
+  // ATR(14) — average true range
+  const ATR_PERIOD = 14;
+  let atrSum = 0;
+  let atrCount = 0;
+  for (let i = 1; i < candles.length; i++) {
+    const c = candles[i];
+    const prev = candles[i - 1];
+    const tr = Math.max(
+      c.high - c.low,
+      Math.abs(c.high - prev.close),
+      Math.abs(c.low  - prev.close)
+    );
+    atrSum += tr;
+    atrCount++;
+  }
+  const atrRaw = atrCount >= ATR_PERIOD ? (() => {
+    // Wilder's smoothing
+    let trs = [];
+    for (let i = 1; i < candles.length; i++) {
+      const c = candles[i], prev = candles[i-1];
+      trs.push(Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close)));
+    }
+    let atr = trs.slice(0, ATR_PERIOD).reduce((a,b) => a+b, 0) / ATR_PERIOD;
+    for (let i = ATR_PERIOD; i < trs.length; i++) {
+      atr = (atr * (ATR_PERIOD - 1) + trs[i]) / ATR_PERIOD;
+    }
+    return atr;
+  })() : null;
+  const lastClose = candles[candles.length - 1]?.close || 1;
+  const atrPct = atrRaw ? (atrRaw / lastClose * 100) : null;
+  const atrStr = atrPct ? `&nbsp;ATR: <b style="color:var(--muted);">${atrPct.toFixed(3)}%</b>` : '';
+
   document.getElementById('price-chart-stats').innerHTML =
     `<span style="color:${color};font-weight:700;">${pct >= 0 ? '+' : ''}${pct}%</span>` +
     `&nbsp;&nbsp;H: <b style="color:var(--green)">${hi.toFixed(6)}</b>` +
     `&nbsp;L: <b style="color:var(--red)">${lo.toFixed(6)}</b>` +
-    vwapStr;
+    vwapStr + atrStr;
 }
 
 // ── Multi-symbol overview bar ─────────────────────────────────────────────────
@@ -2961,6 +3094,7 @@ function checkPriceAlerts(price) {
   initPriceCharts();
   initRsiChart();
   initMacdChart();
+  initImbalanceChart();
   setPriceInterval(60);  // default to 1m active
 
   await loadSymbols();
