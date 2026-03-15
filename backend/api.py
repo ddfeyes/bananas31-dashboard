@@ -1035,9 +1035,10 @@ async def _sym_summary(sym: str) -> dict:
         funding_task  = get_funding_history(limit=2, symbol=sym)
         oi_task       = compute_oi_momentum(window_seconds=300, symbol=sym)
         candles_task  = get_ohlcv(interval_seconds=3600, window_seconds=86400, symbol=sym)
+        candles_1h_task = get_ohlcv(interval_seconds=300, window_seconds=3600, symbol=sym)
 
-        ob, cvd_data, funding, oi_mom, candles_24h = await asyncio.gather(
-            ob_task, cvd_task, funding_task, oi_task, candles_task,
+        ob, cvd_data, funding, oi_mom, candles_24h, candles_1h = await asyncio.gather(
+            ob_task, cvd_task, funding_task, oi_task, candles_task, candles_1h_task,
             return_exceptions=True,
         )
 
@@ -1055,6 +1056,7 @@ async def _sym_summary(sym: str) -> dict:
         oi_pct = oi_mom.get("avg_pct_change", 0) if isinstance(oi_mom, dict) else 0
 
         change_24h = 0.0
+        change_1h  = 0.0
         high_24h = None
         low_24h = None
         if isinstance(candles_24h, list) and candles_24h:
@@ -1064,6 +1066,11 @@ async def _sym_summary(sym: str) -> dict:
                 change_24h = (close_24h - open_24h) / open_24h * 100
             high_24h = max(c["high"] for c in candles_24h)
             low_24h  = min(c["low"]  for c in candles_24h)
+        if isinstance(candles_1h, list) and len(candles_1h) >= 2:
+            o1h = candles_1h[0]["open"]
+            c1h = candles_1h[-1]["close"]
+            if o1h:
+                change_1h = (c1h - o1h) / o1h * 100
 
         return {
             "price": price,
@@ -1071,6 +1078,7 @@ async def _sym_summary(sym: str) -> dict:
             "funding": round(avg_funding, 8),
             "oi_pct": round(oi_pct, 4),
             "change_24h": round(change_24h, 4),
+            "change_1h": round(change_1h, 4),
             "high_24h": high_24h,
             "low_24h": low_24h,
         }

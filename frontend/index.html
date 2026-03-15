@@ -164,6 +164,20 @@
       border-bottom-color: var(--accent);
     }
     .sym-tab .sym-pair { font-size: 9px; opacity: 0.5; font-weight: 400; }
+    .sym-tab .sym-badges { display: flex; gap: 3px; margin-top: 2px; flex-wrap: wrap; }
+    .sym-tab .sym-badge {
+      font-size: 8px;
+      font-weight: 700;
+      padding: 0px 3px;
+      border-radius: 3px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0;
+      text-transform: none;
+      line-height: 14px;
+    }
+    .sym-badge.pos { background: rgba(0,230,130,0.15); color: #00e682; }
+    .sym-badge.neg { background: rgba(255,80,80,0.15); color: #ff5050; }
+    .sym-badge.neu { background: rgba(120,120,120,0.12); color: var(--muted); }
 
     /* ── Grid layout ── */
     .grid {
@@ -2051,10 +2065,27 @@ function renderSymbolTabs() {
     const base = sym.replace('USDT', '');
     const d = multiOverviewData[sym];
     let priceBit = '';
+    let badgesBit = '';
     if (d?.price != null) {
       priceBit = `<span class="sym-pair" style="margin-left:4px;"> $${d.price.toPrecision(4)}</span>`;
     }
-    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')">${base}${priceBit}</div>`;
+    if (d != null) {
+      const badges = [];
+      if (d.change_1h != null) {
+        const v = d.change_1h;
+        const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
+        badges.push(`<span class="sym-badge ${cls}">1h ${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`);
+      }
+      if (d.change_24h != null) {
+        const v = d.change_24h;
+        const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
+        badges.push(`<span class="sym-badge ${cls}">24h ${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`);
+      }
+      if (badges.length) {
+        badgesBit = `<div class="sym-badges">${badges.join('')}</div>`;
+      }
+    }
+    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')" style="display:flex;flex-direction:column;align-items:flex-start;">${base}${priceBit}${badgesBit}</div>`;
   }).join('');
 }
 
