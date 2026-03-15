@@ -132,9 +132,10 @@
     <div id="funding-rates" style="margin-top:10px;"></div>
   </div>
 
-  <!-- Orderbook -->
+  <!-- Orderbook + Market Depth -->
   <div class="card">
-    <h2>Order Book (Top 10)</h2>
+    <h2>Order Book + Market Depth</h2>
+    <canvas id="chart-depth" style="height:140px !important; margin-bottom:8px;"></canvas>
     <div class="ob-grid">
       <div class="ob-col">
         <div class="ob-header"><span>Price</span><span>Qty</span></div>
@@ -276,12 +277,60 @@ function mkVolumeProfileChart(id) {
   });
 }
 
+function mkDepthChart(id) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'Bids',
+          data: [],
+          borderColor: '#00e676',
+          backgroundColor: '#00e67622',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0,
+          stepped: 'after',
+        },
+        {
+          label: 'Asks',
+          data: [],
+          borderColor: '#ff4444',
+          backgroundColor: '#ff444422',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0,
+          stepped: 'after',
+        }
+      ]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: { color: '#888', font: { size: 9 }, maxTicksLimit: 8 },
+          grid: { color: '#1a1a24' }
+        },
+        y: { ticks: { color: '#888', font: { size: 9 } }, grid: { color: '#1a1a24' } }
+      }
+    }
+  });
+}
+
 const charts = {
   oi: mkChart('chart-oi', 'OI', '#4fc3f7'),
   cvd: mkChart('chart-cvd', 'CVD', '#ce93d8'),
   funding: mkChart('chart-funding', 'Funding', '#f0c040'),
   liq: mkBarChart('chart-liq'),
   vp: mkVolumeProfileChart('chart-vp'),
+  depth: mkDepthChart('chart-depth'),
 };
 
 function fmt(n, d=2) { return n != null ? Number(n).toFixed(d) : '—'; }
@@ -390,6 +439,25 @@ function updateSummary(summary) {
     const frDiv = document.getElementById('funding-rates');
     frDiv.innerHTML = Object.entries(fr).map(([ex, rate]) =>
       `<div class="funding-row"><span>${ex}</span><span class="${rate > 0 ? 'positive' : 'negative'}">${fmt(rate * 100, 6)}%</span></div>`
+    ).join('');
+  }
+
+  // Market depth chart (from WS)
+  if (summary.depth_bids?.length && summary.depth_asks?.length) {
+    charts.depth.data.datasets[0].data = summary.depth_bids.map(([p, c]) => ({ x: p, y: c }));
+    charts.depth.data.datasets[1].data = summary.depth_asks.map(([p, c]) => ({ x: p, y: c }));
+    charts.depth.update('none');
+  }
+
+  // Orderbook table (from WS)
+  if (summary.ob_bids?.length) {
+    document.getElementById('ob-bids').innerHTML = summary.ob_bids.slice(0, 10).map(([p, q]) =>
+      `<div class="ob-row bid"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
+    ).join('');
+  }
+  if (summary.ob_asks?.length) {
+    document.getElementById('ob-asks').innerHTML = summary.ob_asks.slice(0, 10).map(([p, q]) =>
+      `<div class="ob-row ask"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
     ).join('');
   }
 }
@@ -625,21 +693,7 @@ async function refreshAll() {
     document.getElementById('vp-va-pct').textContent = `VA: ${vp.value_area_pct || 70}%`;
   }
 
-  // Orderbook
-  const ob = await fetchJSON(`/api/orderbook/latest?limit=1&symbol=${sym}`);
-  if (ob?.data?.length) {
-    let bids = [], asks = [];
-    try {
-      bids = JSON.parse(ob.data[0].bids || '[]').slice(0, 10);
-      asks = JSON.parse(ob.data[0].asks || '[]').slice(0, 10);
-    } catch {}
-    document.getElementById('ob-bids').innerHTML = bids.map(([p, q]) =>
-      `<div class="ob-row bid"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
-    ).join('');
-    document.getElementById('ob-asks').innerHTML = asks.map(([p, q]) =>
-      `<div class="ob-row ask"><span>${fmt(p, 4)}</span><span>${fmt(q, 4)}</span></div>`
-    ).join('');
-  }
+  // Orderbook + depth now come via WebSocket (updateSummary)
 }
 
 // ── Periodic symbol sync (pick up new symbols added at runtime) ──────────────

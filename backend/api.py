@@ -128,18 +128,56 @@ async def cvd_history(
 
 @router.get("/volume-profile")
 async def volume_profile(
-    symbol: Optional[str] = Query(default=None),
-    timeframe: int = Query(default=3600, le=86400, description="Lookback window in seconds"),
+    window: int = Query(default=3600, le=86400),
+    bins: int = Query(default=50, le=200),
+    symbol: Optional[str] = None,
 ):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_profile(window_seconds=window, bins=bins, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/market-depth")
+async def market_depth(symbol: Optional[str] = None):
     """
-    Volume Profile for a symbol over the given timeframe.
-    Returns POC (Point of Control), VAH (Value Area High), VAL (Value Area Low),
-    and the full price/volume profile with 0.01 price resolution.
+    Returns cumulative bid/ask depth curve from latest orderbook snapshot.
     """
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_volume_profile(symbol=target, timeframe_seconds=timeframe)
-    return {"status": "ok", "symbol": target, **data}
+    ob = await get_latest_orderbook(symbol=target, limit=1)
+    if not ob:
+        return {"status": "ok", "symbol": target, "bids": [], "asks": [], "mid_price": None}
+
+    import json as _json
+    row = ob[0]
+    try:
+        raw_bids = _json.loads(row.get("bids", "[]"))
+        raw_asks = _json.loads(row.get("asks", "[]"))
+    except Exception:
+        raw_bids, raw_asks = [], []
+
+    # Build cumulative depth
+    cum_bid = 0.0
+    depth_bids = []
+    for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_bids], key=lambda x: x[0], reverse=True):
+        cum_bid += q
+        depth_bids.append({"price": p, "qty": round(q, 6), "cum_qty": round(cum_bid, 6)})
+
+    cum_ask = 0.0
+    depth_asks = []
+    for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]):
+        cum_ask += q
+        depth_asks.append({"price": p, "qty": round(q, 6), "cum_qty": round(cum_ask, 6)})
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "mid_price": row.get("mid_price"),
+        "bids": depth_bids,
+        "asks": depth_asks,
+        "ts": row.get("ts"),
+    }
 
 
 @router.get("/oi-spike")
@@ -207,6 +245,25 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                 for row in funding:
                     latest_funding[row["exchange"]] = row["rate"]
 
+                # Parse raw orderbook for depth
+                raw_bids, raw_asks = [], []
+                if ob:
+                    try:
+                        raw_bids = json.loads(ob[0].get("bids", "[]"))
+                        raw_asks = json.loads(ob[0].get("asks", "[]"))
+                    except Exception:
+                        pass
+
+                cum_bid, depth_bids = 0.0, []
+                for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_bids], key=lambda x: x[0], reverse=True):
+                    cum_bid += q
+                    depth_bids.append([round(float(p), 8), round(cum_bid, 6)])
+
+                cum_ask, depth_asks = 0.0, []
+                for p, q in sorted([[float(x[0]), float(x[1])] for x in raw_asks], key=lambda x: x[0]):
+                    cum_ask += q
+                    depth_asks.append([round(float(p), 8), round(cum_ask, 6)])
+
                 msg = {
                     "type": "summary",
                     "ts": time.time(),
@@ -218,6 +275,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "volume_imbalance": vol_imb,
                     "oi_momentum": oi_mom,
                     "funding_rates": latest_funding,
+                    "depth_bids": depth_bids,
+                    "depth_asks": depth_asks,
+                    "ob_bids": raw_bids[:10],
+                    "ob_asks": raw_asks[:10],
                 }
                 await ws.send_text(json.dumps(msg))
 
