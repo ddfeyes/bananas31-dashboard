@@ -1347,6 +1347,49 @@ async function renderVpin() {
   `;
 }
 
+// ── Render: Tape Speed ────────────────────────────────────────────────────────
+async function renderTapeSpeed() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/tape-speed?symbol=${sym}`);
+  const el = document.getElementById('tape-speed-content');
+  if (!el) return;
+  if (!data) { el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>'; return; }
+
+  const cur    = data.current_tpm  != null ? data.current_tpm.toFixed(1)  : '—';
+  const avg    = data.avg_tpm      != null ? data.avg_tpm.toFixed(1)      : '—';
+  const high   = data.high_watermark != null ? data.high_watermark.toFixed(1) : '—';
+  const low    = data.low_watermark  != null ? data.low_watermark.toFixed(1)  : '—';
+
+  const heatColor = data.heating_up ? 'var(--red)' : data.cooling_down ? 'var(--blue)' : 'var(--fg)';
+  const heatLabel = data.heating_up ? 'HEATING' : data.cooling_down ? 'COOLING' : 'STABLE';
+  const badgeClass = data.heating_up ? 'badge-red' : data.cooling_down ? 'badge-blue' : 'badge-yellow';
+
+  const badge = document.getElementById('tape-speed-badge');
+  if (badge) {
+    badge.textContent = heatLabel;
+    badge.className = `card-badge ${badgeClass}`;
+    badge.style.display = '';
+  }
+
+  // Bar chart: last N buckets as sparkline
+  const buckets = (data.buckets || []).slice(-20);
+  const maxTpm  = data.high_watermark || 1;
+  const bars = buckets.map(b => {
+    const pct = Math.min((b.tpm / maxTpm) * 100, 100).toFixed(1);
+    return `<div class="ts-bar" style="height:${pct}%;background:var(--blue)" title="${b.tpm.toFixed(1)} tpm"></div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="ts-metrics">
+      <span class="ts-stat">Current <span style="color:${heatColor};font-weight:700">${cur} tpm</span></span>
+      <span class="ts-stat">Avg <span>${avg} tpm</span></span>
+      <span class="ts-stat">High <span class="text-yellow">${high}</span></span>
+      <span class="ts-stat">Low <span class="text-muted">${low}</span></span>
+    </div>
+    <div class="ts-chart">${bars}</div>
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1369,6 +1412,7 @@ async function refresh() {
     renderCorrelations(),
     renderVpin(),
     renderAdaptiveVolumeProfile(),
+    renderTapeSpeed(),
   ]);
 }
 

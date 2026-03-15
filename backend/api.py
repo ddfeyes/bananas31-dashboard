@@ -24,7 +24,6 @@ from storage import (
     insert_alert,
     get_alert_history,
     get_whale_trades,
-    insert_pattern,
     get_pattern_history,
     get_phase_snapshots,
     get_data_freshness,
@@ -64,7 +63,6 @@ from metrics import (
     compute_ob_recovery_speed,
     compute_tod_volatility,
     compute_net_taker_delta,
-    detect_oi_surge_with_crash,
     detect_squeeze_setup,
     compute_tick_imbalance_bars,
     compute_volume_bars,
@@ -73,6 +71,7 @@ from metrics import (
     compute_session_stats,
     compute_inter_exchange_oi_divergence,
     compute_whale_clustering,
+    compute_tape_speed,
 )
 
 router = APIRouter(prefix="/api")
@@ -1265,7 +1264,6 @@ async def orderbook_heatmap(
     X-axis: time (sampled every 10s)
     """
     import json as _json
-    import math
 
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
@@ -1388,7 +1386,6 @@ async def trade_flow_heatmap(
     Returns trade flow (actual executed trades) binned by time×price.
     Shows buy/sell pressure zones.
     """
-    import math
 
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
@@ -1673,6 +1670,45 @@ async def trade_count_rate(
     }
 
 
+@router.get("/tape-speed")
+async def tape_speed_endpoint(
+    window: int = Query(default=1800, ge=60, le=7200),
+    bucket: int = Query(default=60, ge=10, le=300),
+    hot_multiplier: float = Query(default=2.0, ge=1.1, le=10.0),
+    symbol: Optional[str] = None,
+):
+    """
+    Rolling tape speed: trades/minute gauge with high/low watermarks.
+
+    - current_tpm:    trades/min in the most recent `bucket` seconds
+    - avg_tpm:        mean TPM across the full `window`
+    - high_watermark: peak TPM observed in `window`
+    - low_watermark:  lowest non-zero TPM observed in `window`
+    - heating_up:     current_tpm > hot_multiplier * avg_tpm
+    - cooling_down:   current_tpm < avg_tpm / hot_multiplier
+    - buckets:        [{ts, tpm}] time-series for sparkline
+    """
+    target = symbol or get_symbols()[0]
+    since = time.time() - window
+
+    async with aiosqlite.connect(storage.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT ts FROM trades WHERE ts > ? AND symbol = ? ORDER BY ts ASC",
+            (since, target),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    timestamps = [r["ts"] for r in rows]
+    result = compute_tape_speed(
+        timestamps,
+        window_seconds=window,
+        bucket_seconds=bucket,
+        hot_multiplier=hot_multiplier,
+    )
+    return {"status": "ok", "symbol": target, **result}
+
+
 @router.get("/spread-history")
 async def spread_history(
     window: int = Query(default=1800, le=86400),
@@ -1762,7 +1798,7 @@ async def spread_tracker(
     - Stores in dedicated spread_history table (written by insert_orderbook)
     - Returns alert when spread_pct > threshold_pct OR current > 2x avg
     """
-    from storage import get_spread_history, get_spread_stats, DB_PATH
+    from storage import get_spread_stats
 
     syms = [symbol.upper()] if symbol else get_symbols()
     result = {}
@@ -1777,7 +1813,6 @@ async def spread_tracker(
         alert = stats.get("alert")
         current_pct = stats.get("current_pct")
         current_bps = stats.get("current_bps")
-        avg_bps = stats.get("avg_bps", 0)
         if (
             current_pct is not None
             and current_pct > threshold_pct
@@ -2437,10 +2472,10 @@ async def session_stats(symbol: Optional[str] = None):
 
     # Liquidation totals
     liq_long = sum(
-        l["value"] or 0 for l in liqs_1h if l["side"] != "buy"
+        liq["value"] or 0 for liq in liqs_1h if liq["side"] != "buy"
     )  # long liq = sell side
     liq_short = sum(
-        l["value"] or 0 for l in liqs_1h if l["side"] == "buy"
+        liq["value"] or 0 for liq in liqs_1h if liq["side"] == "buy"
     )  # short liq = buy side
     liq_total = liq_long + liq_short
 
@@ -3238,20 +3273,14 @@ async def max_drawdown(
 
         # Max run-up (low-to-high)
         trough_run = prices[0][1]
-        trough_run_ts = prices[0][0]
         max_runup = 0.0
-        max_ru_trough = trough_run
-        max_ru_peak = trough_run
 
         for ts, p in prices[1:]:
             if p < trough_run:
                 trough_run = p
-                trough_run_ts = ts
             ru = (p - trough_run) / trough_run * 100 if trough_run else 0
             if ru > max_runup:
                 max_runup = ru
-                max_ru_trough = trough_run
-                max_ru_peak = p
 
         # Current drawdown from recent peak
         recent_peak = max(p for _, p in prices[-100:])  # last ~100 trades
@@ -4219,6 +4248,13 @@ async def tod_volatility_endpoint(
         interval_seconds=interval, window_seconds=window, symbol=symbol
     )
     result = compute_tod_volatility(candles, elevation_threshold=elevation_threshold)
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "interval_seconds": interval,
+        **result,
+    }
 
 
 @router.get("/net-taker-delta")
@@ -4247,7 +4283,6 @@ async def net_taker_delta_endpoint(
         "status": "ok",
         "symbol": symbol,
         "window_seconds": window,
-        "interval_seconds": interval,
         "bucket_seconds": bucket_seconds,
         **result,
     }
@@ -4352,6 +4387,12 @@ async def squeeze_setup_endpoint(
         price_drop_pct=price_drop_pct,
         funding_extreme=funding_extreme,
     )
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        **result,
+    }
 
 
 @router.get("/tick-imbalance")
