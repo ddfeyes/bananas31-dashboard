@@ -1,8 +1,9 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const API = window.location.protocol + '//' + window.location.hostname + ':8765/api';
-const WS  = 'ws://' + window.location.hostname + ':8765';
+// Use same host for API (nginx will proxy /api to backend:8765)
+const API = window.location.protocol + '//' + window.location.host + '/api';
+const WS  = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host;
 
 const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
 const TRADE_MAX    = 100;    // max rows in tape
