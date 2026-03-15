@@ -1,4 +1,5 @@
 """Computed metrics: CVD, volume imbalance, OI momentum, phase classifier — multi-symbol."""
+
 import asyncio
 import time
 from typing import Dict, List, Optional
@@ -23,12 +24,14 @@ async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Di
     for t in trades:
         delta = t["qty"] if t["side"] in ("buy", "Buy") else -t["qty"]
         cvd += delta
-        result.append({
-            "ts": t["ts"],
-            "price": t["price"],
-            "cvd": round(cvd, 6),
-            "delta": round(delta, 6),
-        })
+        result.append(
+            {
+                "ts": t["ts"],
+                "price": t["price"],
+                "cvd": round(cvd, 6),
+                "delta": round(delta, 6),
+            }
+        )
 
     # Downsample to ~300 points for frontend
     if len(result) > 300:
@@ -38,7 +41,9 @@ async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Di
     return result
 
 
-async def compute_volume_imbalance(window_seconds: int = 60, symbol: str = None) -> Dict:
+async def compute_volume_imbalance(
+    window_seconds: int = 60, symbol: str = None
+) -> Dict:
     """Buy vs sell volume ratio over window."""
     since = time.time() - window_seconds
     trades = await get_trades_for_cvd(since, symbol=symbol)
@@ -97,6 +102,7 @@ async def compute_oi_momentum(window_seconds: int = 300, symbol: str = None) -> 
 
 _phase_history: dict = {}  # per-symbol rolling history for smoothing
 
+
 async def classify_market_phase(symbol: str = None) -> Dict:
     """
     Phase classifier v2: multi-window lookback + confidence smoothing.
@@ -108,12 +114,12 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     windows = [60, 300, 900]
     weights = [0.5, 0.3, 0.2]
 
-    tasks = [
-        compute_cvd(window_seconds=w, symbol=symbol) for w in windows
-    ] + [
+    tasks = [compute_cvd(window_seconds=w, symbol=symbol) for w in windows] + [
         compute_oi_momentum(window_seconds=w, symbol=symbol) for w in windows
     ]
-    results = await asyncio.gather(*[asyncio.create_task(t) for t in tasks], return_exceptions=True)
+    results = await asyncio.gather(
+        *[asyncio.create_task(t) for t in tasks], return_exceptions=True
+    )
 
     cvd_results = results[:3]
     oi_results = results[3:]
@@ -131,8 +137,8 @@ async def classify_market_phase(symbol: str = None) -> Dict:
         return (p_now - p_old) / p_old * 100
 
     # Short-term (1min) and broad (15min) price change
-    price_pct_now   = price_change_from_cvd(cvd_results[0])   # 1min window
-    price_pct_broad = price_change_from_cvd(cvd_results[2])   # 15min window
+    price_pct_now = price_change_from_cvd(cvd_results[0])  # 1min window
+    price_pct_broad = price_change_from_cvd(cvd_results[2])  # 15min window
 
     # CVD deltas
     def cvd_delta_of(data):
@@ -150,7 +156,7 @@ async def classify_market_phase(symbol: str = None) -> Dict:
 
     # Weighted aggregation
     def weighted(vals, ws):
-        total_w = sum(ws[:len(vals)])
+        total_w = sum(ws[: len(vals)])
         return sum(v * w for v, w in zip(vals, ws)) / total_w if total_w > 0 else 0
 
     w_cvd = weighted(cvd_deltas, weights)
@@ -159,7 +165,11 @@ async def classify_market_phase(symbol: str = None) -> Dict:
 
     # Normalize CVD by estimating total volume (rough)
     cvd_norm = 0.0
-    if cvd_results[0] and not isinstance(cvd_results[0], Exception) and len(cvd_results[0]) > 1:
+    if (
+        cvd_results[0]
+        and not isinstance(cvd_results[0], Exception)
+        and len(cvd_results[0]) > 1
+    ):
         total_abs = sum(abs(p.get("delta", 0)) for p in cvd_results[0])
         cvd_norm = w_cvd / total_abs if total_abs > 0 else 0
 
@@ -244,7 +254,9 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     }
 
 
-async def detect_oi_spike(window_seconds: int = 300, threshold_pct: float = 3.0, symbol: str = None) -> Dict:
+async def detect_oi_spike(
+    window_seconds: int = 300, threshold_pct: float = 3.0, symbol: str = None
+) -> Dict:
     """
     OI spike detector: if OI changes >threshold_pct in window, alert.
     """
@@ -295,17 +307,26 @@ async def detect_oi_spike(window_seconds: int = 300, threshold_pct: float = 3.0,
     }
 
 
-async def detect_liquidation_cascade(window_seconds: int = 60, threshold_usd: float = 50000, symbol: str = None) -> Dict:
+async def detect_liquidation_cascade(
+    window_seconds: int = 60, threshold_usd: float = 50000, symbol: str = None
+) -> Dict:
     """
     Liquidation cascade: detect bursts of liquidations > threshold_usd in window.
     A cascade is when liquidation value spikes >threshold_usd in 60s.
     """
     since = time.time() - window_seconds
     from storage import get_recent_liquidations
+
     liqs = await get_recent_liquidations(limit=500, since=since, symbol=symbol)
 
     if not liqs:
-        return {"cascade": False, "total_usd": 0, "buy_usd": 0, "sell_usd": 0, "description": "No liquidations"}
+        return {
+            "cascade": False,
+            "total_usd": 0,
+            "buy_usd": 0,
+            "sell_usd": 0,
+            "description": "No liquidations",
+        }
 
     buy_usd = sum(l.get("value", 0) for l in liqs if l.get("side") == "buy")
     sell_usd = sum(l.get("value", 0) for l in liqs if l.get("side") != "buy")
@@ -344,7 +365,9 @@ async def detect_liquidation_cascade(window_seconds: int = 60, threshold_usd: fl
     }
 
 
-async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None) -> Dict:
+async def detect_delta_divergence(
+    window_seconds: int = 300, symbol: str = None
+) -> Dict:
     """
     Delta divergence: price moving up but CVD moving down (or vice versa).
     Returns severity: none | weak | strong
@@ -388,11 +411,15 @@ async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None)
     if price_pct > 0.05 and cvd_norm < -0.05:
         divergence = "bearish"
         severity = min(1.0, abs(price_pct) * 0.3 + abs(cvd_norm) * 0.7)
-        description = f"⚠ Price up {price_pct:.2f}% but CVD falling — bearish divergence"
+        description = (
+            f"⚠ Price up {price_pct:.2f}% but CVD falling — bearish divergence"
+        )
     elif price_pct < -0.05 and cvd_norm > 0.05:
         divergence = "bullish"
         severity = min(1.0, abs(price_pct) * 0.3 + abs(cvd_norm) * 0.7)
-        description = f"⚠ Price down {abs(price_pct):.2f}% but CVD rising — bullish divergence"
+        description = (
+            f"⚠ Price down {abs(price_pct):.2f}% but CVD rising — bullish divergence"
+        )
 
     return {
         "divergence": divergence,
@@ -404,7 +431,9 @@ async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None)
     }
 
 
-async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000, symbol: str = None) -> Dict:
+async def detect_large_trades(
+    window_seconds: int = 300, min_usd: float = 10000, symbol: str = None
+) -> Dict:
     """
     Detect large individual trades > min_usd.
     """
@@ -415,13 +444,15 @@ async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000,
     for t in trades:
         value = t["price"] * t["qty"]
         if value >= min_usd:
-            large.append({
-                "ts": t["ts"],
-                "price": t["price"],
-                "qty": t["qty"],
-                "side": t["side"],
-                "value_usd": round(value, 2),
-            })
+            large.append(
+                {
+                    "ts": t["ts"],
+                    "price": t["price"],
+                    "qty": t["qty"],
+                    "side": t["side"],
+                    "value_usd": round(value, 2),
+                }
+            )
 
     large.sort(key=lambda x: x["value_usd"], reverse=True)
 
@@ -438,7 +469,9 @@ async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000,
     }
 
 
-async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: int = 50) -> dict:
+async def compute_volume_profile(
+    symbol: str, window_seconds: int = 3600, bins: int = 50
+) -> dict:
     """
     Volume Profile: POC, VAH, VAL over the last window_seconds.
 
@@ -466,7 +499,10 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
 
     # Determine display precision from tick_size
     import math
-    decimals = max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 6
+
+    decimals = (
+        max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 6
+    )
 
     # Build profile list sorted by price (include buy/sell split)
     raw_profile = [
@@ -481,9 +517,9 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
 
     # Downsample to `bins` buckets if we have more raw levels
     if len(raw_profile) > bins and bins > 0:
-        p_low  = raw_profile[0]["price"]
+        p_low = raw_profile[0]["price"]
         p_high = raw_profile[-1]["price"]
-        p_rng  = p_high - p_low
+        p_rng = p_high - p_low
         bin_size = p_rng / bins if p_rng > 0 else 1
 
         bin_map: dict = {}
@@ -491,9 +527,14 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
             b_idx = min(bins - 1, int((entry["price"] - p_low) / bin_size))
             center = round(p_low + (b_idx + 0.5) * bin_size, decimals)
             if center not in bin_map:
-                bin_map[center] = {"price": center, "volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0}
-            bin_map[center]["volume"]   += entry["volume"]
-            bin_map[center]["buy_vol"]  += entry["buy_vol"]
+                bin_map[center] = {
+                    "price": center,
+                    "volume": 0.0,
+                    "buy_vol": 0.0,
+                    "sell_vol": 0.0,
+                }
+            bin_map[center]["volume"] += entry["volume"]
+            bin_map[center]["buy_vol"] += entry["buy_vol"]
             bin_map[center]["sell_vol"] += entry["sell_vol"]
 
         profile = sorted(bin_map.values(), key=lambda x: x["price"])
@@ -541,7 +582,9 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
         "vah": round(vah, decimals),
         "val": round(val, decimals),
         "total_volume": round(total_volume, 6),
-        "value_area_pct": round(accumulated / total_volume * 100, 2) if total_volume else 0,
+        "value_area_pct": (
+            round(accumulated / total_volume * 100, 2) if total_volume else 0
+        ),
         "tick_size": tick_size,
         "bins": [
             {
@@ -556,7 +599,9 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
     }
 
 
-async def detect_funding_extreme(symbol: str = None, threshold_pct: float = 0.1) -> Dict:
+async def detect_funding_extreme(
+    symbol: str = None, threshold_pct: float = 0.1
+) -> Dict:
     """
     Detect extreme funding rates (>threshold_pct% or <-threshold_pct%).
     Extreme funding = squeeze risk: shorts squeezed if funding very positive,
@@ -564,7 +609,12 @@ async def detect_funding_extreme(symbol: str = None, threshold_pct: float = 0.1)
     """
     funding = await get_funding_history(limit=4, symbol=symbol)
     if not funding:
-        return {"extreme": False, "rates": {}, "description": "No funding data", "direction": None}
+        return {
+            "extreme": False,
+            "rates": {},
+            "description": "No funding data",
+            "direction": None,
+        }
 
     rates = {}
     for row in funding:
@@ -610,22 +660,31 @@ async def detect_cvd_momentum(window_seconds: int = 60, symbol: str = None) -> D
     trades = await get_trades_for_cvd(since, symbol=symbol)
 
     if len(trades) < 5:
-        return {"cvd_rate": 0, "direction": "neutral", "intensity": 0, "acceleration": 0}
+        return {
+            "cvd_rate": 0,
+            "direction": "neutral",
+            "intensity": 0,
+            "acceleration": 0,
+        }
 
     # Split into early/late half for acceleration
     half = len(trades) // 2
     early_trades = trades[:half]
-    late_trades  = trades[half:]
+    late_trades = trades[half:]
 
     def cvd_of(ts_list):
         c = 0.0
         for t in ts_list:
-            c += t["price"] * t["qty"] if t["side"] in ("buy", "Buy") else -(t["price"] * t["qty"])
+            c += (
+                t["price"] * t["qty"]
+                if t["side"] in ("buy", "Buy")
+                else -(t["price"] * t["qty"])
+            )
         return c
 
     total_vol_usd = sum(t["price"] * t["qty"] for t in trades)
     early_cvd = cvd_of(early_trades)
-    late_cvd  = cvd_of(late_trades)
+    late_cvd = cvd_of(late_trades)
     total_cvd = early_cvd + late_cvd
 
     # Rate = CVD USD per second
@@ -639,7 +698,9 @@ async def detect_cvd_momentum(window_seconds: int = 60, symbol: str = None) -> D
     acceleration = late_cvd - early_cvd
     accel_norm = acceleration / total_vol_usd if total_vol_usd > 0 else 0
 
-    direction = "bullish" if total_cvd > 0 else "bearish" if total_cvd < 0 else "neutral"
+    direction = (
+        "bullish" if total_cvd > 0 else "bearish" if total_cvd < 0 else "neutral"
+    )
 
     return {
         "cvd_rate": round(cvd_rate, 2),
@@ -652,7 +713,9 @@ async def detect_cvd_momentum(window_seconds: int = 60, symbol: str = None) -> D
     }
 
 
-async def detect_volume_spike(window_seconds: int = 30, baseline_seconds: int = 300, symbol: str = None) -> Dict:
+async def detect_volume_spike(
+    window_seconds: int = 30, baseline_seconds: int = 300, symbol: str = None
+) -> Dict:
     """
     Volume spike: compare recent window volume vs baseline average.
     Returns spike if recent/baseline ratio > 3x.
@@ -664,13 +727,21 @@ async def detect_volume_spike(window_seconds: int = 30, baseline_seconds: int = 
     recent_vol = sum(t["qty"] * t["price"] for t in recent_trades)
     # Baseline per-period average
     n_periods = baseline_seconds / window_seconds
-    baseline_per_period = sum(t["qty"] * t["price"] for t in baseline_trades) / n_periods if n_periods > 0 else 0
+    baseline_per_period = (
+        sum(t["qty"] * t["price"] for t in baseline_trades) / n_periods
+        if n_periods > 0
+        else 0
+    )
 
     ratio = recent_vol / baseline_per_period if baseline_per_period > 0 else 0
     spike = ratio >= 3.0
 
-    buy_vol = sum(t["qty"] * t["price"] for t in recent_trades if t["side"] in ("buy", "Buy"))
-    sell_vol = sum(t["qty"] * t["price"] for t in recent_trades if t["side"] not in ("buy", "Buy"))
+    buy_vol = sum(
+        t["qty"] * t["price"] for t in recent_trades if t["side"] in ("buy", "Buy")
+    )
+    sell_vol = sum(
+        t["qty"] * t["price"] for t in recent_trades if t["side"] not in ("buy", "Buy")
+    )
     dominant = "buy" if buy_vol >= sell_vol else "sell"
     dominant_pct = (max(buy_vol, sell_vol) / recent_vol * 100) if recent_vol > 0 else 0
 
@@ -683,8 +754,8 @@ async def detect_volume_spike(window_seconds: int = 30, baseline_seconds: int = 
         "dominant_pct": round(dominant_pct, 1),
         "description": (
             f"🌊 Vol spike {ratio:.1f}x normal (${recent_vol:,.0f} in {window_seconds}s, {dominant}-dominant)"
-            if spike else
-            f"Volume normal ({ratio:.1f}x)"
+            if spike
+            else f"Volume normal ({ratio:.1f}x)"
         ),
         "window_seconds": window_seconds,
     }
@@ -703,59 +774,61 @@ def _phase_description(phase: str) -> str:
 async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
     """
     ML-style accumulation/distribution footprint detector.
-    
+
     Accumulation signals:
     - OI rising + CVD positive (buyers adding longs)
     - Large buy trades clustering near lows
     - Low sell volume on dips (weak selling pressure)
     - Funding near zero or negative (shorts paying longs)
-    
+
     Distribution signals:
-    - OI rising + CVD negative (sellers adding shorts)  
+    - OI rising + CVD negative (sellers adding shorts)
     - Large sell trades clustering near highs
     - Low buy volume on rallies (weak buying interest)
     - Funding positive and rising (longs paying)
-    
+
     Returns pattern type, confidence (0-1), and component signals.
     """
     now = time.time()
-    since_5m  = now - 300
+    since_5m = now - 300
     since_15m = now - 900
-    since_1h  = now - 3600
+    since_1h = now - 3600
 
     # Gather inputs in parallel
-    oi_5m, oi_15m, cvd_5m, cvd_15m, vol_imb_5m, vol_imb_15m, funding, ob = await asyncio.gather(
-        compute_oi_momentum(window_seconds=300,  symbol=symbol),
-        compute_oi_momentum(window_seconds=900,  symbol=symbol),
-        compute_cvd(window_seconds=300,  symbol=symbol),
-        compute_cvd(window_seconds=900,  symbol=symbol),
-        compute_volume_imbalance(window_seconds=300, symbol=symbol),
-        compute_volume_imbalance(window_seconds=900, symbol=symbol),
-        get_funding_history(limit=4, symbol=symbol),
-        get_latest_orderbook(symbol=symbol, limit=1),
+    oi_5m, oi_15m, cvd_5m, cvd_15m, vol_imb_5m, vol_imb_15m, funding, ob = (
+        await asyncio.gather(
+            compute_oi_momentum(window_seconds=300, symbol=symbol),
+            compute_oi_momentum(window_seconds=900, symbol=symbol),
+            compute_cvd(window_seconds=300, symbol=symbol),
+            compute_cvd(window_seconds=900, symbol=symbol),
+            compute_volume_imbalance(window_seconds=300, symbol=symbol),
+            compute_volume_imbalance(window_seconds=900, symbol=symbol),
+            get_funding_history(limit=4, symbol=symbol),
+            get_latest_orderbook(symbol=symbol, limit=1),
+        )
     )
 
     # --- Signal extraction ---
 
     # 1. OI trend (positive = rising)
-    oi_5m_pct  = oi_5m.get("avg_pct_change", 0)
+    oi_5m_pct = oi_5m.get("avg_pct_change", 0)
     oi_15m_pct = oi_15m.get("avg_pct_change", 0)
-    oi_rising  = oi_5m_pct > 0.5 or oi_15m_pct > 0.3
+    oi_rising = oi_5m_pct > 0.5 or oi_15m_pct > 0.3
 
     # 2. CVD direction and end delta
-    cvd_5m_end  = cvd_5m[-1]["cvd"]  if cvd_5m  else 0
-    cvd_5m_start = cvd_5m[0]["cvd"] if cvd_5m  else 0
-    cvd_15m_end  = cvd_15m[-1]["cvd"] if cvd_15m else 0
+    cvd_5m_end = cvd_5m[-1]["cvd"] if cvd_5m else 0
+    cvd_5m_start = cvd_5m[0]["cvd"] if cvd_5m else 0
+    cvd_15m_end = cvd_15m[-1]["cvd"] if cvd_15m else 0
     cvd_15m_start = cvd_15m[0]["cvd"] if cvd_15m else 0
-    cvd_5m_delta  = cvd_5m_end  - cvd_5m_start
+    cvd_5m_delta = cvd_5m_end - cvd_5m_start
     cvd_15m_delta = cvd_15m_end - cvd_15m_start
     cvd_positive = cvd_5m_delta > 0 and cvd_15m_delta > 0
     cvd_negative = cvd_5m_delta < 0 and cvd_15m_delta < 0
 
     # 3. Volume imbalance
-    imb_5m  = vol_imb_5m.get("imbalance", 0)   # -1 to 1
+    imb_5m = vol_imb_5m.get("imbalance", 0)  # -1 to 1
     imb_15m = vol_imb_15m.get("imbalance", 0)
-    buy_dominant  = imb_5m > 0.1 and imb_15m > 0.05
+    buy_dominant = imb_5m > 0.1 and imb_15m > 0.05
     sell_dominant = imb_5m < -0.1 and imb_15m < -0.05
 
     # 4. Funding rate analysis
@@ -763,9 +836,9 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
     if funding:
         rates = [r["rate"] for r in funding]
         avg_funding = sum(rates) / len(rates)
-    funding_negative = avg_funding < -0.01   # shorts paying
-    funding_positive = avg_funding > 0.01    # longs paying
-    funding_rising   = len(funding) >= 2 and funding[-1]["rate"] > funding[0]["rate"]
+    funding_negative = avg_funding < -0.01  # shorts paying
+    funding_positive = avg_funding > 0.01  # longs paying
+    funding_rising = len(funding) >= 2 and funding[-1]["rate"] > funding[0]["rate"]
 
     # 5. OB imbalance (bid > ask = buy pressure at top of book)
     ob_imb = ob[0].get("imbalance", 0) if ob else 0
@@ -782,7 +855,7 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
         accum_score += 0.2 if oi_5m_pct > 0 else 0.1
         distrib_score += 0.15  # OI rising is shared signal
         signals["oi_rising"] = True
-    
+
     if cvd_positive:
         accum_score += 0.25
         signals["cvd_buying"] = True
@@ -812,17 +885,17 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
         signals["ob_ask_wall"] = True
 
     # Add raw values for context
-    signals["oi_5m_pct"]   = round(oi_5m_pct, 4)
-    signals["oi_15m_pct"]  = round(oi_15m_pct, 4)
-    signals["cvd_5m_delta"]  = round(cvd_5m_delta, 4)
+    signals["oi_5m_pct"] = round(oi_5m_pct, 4)
+    signals["oi_15m_pct"] = round(oi_15m_pct, 4)
+    signals["cvd_5m_delta"] = round(cvd_5m_delta, 4)
     signals["cvd_15m_delta"] = round(cvd_15m_delta, 4)
-    signals["vol_imb_5m"]  = round(imb_5m, 4)
+    signals["vol_imb_5m"] = round(imb_5m, 4)
     signals["vol_imb_15m"] = round(imb_15m, 4)
-    signals["avg_funding"]  = round(avg_funding, 6)
+    signals["avg_funding"] = round(avg_funding, 6)
     signals["ob_imbalance"] = round(ob_imb, 4)
 
     # Clamp scores
-    accum_score  = min(1.0, accum_score)
+    accum_score = min(1.0, accum_score)
     distrib_score = min(1.0, distrib_score)
 
     # Determine pattern
@@ -850,14 +923,14 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
         description = f"No clear accumulation/distribution (max_conf={confidence:.0%})"
 
     return {
-        "pattern":      pattern,
-        "confidence":   confidence,
-        "accum_score":  round(accum_score, 3),
+        "pattern": pattern,
+        "confidence": confidence,
+        "accum_score": round(accum_score, 3),
         "distrib_score": round(distrib_score, 3),
-        "description":  description,
-        "signals":      signals,
-        "symbol":       symbol,
-        "ts":           now,
+        "description": description,
+        "signals": signals,
+        "symbol": symbol,
+        "ts": now,
     }
 
 
@@ -871,11 +944,11 @@ async def compute_market_regime(symbol: str = None) -> Dict:
 
     # Gather all signals
     phase_data = await classify_market_phase(symbol=symbol)
-    cvd_mom    = await detect_cvd_momentum(window_seconds=60, symbol=symbol)
-    cvd_mom5   = await detect_cvd_momentum(window_seconds=300, symbol=symbol)
-    vol_imb    = await compute_volume_imbalance(window_seconds=60, symbol=symbol)
-    oi_mom     = await compute_oi_momentum(window_seconds=300, symbol=symbol)
-    delta_div  = await detect_delta_divergence(window_seconds=300, symbol=symbol)
+    cvd_mom = await detect_cvd_momentum(window_seconds=60, symbol=symbol)
+    cvd_mom5 = await detect_cvd_momentum(window_seconds=300, symbol=symbol)
+    vol_imb = await compute_volume_imbalance(window_seconds=60, symbol=symbol)
+    oi_mom = await compute_oi_momentum(window_seconds=300, symbol=symbol)
+    delta_div = await detect_delta_divergence(window_seconds=300, symbol=symbol)
 
     score = 0
     weights = {}
@@ -883,14 +956,26 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     # Phase: ±30
     phase = phase_data.get("phase", "Unknown")
     phase_conf = phase_data.get("confidence", 0.5)
-    phase_map = {"Accumulation": 20, "Markup": 30, "Bull Trend": 30,
-                 "Distribution": -20, "Markdown": -30, "Bear Trend": -30, "Balanced": 0, "Unknown": 0}
+    phase_map = {
+        "Accumulation": 20,
+        "Markup": 30,
+        "Bull Trend": 30,
+        "Distribution": -20,
+        "Markdown": -30,
+        "Bear Trend": -30,
+        "Balanced": 0,
+        "Unknown": 0,
+    }
     phase_score = phase_map.get(phase, 0) * phase_conf
     score += phase_score
     weights["phase"] = round(phase_score, 1)
 
     # CVD momentum 1min: ±20
-    cvd_dir = 1 if cvd_mom.get("direction") == "bullish" else -1 if cvd_mom.get("direction") == "bearish" else 0
+    cvd_dir = (
+        1
+        if cvd_mom.get("direction") == "bullish"
+        else -1 if cvd_mom.get("direction") == "bearish" else 0
+    )
     cvd_score = cvd_dir * cvd_mom.get("intensity", 0) * 20
     if cvd_mom.get("accelerating"):
         cvd_score *= 1.3
@@ -898,7 +983,11 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     weights["cvd_1m"] = round(cvd_score, 1)
 
     # CVD momentum 5min: ±15
-    cvd5_dir = 1 if cvd_mom5.get("direction") == "bullish" else -1 if cvd_mom5.get("direction") == "bearish" else 0
+    cvd5_dir = (
+        1
+        if cvd_mom5.get("direction") == "bullish"
+        else -1 if cvd_mom5.get("direction") == "bearish" else 0
+    )
     cvd5_score = cvd5_dir * cvd_mom5.get("intensity", 0) * 15
     score += cvd5_score
     weights["cvd_5m"] = round(cvd5_score, 1)
@@ -921,7 +1010,9 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     # Delta divergence: −10 (divergence = warning, direction-adjusted)
     if delta_div.get("divergence"):
         sev = delta_div.get("severity", 1)
-        div_score = -sev * 5 * (-1 if delta_div.get("cvd_direction") == "bullish" else 1)
+        div_score = (
+            -sev * 5 * (-1 if delta_div.get("cvd_direction") == "bullish" else 1)
+        )
         score += div_score
         weights["divergence"] = round(div_score, 1)
 
@@ -929,20 +1020,32 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     score = max(-100, min(100, score))
 
     # Regime label
-    if score >= 60:    regime = "Strong Bull"
-    elif score >= 30:  regime = "Bull"
-    elif score >= 10:  regime = "Mild Bull"
-    elif score > -10:  regime = "Neutral"
-    elif score > -30:  regime = "Mild Bear"
-    elif score > -60:  regime = "Bear"
-    else:              regime = "Strong Bear"
+    if score >= 60:
+        regime = "Strong Bull"
+    elif score >= 30:
+        regime = "Bull"
+    elif score >= 10:
+        regime = "Mild Bull"
+    elif score > -10:
+        regime = "Neutral"
+    elif score > -30:
+        regime = "Mild Bear"
+    elif score > -60:
+        regime = "Bear"
+    else:
+        regime = "Strong Bear"
 
     # Action hint
-    if score >= 30:    action = "Long bias"
-    elif score >= 10:  action = "Cautious long"
-    elif score > -10:  action = "Wait / range trade"
-    elif score > -30:  action = "Cautious short"
-    else:              action = "Short bias"
+    if score >= 30:
+        action = "Long bias"
+    elif score >= 10:
+        action = "Cautious long"
+    elif score > -10:
+        action = "Wait / range trade"
+    elif score > -30:
+        action = "Cautious short"
+    else:
+        action = "Short bias"
 
     return {
         "score": round(score, 1),
@@ -971,7 +1074,11 @@ async def detect_cross_symbol_oi_spike(
     for sym in symbols:
         oi_data = await get_oi_history(limit=200, since=since, symbol=sym)
         if len(oi_data) < 2:
-            spikes[sym] = {"spike": False, "pct_change": 0.0, "reason": "insufficient data"}
+            spikes[sym] = {
+                "spike": False,
+                "pct_change": 0.0,
+                "reason": "insufficient data",
+            }
             continue
 
         # group by exchange, take first exchange we find with data
@@ -1016,7 +1123,10 @@ async def detect_cross_symbol_oi_spike(
 
     description = ""
     if correlated:
-        parts = [f"{s} OI {spikes[s]['direction']} {abs(spikes[s]['pct_change']):.2f}%" for s in spiking_syms]
+        parts = [
+            f"{s} OI {spikes[s]['direction']} {abs(spikes[s]['pct_change']):.2f}%"
+            for s in spiking_syms
+        ]
         description = f"Correlated OI spike: {', '.join(parts)} | direction agreement {agree_pct:.0f}%"
     else:
         description = f"No correlated OI spike (only {len(spiking_syms)}/{len(symbols)} symbols spiking)"
@@ -1113,7 +1223,9 @@ async def detect_funding_arbitrage(
     }
 
 
-async def compute_vwap_deviation(window_seconds: int = 3600, symbol: str = None) -> Dict:
+async def compute_vwap_deviation(
+    window_seconds: int = 3600, symbol: str = None
+) -> Dict:
     """
     Compute VWAP for the given window and return deviation of current price from VWAP.
     VWAP deviation = (price - vwap) / vwap * 100 (%)
@@ -1189,11 +1301,12 @@ async def compute_vwap_deviation(window_seconds: int = 3600, symbol: str = None)
 
 # CoinGecko symbol → coin id mapping (extend as needed)
 _COINGECKO_IDS = {
-    "BANANAS31USDT": "banana",   # likely id; fallback graceful
+    "BANANAS31USDT": "banana",  # likely id; fallback graceful
     "COSUSDT": "contentos",
     "DEXEUSDT": "dexe",
     "LYNUSDT": "lynex",
 }
+
 
 async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
     """
@@ -1240,10 +1353,14 @@ async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 r = await client.get(
                     f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                    params={"localization": "false", "tickers": "false",
-                            "market_data": "true", "community_data": "false",
-                            "developer_data": "false"},
-                    headers={"Accept": "application/json"}
+                    params={
+                        "localization": "false",
+                        "tickers": "false",
+                        "market_data": "true",
+                        "community_data": "false",
+                        "developer_data": "false",
+                    },
+                    headers={"Accept": "application/json"},
                 )
                 if r.status_code == 200:
                     data = r.json()
@@ -1267,7 +1384,9 @@ async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
             description = f"⚠️ OI/Mcap {ratio_pct:.2f}% — elevated leverage risk"
         else:
             signal = "extreme"
-            description = f"🚨 OI/Mcap {ratio_pct:.2f}% — extreme leverage, squeeze risk"
+            description = (
+                f"🚨 OI/Mcap {ratio_pct:.2f}% — extreme leverage, squeeze risk"
+            )
 
     return {
         "oi_contracts": round(oi_contracts, 2) if oi_contracts else None,
@@ -1300,13 +1419,12 @@ async def predict_liquidation_cascade(
 
     # Gather: OI momentum, latest OI, latest price, liquidations
     oi_mom_task = compute_oi_momentum(window_seconds=oi_window, symbol=symbol)
-    liq_task    = detect_liquidation_cascade(window_seconds=60, symbol=symbol)
+    liq_task = detect_liquidation_cascade(window_seconds=60, symbol=symbol)
     funding_task = get_funding_history(limit=2, symbol=symbol)
-    ob_task     = get_latest_orderbook(symbol=symbol, limit=1)
+    ob_task = get_latest_orderbook(symbol=symbol, limit=1)
 
     oi_mom, recent_liq, funding, ob = await _asyncio.gather(
-        oi_mom_task, liq_task, funding_task, ob_task,
-        return_exceptions=True
+        oi_mom_task, liq_task, funding_task, ob_task, return_exceptions=True
     )
 
     # Current price
@@ -1342,6 +1460,7 @@ async def predict_liquidation_cascade(
         raw_asks = []
         try:
             import json as _json
+
             bids_raw = ob[0].get("bids")
             asks_raw = ob[0].get("asks")
             if isinstance(bids_raw, str):
@@ -1385,7 +1504,9 @@ async def predict_liquidation_cascade(
     if oi_building:
         risk_factors.append(f"OI +{oi_pct:.1f}% ({oi_direction or '?'})")
     if near_key_level:
-        risk_factors.append(f"price {closest_dist_pct:.3f}% from wall @ {closest_level:.7f}")
+        risk_factors.append(
+            f"price {closest_dist_pct:.3f}% from wall @ {closest_level:.7f}"
+        )
     if already_cascading:
         risk_factors.append("active cascade")
     if abs(avg_funding) > 0.001:
@@ -1416,7 +1537,9 @@ async def predict_liquidation_cascade(
         "oi_direction": oi_direction,
         "near_key_level": near_key_level,
         "closest_level": round(closest_level, 8) if closest_level else None,
-        "closest_dist_pct": round(closest_dist_pct, 4) if closest_dist_pct is not None else None,
+        "closest_dist_pct": (
+            round(closest_dist_pct, 4) if closest_dist_pct is not None else None
+        ),
         "avg_funding": round(avg_funding, 8),
         "funding_direction": funding_direction,
         "already_cascading": already_cascading,
@@ -1431,6 +1554,7 @@ async def compute_max_drawdown(window_seconds: int = 3600, symbol: str = None) -
     Returns per-symbol dict with fields expected by the frontend.
     """
     import storage
+
     since = time.time() - window_seconds
     trades = await storage.get_recent_trades(since=since, symbol=symbol, limit=10000)
 
@@ -1484,10 +1608,14 @@ async def compute_max_drawdown(window_seconds: int = 3600, symbol: str = None) -
                 max_ru = ru
 
         # Current drawdown from recent peak (last 10% of window)
-        recent_slice = prices[max(0, len(prices) - max(10, len(prices) // 10)):]
+        recent_slice = prices[max(0, len(prices) - max(10, len(prices) // 10)) :]
         recent_peak = max(recent_slice) if recent_slice else prices[-1]
         current_price = prices[-1]
-        current_dd = (recent_peak - current_price) / recent_peak * 100 if recent_peak > 0 else 0.0
+        current_dd = (
+            (recent_peak - current_price) / recent_peak * 100
+            if recent_peak > 0
+            else 0.0
+        )
 
         results[sym] = {
             "max_drawdown_pct": -round(max_dd, 4),  # negative = drawdown
@@ -1504,13 +1632,16 @@ async def compute_max_drawdown(window_seconds: int = 3600, symbol: str = None) -
     return results
 
 
-async def detect_funding_divergence(focus_symbol: str = "BANANAS31USDT", divergence_multiplier: float = 2.0) -> Dict:
+async def detect_funding_divergence(
+    focus_symbol: str = "BANANAS31USDT", divergence_multiplier: float = 2.0
+) -> Dict:
     """
     Funding rate divergence alert: when focus_symbol's funding rate diverges
     >divergence_multiplier x from the average of the other symbols.
     Returns alert details + per-symbol rates.
     """
     from collectors import get_symbols
+
     all_syms = get_symbols()
     if focus_symbol not in all_syms:
         all_syms = [focus_symbol] + all_syms
@@ -1600,10 +1731,12 @@ async def detect_funding_divergence(focus_symbol: str = "BANANAS31USDT", diverge
     }
 
 
-async def compute_oi_concentration(symbol: str = None, window_seconds: int = 3600, n_buckets: int = 10) -> Dict:
+async def compute_oi_concentration(
+    symbol: str = None, window_seconds: int = 3600, n_buckets: int = 10
+) -> Dict:
     """
     OI concentration metric: % of total OI change in the densest price range bucket.
-    
+
     Method:
     1. Get OI history + trade prices over window
     2. Compute price range (min, max) over window
@@ -1614,6 +1747,7 @@ async def compute_oi_concentration(symbol: str = None, window_seconds: int = 360
     """
     import time
     from storage import get_oi_history, get_recent_trades
+
     now = time.time()
     since = now - window_seconds
 
@@ -1644,8 +1778,13 @@ async def compute_oi_concentration(symbol: str = None, window_seconds: int = 360
     trade_rows.sort(key=lambda x: x["ts"])
     prices_ts = [(r["ts"], r["price"]) for r in trade_rows if r.get("price")]
     if not prices_ts:
-        return {"concentration_pct": None, "top_bucket_range": None, "n_buckets": n_buckets,
-                "description": "No price data", "window_seconds": window_seconds}
+        return {
+            "concentration_pct": None,
+            "top_bucket_range": None,
+            "n_buckets": n_buckets,
+            "description": "No price data",
+            "window_seconds": window_seconds,
+        }
 
     all_prices = [p for _, p in prices_ts]
     price_min = min(all_prices)
@@ -1743,19 +1882,22 @@ async def compute_oi_concentration(symbol: str = None, window_seconds: int = 360
     }
 
 
-async def compute_vpin(symbol: str = None, window_seconds: int = 1800, n_buckets: int = 50) -> Dict:
+async def compute_vpin(
+    symbol: str = None, window_seconds: int = 1800, n_buckets: int = 50
+) -> Dict:
     """
     VPIN (Volume-synchronized Probability of Informed Trading) approximation.
-    
-    Classic VPIN: divide total volume into equal-sized volume buckets, 
+
+    Classic VPIN: divide total volume into equal-sized volume buckets,
     in each bucket compute |buy_vol - sell_vol| / bucket_vol.
     VPIN = average of these ratios over last N buckets.
-    
+
     High VPIN (>0.5) → high toxicity / informed trading → adverse selection risk.
     Low VPIN (<0.2) → mostly noise trading.
     """
     from storage import get_trades_for_cvd
     import time
+
     since = time.time() - window_seconds
     trades = await get_trades_for_cvd(since=since, symbol=symbol)
 
@@ -1871,27 +2013,31 @@ async def compute_vpin(symbol: str = None, window_seconds: int = 1800, n_buckets
         "bucket_volume": round(bucket_vol, 4),
         "total_volume": round(total_vol, 4),
         "window_seconds": window_seconds,
-        "series": [round(v, 4) for v in vpin_buckets[-20:]],  # last 20 buckets for sparkline
+        "series": [
+            round(v, 4) for v in vpin_buckets[-20:]
+        ],  # last 20 buckets for sparkline
     }
 
 
-async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: int = 3600, candle_size: int = 60) -> Dict:
+async def compute_realized_vs_implied_vol(
+    symbol: str = None, window_seconds: int = 3600, candle_size: int = 60
+) -> Dict:
     """
     Realized vs implied volatility comparison.
-    
+
     Realized vol: annualized std dev of log returns over window, computed from 1-min candles.
     Implied vol (proxy): ATR(14) normalized by price × sqrt(annualization factor).
-    
+
     Convergence signal: when realized vol > implied vol proxy → market moving faster than expected.
     Divergence signal: when realized vol << implied vol proxy → market calmer than expected.
     """
     import math
     import time
     from storage import get_recent_trades
-    
+
     since = time.time() - window_seconds
     trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
-    
+
     if not trades or len(trades) < 20:
         return {
             "realized_vol_pct": None,
@@ -1901,9 +2047,9 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             "description": "Not enough data",
             "window_seconds": window_seconds,
         }
-    
+
     trades.sort(key=lambda t: t["ts"])
-    
+
     # Build candles of candle_size seconds
     candles = {}
     for t in trades:
@@ -1920,7 +2066,7 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             c["low"] = min(c["low"], p)
             c["close"] = p
             c["volume"] += q
-    
+
     sorted_candles = sorted(candles.items())
     if len(sorted_candles) < 5:
         return {
@@ -1931,16 +2077,16 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             "description": "Too few candles",
             "window_seconds": window_seconds,
         }
-    
+
     closes = [c["close"] for _, c in sorted_candles]
-    
+
     # Realized vol: std dev of log returns, annualized
     log_returns = []
     for i in range(1, len(closes)):
         if closes[i - 1] > 0 and closes[i] > 0:
             lr = math.log(closes[i] / closes[i - 1])
             log_returns.append(lr)
-    
+
     if len(log_returns) < 3:
         return {
             "realized_vol_pct": None,
@@ -1950,21 +2096,21 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             "description": "Insufficient returns",
             "window_seconds": window_seconds,
         }
-    
+
     n = len(log_returns)
     mean_r = sum(log_returns) / n
     variance = sum((r - mean_r) ** 2 for r in log_returns) / (n - 1)
     std_dev = math.sqrt(variance)
-    
+
     # Annualize: candles per year = (365 * 24 * 3600) / candle_size
     candles_per_year = (365 * 24 * 3600) / candle_size
     realized_vol = std_dev * math.sqrt(candles_per_year)
     realized_vol_pct = realized_vol * 100
-    
+
     # ATR-implied vol proxy: ATR(14) / price → normalize to per-candle, then annualize
     highs = [c["high"] for _, c in sorted_candles]
     lows = [c["low"] for _, c in sorted_candles]
-    
+
     # True ranges
     trs = []
     for i in range(1, len(sorted_candles)):
@@ -1973,7 +2119,7 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
         low = lows[i]
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
-    
+
     if not trs:
         implied_vol_pct = None
     else:
@@ -1985,11 +2131,13 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             implied_vol_pct = atr_pct_per_candle * math.sqrt(candles_per_year) * 100
         else:
             implied_vol_pct = None
-    
+
     # Signal
     if implied_vol_pct is None or implied_vol_pct < 1e-6:
         signal = "no_implied"
-        desc = f"Realized vol: {realized_vol_pct:.1f}% (annualized, implied unavailable)"
+        desc = (
+            f"Realized vol: {realized_vol_pct:.1f}% (annualized, implied unavailable)"
+        )
         vol_ratio = None
     else:
         vol_ratio = realized_vol_pct / implied_vol_pct
@@ -2005,10 +2153,12 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
             signal = "converged"
             emoji = "⚖️"
             desc = f"{emoji} Realized {realized_vol_pct:.1f}% ≈ Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — converged"
-    
+
     return {
         "realized_vol_pct": round(realized_vol_pct, 2),
-        "implied_vol_pct": round(implied_vol_pct, 2) if implied_vol_pct is not None else None,
+        "implied_vol_pct": (
+            round(implied_vol_pct, 2) if implied_vol_pct is not None else None
+        ),
         "vol_ratio": round(vol_ratio, 3) if vol_ratio is not None else None,
         "signal": signal,
         "description": desc,
@@ -2023,20 +2173,20 @@ def _compute_rsi(closes: list, period: int = 14) -> list:
     """Compute RSI series from close prices. Returns list of RSI values."""
     if len(closes) < period + 1:
         return []
-    
+
     gains = []
     losses = []
     for i in range(1, len(closes)):
         diff = closes[i] - closes[i - 1]
         gains.append(max(diff, 0))
         losses.append(max(-diff, 0))
-    
+
     if len(gains) < period:
         return []
-    
+
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
-    
+
     rsi_values = []
     for i in range(period, len(gains)):
         if avg_loss < 1e-12:
@@ -2045,45 +2195,46 @@ def _compute_rsi(closes: list, period: int = 14) -> list:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
         rsi_values.append(rsi)
-        
+
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    
+
     return rsi_values
 
 
 async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -> Dict:
     """
     Multi-timeframe RSI divergence detector.
-    
+
     Computes RSI on 5m and 1h candles from recent trade data.
     Detects:
     - Bullish divergence: price lower low, RSI higher low
     - Bearish divergence: price higher high, RSI lower high
-    
+
     Returns RSI values for each timeframe + divergence signal.
     """
     import time
     from storage import get_recent_trades
-    
+
     now = time.time()
     # Need 4h of data for 1h RSI (need rsi_period + extra candles)
     since_4h = now - 4 * 3600
     since_5m = now - 5 * 60 * (rsi_period + 10)  # enough 5m candles
-    
+
     # Fetch enough trades for both timeframes
     fetch_since = min(since_4h, since_5m)
     trades = await get_recent_trades(limit=20000, since=fetch_since, symbol=symbol)
-    
+
     if not trades or len(trades) < 30:
         return {
-            "rsi_5m": None, "rsi_1h": None,
+            "rsi_5m": None,
+            "rsi_1h": None,
             "divergence": None,
             "description": "Insufficient data",
         }
-    
+
     trades.sort(key=lambda t: t["ts"])
-    
+
     def build_candles(trades_list, candle_size: int) -> list:
         """Build OHLCV candles and return list of (ts, open, high, low, close)."""
         buckets = {}
@@ -2100,28 +2251,28 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
                 c["low"] = min(c["low"], p)
                 c["close"] = p
         return sorted(buckets.items())
-    
-    candles_5m = build_candles(trades, 300)   # 5 min
+
+    candles_5m = build_candles(trades, 300)  # 5 min
     candles_1h = build_candles(trades, 3600)  # 60 min
-    
+
     closes_5m = [c["close"] for _, c in candles_5m]
     closes_1h = [c["close"] for _, c in candles_1h]
-    
+
     rsi_5m_series = _compute_rsi(closes_5m, rsi_period)
     rsi_1h_series = _compute_rsi(closes_1h, rsi_period)
-    
+
     rsi_5m_current = rsi_5m_series[-1] if rsi_5m_series else None
     rsi_1h_current = rsi_1h_series[-1] if rsi_1h_series else None
-    
+
     # Divergence detection: compare last 2 peaks/troughs
     def detect_divergence(prices: list, rsi_vals: list, lookback: int = 5):
         """Detect bull/bear divergence in last lookback points."""
         if len(prices) < lookback + 2 or len(rsi_vals) < lookback + 2:
             return None
-        
+
         recent_prices = prices[-lookback:]
         recent_rsi = rsi_vals[-lookback:]
-        
+
         # Bearish: price makes higher high, RSI makes lower high
         price_max_idx = recent_prices.index(max(recent_prices))
         if price_max_idx > 0:
@@ -2131,7 +2282,7 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
             cur_rsi = recent_rsi[-1]
             if cur_price > prev_max_price and cur_rsi < prev_max_rsi:
                 return "bearish"
-        
+
         # Bullish: price makes lower low, RSI makes higher low
         price_min_idx = recent_prices.index(min(recent_prices))
         if price_min_idx > 0:
@@ -2141,12 +2292,12 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
             cur_rsi = recent_rsi[-1]
             if cur_price < prev_min_price and cur_rsi > prev_min_rsi:
                 return "bullish"
-        
+
         return None
-    
+
     div_5m = detect_divergence(closes_5m, rsi_5m_series) if rsi_5m_series else None
     div_1h = detect_divergence(closes_1h, rsi_1h_series) if rsi_1h_series else None
-    
+
     # Determine overall signal
     if div_5m == div_1h and div_5m is not None:
         convergence = "strong"
@@ -2157,7 +2308,7 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
     else:
         convergence = None
         divergence = None
-    
+
     # RSI zones
     def rsi_zone(rsi):
         if rsi is None:
@@ -2168,10 +2319,10 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
             return "oversold"
         else:
             return "neutral"
-    
+
     zone_5m = rsi_zone(rsi_5m_current)
     zone_1h = rsi_zone(rsi_1h_current)
-    
+
     # Description
     if divergence == "bearish" and convergence == "strong":
         desc = f"🐻 STRONG bearish RSI divergence (5m+1h) — price higher, RSI lower"
@@ -2192,7 +2343,7 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
         r1 = f"{rsi_1h_current:.1f}" if rsi_1h_current is not None else "?"
         desc = f"No divergence — RSI 5m:{r5} ({zone_5m}) / 1h:{r1} ({zone_1h})"
         severity = "info"
-    
+
     return {
         "rsi_5m": round(rsi_5m_current, 2) if rsi_5m_current is not None else None,
         "rsi_1h": round(rsi_1h_current, 2) if rsi_1h_current is not None else None,
@@ -2212,32 +2363,34 @@ async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -
 
 
 async def compute_aggressor_ratio_series(
-    symbol: str = None, 
+    symbol: str = None,
     window_seconds: int = 1800,  # 30m total window
-    bucket_size: int = 60,       # 1m buckets
+    bucket_size: int = 60,  # 1m buckets
 ) -> Dict:
     """
     Trade aggressor ratio time series: % buy-initiated trades per time bucket.
-    
+
     Aggressor = taker side: if side='buy', buyer was aggressor (market buy order).
     Returns time series of buy% over 30m in 1m buckets.
-    
+
     Signal:
     - >70% buyers → strong buy aggression
     - <30% buyers → strong sell aggression
     """
     import time
     from storage import get_recent_trades
-    
+
     since = time.time() - window_seconds
     trades = await get_recent_trades(limit=20000, since=since, symbol=symbol)
-    
+
     if not trades:
         return {
-            "series": [], "current_ratio": None,
-            "description": "No data", "signal": "no_data",
+            "series": [],
+            "current_ratio": None,
+            "description": "No data",
+            "signal": "no_data",
         }
-    
+
     # Build buckets
     buckets = {}
     for t in trades:
@@ -2250,37 +2403,41 @@ async def compute_aggressor_ratio_series(
             buckets[b]["buy"] += 1
         else:
             buckets[b]["sell"] += 1
-    
+
     sorted_buckets = sorted(buckets.items())
     series = []
     for ts, c in sorted_buckets:
         total = c["total"]
         buy_ratio = c["buy"] / total if total > 0 else 0.5
-        series.append({
-            "ts": ts,
-            "buy_pct": round(buy_ratio * 100, 2),
-            "sell_pct": round((1 - buy_ratio) * 100, 2),
-            "total": total,
-            "buy": c["buy"],
-            "sell": c["sell"],
-        })
-    
+        series.append(
+            {
+                "ts": ts,
+                "buy_pct": round(buy_ratio * 100, 2),
+                "sell_pct": round((1 - buy_ratio) * 100, 2),
+                "total": total,
+                "buy": c["buy"],
+                "sell": c["sell"],
+            }
+        )
+
     if not series:
         return {
-            "series": [], "current_ratio": None,
-            "description": "No buckets", "signal": "no_data",
+            "series": [],
+            "current_ratio": None,
+            "description": "No buckets",
+            "signal": "no_data",
         }
-    
+
     # Current ratio from last bucket + recent weighted
     last = series[-1]
     current_pct = last["buy_pct"]
-    
+
     # Rolling average of last 5 buckets for smoother signal
     recent = series[-5:]
     total_trades = sum(b["total"] for b in recent)
     total_buy = sum(b["buy"] for b in recent)
     rolling_pct = (total_buy / total_trades * 100) if total_trades > 0 else 50.0
-    
+
     if rolling_pct >= 70:
         signal = "strong_buy_aggression"
         emoji = "🟢"
@@ -2301,7 +2458,7 @@ async def compute_aggressor_ratio_series(
         signal = "balanced"
         emoji = "⚪"
         desc = f"{emoji} Balanced: {rolling_pct:.1f}% buyers"
-    
+
     return {
         "series": series,
         "current_ratio": round(current_pct, 2),
@@ -2323,12 +2480,12 @@ async def compute_kalman_price(
 ) -> Dict:
     """
     Kalman filter smoothed price vs raw price.
-    
+
     1D Kalman filter for price smoothing:
     - State: [price, velocity]
     - Process noise Q controls how much we trust the model
     - Measurement noise R controls how much we trust raw price
-    
+
     Returns:
     - Smoothed price series
     - Current smoothed vs raw deviation
@@ -2337,10 +2494,10 @@ async def compute_kalman_price(
     import time
     import math
     from storage import get_recent_trades
-    
+
     since = time.time() - window_seconds
     trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
-    
+
     if not trades or len(trades) < 10:
         return {
             "smoothed_price": None,
@@ -2350,10 +2507,10 @@ async def compute_kalman_price(
             "description": "Insufficient data",
             "series": [],
         }
-    
+
     trades.sort(key=lambda t: t["ts"])
     prices = [(t["ts"], t["price"]) for t in trades if t.get("price", 0) > 0]
-    
+
     if not prices:
         return {
             "smoothed_price": None,
@@ -2363,33 +2520,33 @@ async def compute_kalman_price(
             "description": "No valid prices",
             "series": [],
         }
-    
+
     # 1D Kalman filter: state = price estimate
     # x_k = x_{k-1} + w_k  (constant model)
     # z_k = x_k + v_k
     # P: estimate covariance, K: Kalman gain
-    
+
     x = prices[0][1]  # initial estimate = first price
-    P = 1.0           # initial covariance
-    Q = process_noise   # process noise
+    P = 1.0  # initial covariance
+    Q = process_noise  # process noise
     R = measurement_noise  # measurement noise
-    
+
     smoothed = []
     raw_list = []
-    
+
     for ts, z in prices:
         # Predict
         x_pred = x
         P_pred = P + Q
-        
+
         # Update
         K = P_pred / (P_pred + R)
         x = x_pred + K * (z - x_pred)
         P = (1 - K) * P_pred
-        
+
         smoothed.append((ts, x))
         raw_list.append(z)
-    
+
     # Downsample for response (max 200 points)
     step = max(1, len(smoothed) // 200)
     series = [
@@ -2397,11 +2554,15 @@ async def compute_kalman_price(
         for i, (ts, sm) in enumerate(smoothed)
         if i % step == 0
     ]
-    
+
     current_raw = prices[-1][1]
     current_smooth = smoothed[-1][1]
-    deviation_pct = (current_raw - current_smooth) / current_smooth * 100 if current_smooth > 0 else 0
-    
+    deviation_pct = (
+        (current_raw - current_smooth) / current_smooth * 100
+        if current_smooth > 0
+        else 0
+    )
+
     # Noise ratio: std of (raw - smoothed) / mean price
     residuals = [r - s for r, (_, s) in zip(raw_list, smoothed)]
     if len(residuals) > 1:
@@ -2411,7 +2572,7 @@ async def compute_kalman_price(
         noise_ratio = std_r / mean_price if mean_price > 0 else 0
     else:
         noise_ratio = 0
-    
+
     # Signal
     abs_dev = abs(deviation_pct)
     if abs_dev >= 0.5:
@@ -2426,7 +2587,7 @@ async def compute_kalman_price(
         signal = "low_noise"
         emoji = "🟢"
         desc = f"{emoji} Low noise: raw ≈ smooth (Δ {deviation_pct:+.4f}%)"
-    
+
     return {
         "smoothed_price": round(current_smooth, 8),
         "raw_price": round(current_raw, 8),
@@ -2449,19 +2610,19 @@ async def compute_ob_pressure_gradient(
 ) -> Dict:
     """
     Order book pressure gradient: rate of change of bid/ask imbalance per minute.
-    
+
     For each OB snapshot: imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol)
     Gradient = imbalance[t] - imbalance[t-1]
-    
+
     Positive gradient → increasing bid pressure
     Negative gradient → increasing ask pressure (selling)
     """
     import json
     import time
     from storage import get_orderbook_history
-    
+
     ob_rows = await get_orderbook_history(limit=200, symbol=symbol)
-    
+
     if not ob_rows or len(ob_rows) < 2:
         return {
             "gradient": None,
@@ -2469,23 +2630,31 @@ async def compute_ob_pressure_gradient(
             "description": "Insufficient OB data",
             "series": [],
         }
-    
+
     # Compute imbalance per snapshot
     def compute_imbalance(row: dict) -> float:
         """Compute bid/ask volume imbalance from OB snapshot."""
         try:
-            bids = json.loads(row.get("bids", "[]")) if isinstance(row.get("bids"), str) else (row.get("bids") or [])
-            asks = json.loads(row.get("asks", "[]")) if isinstance(row.get("asks"), str) else (row.get("asks") or [])
+            bids = (
+                json.loads(row.get("bids", "[]"))
+                if isinstance(row.get("bids"), str)
+                else (row.get("bids") or [])
+            )
+            asks = (
+                json.loads(row.get("asks", "[]"))
+                if isinstance(row.get("asks"), str)
+                else (row.get("asks") or [])
+            )
         except Exception:
             return 0.0
-        
+
         bid_vol = sum(float(b[1]) for b in bids[:depth_levels] if len(b) >= 2)
         ask_vol = sum(float(a[1]) for a in asks[:depth_levels] if len(a) >= 2)
         total = bid_vol + ask_vol
         if total < 1e-12:
             return 0.0
         return (bid_vol - ask_vol) / total
-    
+
     # Build imbalance time series bucketed by minute
     buckets = {}
     for row in ob_rows:
@@ -2495,31 +2664,33 @@ async def compute_ob_pressure_gradient(
         if b not in buckets:
             buckets[b] = []
         buckets[b].append(imb)
-    
+
     sorted_buckets = sorted(buckets.items())
     imb_series = [(ts, sum(vals) / len(vals)) for ts, vals in sorted_buckets if vals]
-    
+
     if len(imb_series) < 2:
         return {
             "gradient": None,
             "current_imbalance": round(imb_series[-1][1] if imb_series else 0, 4),
             "description": "Insufficient bucketed data",
-            "series": [{"ts": int(ts), "imbalance": round(v, 4)} for ts, v in imb_series],
+            "series": [
+                {"ts": int(ts), "imbalance": round(v, 4)} for ts, v in imb_series
+            ],
         }
-    
+
     # Compute gradients (imbalance change per bucket)
     gradients = []
     for i in range(1, len(imb_series)):
         grad = imb_series[i][1] - imb_series[i - 1][1]
         gradients.append((imb_series[i][0], grad))
-    
+
     current_imbalance = imb_series[-1][1]
     current_gradient = gradients[-1][1] if gradients else 0
-    
+
     # Rolling gradient (last 3 buckets)
     recent_grads = [g for _, g in gradients[-3:]]
     avg_gradient = sum(recent_grads) / len(recent_grads) if recent_grads else 0
-    
+
     # Signal
     if avg_gradient >= 0.05:
         signal = "strong_bid_pressure"
@@ -2541,13 +2712,15 @@ async def compute_ob_pressure_gradient(
         signal = "neutral"
         emoji = "➡️"
         desc = f"{emoji} Neutral pressure: gradient {avg_gradient:+.4f}/min, imbalance {current_imbalance:+.3f}"
-    
+
     # Build response series
     series = []
     for i, (ts, imb) in enumerate(imb_series):
         grad = gradients[i - 1][1] if i > 0 else 0
-        series.append({"ts": int(ts), "imbalance": round(imb, 4), "gradient": round(grad, 4)})
-    
+        series.append(
+            {"ts": int(ts), "imbalance": round(imb, 4), "gradient": round(grad, 4)}
+        )
+
     return {
         "gradient": round(current_gradient, 4),
         "avg_gradient": round(avg_gradient, 4),
@@ -2594,8 +2767,8 @@ def compute_smart_money_divergence(
 
     for t in trades:
         price = float(t["price"])
-        qty   = float(t["qty"])
-        val   = price * qty
+        qty = float(t["qty"])
+        val = price * qty
 
         iba = t.get("is_buyer_aggressor")
         if iba is not None:
@@ -2605,8 +2778,12 @@ def compute_smart_money_divergence(
 
         ts_b = int(float(t["ts"]) // bucket_seconds) * bucket_seconds
         if ts_b not in bucket_map:
-            bucket_map[ts_b] = {"smart_buy": 0.0, "smart_sell": 0.0,
-                                "retail_buy": 0.0, "retail_sell": 0.0}
+            bucket_map[ts_b] = {
+                "smart_buy": 0.0,
+                "smart_sell": 0.0,
+                "retail_buy": 0.0,
+                "retail_sell": 0.0,
+            }
 
         if val >= threshold_usd:
             smart_count += 1
@@ -2627,15 +2804,15 @@ def compute_smart_money_divergence(
                 retail_sell += val
                 bucket_map[ts_b]["retail_sell"] += val
 
-    smart_cvd  = smart_buy  - smart_sell
+    smart_cvd = smart_buy - smart_sell
     retail_cvd = retail_buy - retail_sell
 
     total_vol = abs(smart_cvd) + abs(retail_cvd) + 1e-8
     divergence_score = (smart_cvd - retail_cvd) / total_vol
 
-    smart_dir  = 1 if smart_cvd  > 0 else (-1 if smart_cvd  < 0 else 0)
+    smart_dir = 1 if smart_cvd > 0 else (-1 if smart_cvd < 0 else 0)
     retail_dir = 1 if retail_cvd > 0 else (-1 if retail_cvd < 0 else 0)
-    same_dir   = (smart_dir != 0 and retail_dir != 0 and smart_dir == retail_dir)
+    same_dir = smart_dir != 0 and retail_dir != 0 and smart_dir == retail_dir
 
     if divergence_score >= 0.15:
         signal = "accumulation"
@@ -2654,22 +2831,24 @@ def compute_smart_money_divergence(
     buckets = []
     for ts_b in sorted(bucket_map):
         bm = bucket_map[ts_b]
-        buckets.append({
-            "ts":         float(ts_b),
-            "smart_cvd":  round(bm["smart_buy"] - bm["smart_sell"],  4),
-            "retail_cvd": round(bm["retail_buy"] - bm["retail_sell"], 4),
-        })
+        buckets.append(
+            {
+                "ts": float(ts_b),
+                "smart_cvd": round(bm["smart_buy"] - bm["smart_sell"], 4),
+                "retail_cvd": round(bm["retail_buy"] - bm["retail_sell"], 4),
+            }
+        )
 
     return {
-        "smart_cvd":          round(smart_cvd,  4),
-        "retail_cvd":         round(retail_cvd, 4),
-        "smart_trade_count":  smart_count,
+        "smart_cvd": round(smart_cvd, 4),
+        "retail_cvd": round(retail_cvd, 4),
+        "smart_trade_count": smart_count,
         "retail_trade_count": retail_count,
-        "divergence_score":   round(divergence_score, 6),
-        "signal":             signal,
-        "smart_pct":          round(smart_pct, 6),
+        "divergence_score": round(divergence_score, 6),
+        "signal": signal,
+        "smart_pct": round(smart_pct, 6),
         "divergence_detected": divergence_detected,
-        "buckets":            buckets,
+        "buckets": buckets,
     }
 
 
@@ -2701,7 +2880,7 @@ def compute_ob_recovery_speed(
         event_count:          len(events)
     """
     obs_sorted = sorted(ob_snapshots, key=lambda x: float(x["ts"]))
-    trd_sorted = sorted(trades,       key=lambda x: float(x["ts"]))
+    trd_sorted = sorted(trades, key=lambda x: float(x["ts"]))
 
     events = []
 
@@ -2744,20 +2923,25 @@ def compute_ob_recovery_speed(
                     recovered = True
                     break
 
-        slow = (not recovered) or (recovery_seconds is not None and recovery_seconds > alert_seconds)
+        slow = (not recovered) or (
+            recovery_seconds is not None and recovery_seconds > alert_seconds
+        )
 
-        events.append({
-            "ts":               t_ts,
-            "side":             side,
-            "trade_usd":        round(val, 2),
-            "baseline_depth":   round(baseline, 4),
-            "recovery_seconds": recovery_seconds,
-            "recovered":        recovered,
-            "slow":             slow,
-        })
+        events.append(
+            {
+                "ts": t_ts,
+                "side": side,
+                "trade_usd": round(val, 2),
+                "baseline_depth": round(baseline, 4),
+                "recovery_seconds": recovery_seconds,
+                "recovered": recovered,
+                "slow": slow,
+            }
+        )
 
     recovered_times = [
-        e["recovery_seconds"] for e in events
+        e["recovery_seconds"]
+        for e in events
         if e["recovered"] and e["recovery_seconds"] is not None
     ]
     avg_rec = sum(recovered_times) / len(recovered_times) if recovered_times else 0.0
@@ -2765,12 +2949,196 @@ def compute_ob_recovery_speed(
     slow_count = sum(1 for e in events if e["slow"])
 
     return {
-        "events":               events,
+        "events": events,
         "avg_recovery_seconds": round(avg_rec, 4),
         "max_recovery_seconds": round(max_rec, 4),
-        "slow_count":           slow_count,
-        "alert":                slow_count > 0,
-        "event_count":          len(events),
+        "slow_count": slow_count,
+        "alert": slow_count > 0,
+        "event_count": len(events),
+    }
+
+
+# ── Net Taker Delta ────────────────────────────────────────────────────────────
+
+
+def compute_net_taker_delta(
+    trades: List[dict],
+    bucket_seconds: int = 60,
+) -> dict:
+    """Bucket trades by time window; compute buy/sell volume and net delta per bucket.
+
+    Side resolution: is_buyer_aggressor overrides side field.
+    buy_vol = sum of qty for taker-buy trades, sell_vol for taker-sell.
+
+    Returns:
+        buckets:    [{ts, buy_vol, sell_vol, net_delta}] sorted ascending
+        total_buy:  float
+        total_sell: float
+        total_net:  float
+    """
+    bucket_map: dict = {}
+
+    for t in trades:
+        qty = float(t["qty"])
+        iba = t.get("is_buyer_aggressor")
+        if iba is not None:
+            is_buy = bool(iba)
+        else:
+            is_buy = (t.get("side") or "").lower() == "buy"
+
+        ts_b = int(float(t["ts"]) // bucket_seconds) * bucket_seconds
+        if ts_b not in bucket_map:
+            bucket_map[ts_b] = {"buy_vol": 0.0, "sell_vol": 0.0}
+
+        if is_buy:
+            bucket_map[ts_b]["buy_vol"] += qty
+        else:
+            bucket_map[ts_b]["sell_vol"] += qty
+
+    total_buy = sum(b["buy_vol"] for b in bucket_map.values())
+    total_sell = sum(b["sell_vol"] for b in bucket_map.values())
+
+    buckets = [
+        {
+            "ts": float(ts_b),
+            "buy_vol": round(bm["buy_vol"], 6),
+            "sell_vol": round(bm["sell_vol"], 6),
+            "net_delta": round(bm["buy_vol"] - bm["sell_vol"], 6),
+        }
+        for ts_b, bm in sorted(bucket_map.items())
+    ]
+
+    return {
+        "buckets": buckets,
+        "total_buy": round(total_buy, 6),
+        "total_sell": round(total_sell, 6),
+        "total_net": round(total_buy - total_sell, 6),
+    }
+
+
+# ── OI Surge + Price Crash Detector ───────────────────────────────────────────
+
+
+def detect_oi_surge_with_crash(
+    oi_data: List[dict],
+    price_data: List[dict],
+    oi_threshold_pct: float = 0.20,
+    price_drop_pct: float = 0.10,
+) -> dict:
+    """Detect when OI rises >= oi_threshold_pct while price falls >= price_drop_pct.
+
+    Uses first vs last values in each sorted array.
+    price_data items may use key 'price' or 'close'.
+
+    Returns:
+        oi_surge_with_crash: bool
+        oi_change_pct:       float
+        price_change_pct:    float
+        alert:               bool (same as oi_surge_with_crash)
+    """
+    oi_change_pct = 0.0
+    price_change_pct = 0.0
+
+    if len(oi_data) >= 2:
+        sorted_oi = sorted(oi_data, key=lambda x: x["ts"])
+        oi_first = float(sorted_oi[0]["oi_value"])
+        oi_last = float(sorted_oi[-1]["oi_value"])
+        if oi_first != 0:
+            oi_change_pct = (oi_last - oi_first) / oi_first
+
+    if len(price_data) >= 2:
+        sorted_p = sorted(price_data, key=lambda x: x["ts"])
+        p_first = float(sorted_p[0].get("price") or sorted_p[0].get("close") or 0)
+        p_last = float(sorted_p[-1].get("price") or sorted_p[-1].get("close") or 0)
+        if p_first != 0:
+            price_change_pct = (p_last - p_first) / p_first
+
+    surge = oi_change_pct >= oi_threshold_pct and price_change_pct <= -price_drop_pct
+
+    return {
+        "oi_surge_with_crash": surge,
+        "oi_change_pct": round(oi_change_pct, 6),
+        "price_change_pct": round(price_change_pct, 6),
+        "alert": surge,
+    }
+
+
+# ── Short Squeeze Setup Detector ──────────────────────────────────────────────
+
+
+def detect_squeeze_setup(
+    oi_data: List[dict],
+    price_data: List[dict],
+    funding_data: List[dict],
+    oi_threshold_pct: float = 0.20,
+    price_drop_pct: float = 0.10,
+    funding_extreme: float = -0.005,
+    funding_recovery: float = 0.0,
+) -> dict:
+    """Detect short squeeze setup: OI surge during price crash + funding normalizing.
+
+    funding_normalizing = earliest rate < funding_extreme AND latest > earliest
+                          AND latest >= funding_recovery (moving toward 0).
+
+    Returns:
+        squeeze_signal:      bool
+        oi_surge_with_crash: bool
+        funding_normalizing: bool
+        funding_start:       float or None
+        funding_end:         float or None
+        description:         str
+    """
+    surge_result = detect_oi_surge_with_crash(
+        oi_data,
+        price_data,
+        oi_threshold_pct=oi_threshold_pct,
+        price_drop_pct=price_drop_pct,
+    )
+    oi_surge = surge_result["oi_surge_with_crash"]
+
+    funding_start = None
+    funding_end = None
+    funding_normalizing = False
+
+    if len(funding_data) >= 2:
+        sorted_f = sorted(funding_data, key=lambda x: x["ts"])
+        funding_start = float(sorted_f[0]["rate"])
+        funding_end = float(sorted_f[-1]["rate"])
+        funding_normalizing = (
+            funding_start < funding_extreme and funding_end > funding_start
+        )
+
+    squeeze_signal = oi_surge and funding_normalizing
+
+    if squeeze_signal:
+        oi_pct = surge_result["oi_change_pct"] * 100
+        p_pct = surge_result["price_change_pct"] * 100
+        f_start_str = (
+            f"{funding_start * 100:.3f}%" if funding_start is not None else "N/A"
+        )
+        f_end_str = f"{funding_end * 100:.3f}%" if funding_end is not None else "N/A"
+        description = (
+            f"⚡ Short Squeeze Setup — OI +{oi_pct:.1f}% during price crash {p_pct:.1f}%, "
+            f"funding normalizing {f_start_str} → {f_end_str}"
+        )
+    elif oi_surge:
+        description = (
+            f"⚠ OI surge during price crash detected — "
+            f"OI {surge_result['oi_change_pct']*100:.1f}%, "
+            f"price {surge_result['price_change_pct']*100:.1f}%"
+        )
+    elif funding_normalizing:
+        description = "Funding normalizing from extreme — watching for OI confirmation"
+    else:
+        description = "No squeeze setup detected"
+
+    return {
+        "squeeze_signal": squeeze_signal,
+        "oi_surge_with_crash": oi_surge,
+        "funding_normalizing": funding_normalizing,
+        "funding_start": funding_start,
+        "funding_end": funding_end,
+        "description": description,
     }
 
 
