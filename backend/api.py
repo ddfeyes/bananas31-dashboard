@@ -52,6 +52,7 @@ from metrics import (
     compute_oi_concentration,
     compute_vpin,
     compute_realized_vs_implied_vol,
+    compute_mtf_rsi_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -452,6 +453,19 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/mtf-rsi-divergence")
+async def mtf_rsi_divergence_endpoint(
+    symbol: Optional[str] = None,
+    period: int = Query(default=14, ge=5, le=50),
+):
+    """Multi-timeframe RSI divergence detector (5m and 1h)."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_mtf_rsi_divergence(symbol=target, rsi_period=period)
     return {"status": "ok", "symbol": target, **data}
 
 

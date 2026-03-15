@@ -2017,3 +2017,195 @@ async def compute_realized_vs_implied_vol(symbol: str = None, window_seconds: in
         "candle_size": candle_size,
         "window_seconds": window_seconds,
     }
+
+
+def _compute_rsi(closes: list, period: int = 14) -> list:
+    """Compute RSI series from close prices. Returns list of RSI values."""
+    if len(closes) < period + 1:
+        return []
+    
+    gains = []
+    losses = []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    
+    if len(gains) < period:
+        return []
+    
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    rsi_values = []
+    for i in range(period, len(gains)):
+        if avg_loss < 1e-12:
+            rsi = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+        rsi_values.append(rsi)
+        
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    
+    return rsi_values
+
+
+async def compute_mtf_rsi_divergence(symbol: str = None, rsi_period: int = 14) -> Dict:
+    """
+    Multi-timeframe RSI divergence detector.
+    
+    Computes RSI on 5m and 1h candles from recent trade data.
+    Detects:
+    - Bullish divergence: price lower low, RSI higher low
+    - Bearish divergence: price higher high, RSI lower high
+    
+    Returns RSI values for each timeframe + divergence signal.
+    """
+    import time
+    from storage import get_recent_trades
+    
+    now = time.time()
+    # Need 4h of data for 1h RSI (need rsi_period + extra candles)
+    since_4h = now - 4 * 3600
+    since_5m = now - 5 * 60 * (rsi_period + 10)  # enough 5m candles
+    
+    # Fetch enough trades for both timeframes
+    fetch_since = min(since_4h, since_5m)
+    trades = await get_recent_trades(limit=20000, since=fetch_since, symbol=symbol)
+    
+    if not trades or len(trades) < 30:
+        return {
+            "rsi_5m": None, "rsi_1h": None,
+            "divergence": None,
+            "description": "Insufficient data",
+        }
+    
+    trades.sort(key=lambda t: t["ts"])
+    
+    def build_candles(trades_list, candle_size: int) -> list:
+        """Build OHLCV candles and return list of (ts, open, high, low, close)."""
+        buckets = {}
+        for t in trades_list:
+            p = t.get("price", 0)
+            if p <= 0:
+                continue
+            b = int(t["ts"] // candle_size) * candle_size
+            if b not in buckets:
+                buckets[b] = {"open": p, "high": p, "low": p, "close": p}
+            else:
+                c = buckets[b]
+                c["high"] = max(c["high"], p)
+                c["low"] = min(c["low"], p)
+                c["close"] = p
+        return sorted(buckets.items())
+    
+    candles_5m = build_candles(trades, 300)   # 5 min
+    candles_1h = build_candles(trades, 3600)  # 60 min
+    
+    closes_5m = [c["close"] for _, c in candles_5m]
+    closes_1h = [c["close"] for _, c in candles_1h]
+    
+    rsi_5m_series = _compute_rsi(closes_5m, rsi_period)
+    rsi_1h_series = _compute_rsi(closes_1h, rsi_period)
+    
+    rsi_5m_current = rsi_5m_series[-1] if rsi_5m_series else None
+    rsi_1h_current = rsi_1h_series[-1] if rsi_1h_series else None
+    
+    # Divergence detection: compare last 2 peaks/troughs
+    def detect_divergence(prices: list, rsi_vals: list, lookback: int = 5):
+        """Detect bull/bear divergence in last lookback points."""
+        if len(prices) < lookback + 2 or len(rsi_vals) < lookback + 2:
+            return None
+        
+        recent_prices = prices[-lookback:]
+        recent_rsi = rsi_vals[-lookback:]
+        
+        # Bearish: price makes higher high, RSI makes lower high
+        price_max_idx = recent_prices.index(max(recent_prices))
+        if price_max_idx > 0:
+            prev_max_price = max(recent_prices[:price_max_idx])
+            prev_max_rsi = max(recent_rsi[:price_max_idx])
+            cur_price = recent_prices[-1]
+            cur_rsi = recent_rsi[-1]
+            if cur_price > prev_max_price and cur_rsi < prev_max_rsi:
+                return "bearish"
+        
+        # Bullish: price makes lower low, RSI makes higher low
+        price_min_idx = recent_prices.index(min(recent_prices))
+        if price_min_idx > 0:
+            prev_min_price = min(recent_prices[:price_min_idx])
+            prev_min_rsi = min(recent_rsi[:price_min_idx])
+            cur_price = recent_prices[-1]
+            cur_rsi = recent_rsi[-1]
+            if cur_price < prev_min_price and cur_rsi > prev_min_rsi:
+                return "bullish"
+        
+        return None
+    
+    div_5m = detect_divergence(closes_5m, rsi_5m_series) if rsi_5m_series else None
+    div_1h = detect_divergence(closes_1h, rsi_1h_series) if rsi_1h_series else None
+    
+    # Determine overall signal
+    if div_5m == div_1h and div_5m is not None:
+        convergence = "strong"
+        divergence = div_5m
+    elif div_5m or div_1h:
+        convergence = "weak"
+        divergence = div_5m or div_1h
+    else:
+        convergence = None
+        divergence = None
+    
+    # RSI zones
+    def rsi_zone(rsi):
+        if rsi is None:
+            return "unknown"
+        if rsi >= 70:
+            return "overbought"
+        elif rsi <= 30:
+            return "oversold"
+        else:
+            return "neutral"
+    
+    zone_5m = rsi_zone(rsi_5m_current)
+    zone_1h = rsi_zone(rsi_1h_current)
+    
+    # Description
+    if divergence == "bearish" and convergence == "strong":
+        desc = f"🐻 STRONG bearish RSI divergence (5m+1h) — price higher, RSI lower"
+        severity = "high"
+    elif divergence == "bullish" and convergence == "strong":
+        desc = f"🐂 STRONG bullish RSI divergence (5m+1h) — price lower, RSI higher"
+        severity = "high"
+    elif divergence == "bearish":
+        tf = "5m" if div_5m else "1h"
+        desc = f"🐻 Bearish RSI divergence ({tf}) — price higher, RSI lower"
+        severity = "medium"
+    elif divergence == "bullish":
+        tf = "5m" if div_5m else "1h"
+        desc = f"🐂 Bullish RSI divergence ({tf}) — price lower, RSI higher"
+        severity = "medium"
+    else:
+        r5 = f"{rsi_5m_current:.1f}" if rsi_5m_current is not None else "?"
+        r1 = f"{rsi_1h_current:.1f}" if rsi_1h_current is not None else "?"
+        desc = f"No divergence — RSI 5m:{r5} ({zone_5m}) / 1h:{r1} ({zone_1h})"
+        severity = "info"
+    
+    return {
+        "rsi_5m": round(rsi_5m_current, 2) if rsi_5m_current is not None else None,
+        "rsi_1h": round(rsi_1h_current, 2) if rsi_1h_current is not None else None,
+        "zone_5m": zone_5m,
+        "zone_1h": zone_1h,
+        "divergence": divergence,
+        "convergence": convergence,
+        "divergence_5m": div_5m,
+        "divergence_1h": div_1h,
+        "severity": severity,
+        "description": desc,
+        "rsi_5m_series": [round(v, 2) for v in rsi_5m_series[-20:]],
+        "rsi_1h_series": [round(v, 2) for v in rsi_1h_series[-20:]],
+        "n_candles_5m": len(candles_5m),
+        "n_candles_1h": len(candles_1h),
+    }

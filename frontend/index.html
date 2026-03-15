@@ -929,6 +929,27 @@
       <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
     </div>
 
+    <div id="alert-mtf-rsi" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">📊 MTF RSI DIVERGENCE</div>
+      <div id="mtf-rsi-text" style="color:var(--muted)">Loading...</div>
+      <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;">
+        <div style="flex:1;">
+          <div style="color:var(--muted);margin-bottom:2px;">RSI 5m</div>
+          <div id="mtf-rsi-5m" style="font-size:15px;font-weight:bold;">—</div>
+          <div id="mtf-zone-5m" style="font-size:10px;color:var(--muted);"></div>
+        </div>
+        <div style="flex:1;">
+          <div style="color:var(--muted);margin-bottom:2px;">RSI 1h</div>
+          <div id="mtf-rsi-1h" style="font-size:15px;font-weight:bold;">—</div>
+          <div id="mtf-zone-1h" style="font-size:10px;color:var(--muted);"></div>
+        </div>
+        <div style="flex:1;">
+          <div style="color:var(--muted);margin-bottom:2px;">Signal</div>
+          <div id="mtf-divergence" style="font-size:13px;font-weight:bold;">—</div>
+        </div>
+      </div>
+    </div>
+
     <div id="alert-realized-vol" class="alert-box" style="margin-bottom:12px;">
       <div class="alert-label">📈 REALIZED vs IMPLIED VOL</div>
       <div id="rv-text" style="color:var(--muted)">Loading...</div>
@@ -2714,6 +2735,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshMtfRsi();
   refreshRealizedVol();
   refreshVpin();
   refreshOiConcentration();
@@ -4668,6 +4690,54 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── Multi-timeframe RSI Divergence ───────────────────────────────────────────
+async function refreshMtfRsi() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/mtf-rsi-divergence?symbol=${enc}`);
+  const box = document.getElementById('alert-mtf-rsi');
+  const textEl = document.getElementById('mtf-rsi-text');
+  const rsi5mEl = document.getElementById('mtf-rsi-5m');
+  const rsi1hEl = document.getElementById('mtf-rsi-1h');
+  const zone5mEl = document.getElementById('mtf-zone-5m');
+  const zone1hEl = document.getElementById('mtf-zone-1h');
+  const divEl = document.getElementById('mtf-divergence');
+  if (!data || !textEl) return;
+
+  const zoneColor = (z) => z === 'overbought' ? 'var(--red)' : z === 'oversold' ? 'var(--green)' : 'var(--muted)';
+
+  if (data.rsi_5m !== null) {
+    const isAlert = data.divergence && data.severity !== 'info';
+    const sigColor = data.divergence === 'bearish' ? 'var(--red)' : data.divergence === 'bullish' ? 'var(--green)' : 'var(--muted)';
+    textEl.style.color = sigColor;
+    textEl.textContent = data.description || '';
+    box.className = isAlert ? 'alert-box active' : 'alert-box';
+
+    rsi5mEl.textContent = data.rsi_5m !== null ? data.rsi_5m.toFixed(1) : '—';
+    rsi5mEl.style.color = zoneColor(data.zone_5m);
+    zone5mEl.textContent = data.zone_5m || '';
+
+    rsi1hEl.textContent = data.rsi_1h !== null ? data.rsi_1h.toFixed(1) : '—';
+    rsi1hEl.style.color = zoneColor(data.zone_1h);
+    zone1hEl.textContent = data.zone_1h || '';
+
+    if (data.divergence) {
+      const arrow = data.divergence === 'bearish' ? '🐻' : '🐂';
+      const strength = data.convergence === 'strong' ? ' ⚡' : '';
+      divEl.textContent = arrow + ' ' + data.divergence + strength;
+      divEl.style.color = sigColor;
+    } else {
+      divEl.textContent = 'none';
+      divEl.style.color = 'var(--muted)';
+    }
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+  }
+}
+
 // ── Realized vs Implied Volatility ───────────────────────────────────────────
 async function refreshRealizedVol() {
   const sym = activeSymbol || currentSymbol;
@@ -6078,6 +6148,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshMtfRsi();
+  setInterval(refreshMtfRsi, 30000);  // every 30s
   refreshRealizedVol();
   setInterval(refreshRealizedVol, 30000);  // every 30s
   refreshVpin();
