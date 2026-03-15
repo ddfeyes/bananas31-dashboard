@@ -196,10 +196,48 @@
     <div class="card-header">
       <span class="card-title">Market Regime</span>
       <span id="market-regime-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">trending · ranging · choppy</span>
+      <span class="card-meta">phase timeline · 30 snapshots</span>
     </div>
     <div id="market-regime-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+    <div id="regime-timeline-container">
+      <canvas id="regime-timeline-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Correlations -->
+  <section class="card" id="card-correlations">
+    <div class="card-header">
+      <span class="card-title">Correlations</span>
+      <span class="card-meta">price corr · 1h</span>
+    </div>
+    <div id="correlations-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Volume Profile -->
+  <section class="card" id="card-volume-profile">
+    <div class="card-header">
+      <span class="card-title">Volume Profile</span>
+      <span class="card-meta">POC · VAH · VAL · 1h</span>
+    </div>
+    <div id="volume-profile-metrics"></div>
+    <div id="volume-profile-container">
+      <canvas id="volume-profile-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Aggressor Ratio -->
+  <section class="card" id="card-aggressor-ratio">
+    <div class="card-header">
+      <span class="card-title">Aggressor Ratio</span>
+      <span class="card-meta">buy vs sell count · 30 min</span>
+    </div>
+    <div id="aggressor-ratio-metrics"></div>
+    <div id="aggressor-ratio-container">
+      <canvas id="aggressor-ratio-canvas"></canvas>
     </div>
   </section>
 
