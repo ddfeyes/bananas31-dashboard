@@ -376,15 +376,15 @@ class TestAnalyticalEndpoints:
 
     def test_funding_cost(self, base_url, symbol):
         data = get(base_url, "/funding-cost", {"symbol": symbol}, timeout=SLOW_TIMEOUT)
-        check_keys(data, "status", "symbol")
+        check_keys(data, "status", "symbols")
 
     def test_funding_heatmap(self, base_url, symbol):
         data = get(base_url, "/funding-heatmap", {"symbol": symbol}, timeout=SLOW_TIMEOUT)
-        check_keys(data, "status", "symbol")
+        check_keys(data, "status", "symbols")
 
     def test_max_drawdown(self, base_url, symbol):
         data = get(base_url, "/max-drawdown", {"symbol": symbol}, timeout=SLOW_TIMEOUT)
-        check_keys(data, "status", "symbol")
+        check_keys(data, "status", "symbols")
 
     def test_spread_history(self, base_url, symbol):
         data = get(base_url, "/spread-history", {"symbol": symbol}, timeout=SLOW_TIMEOUT)
