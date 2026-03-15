@@ -1,0 +1,386 @@
+/* ── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0d0f12;
+  --bg2:     #141720;
+  --bg3:     #1c2030;
+  --border:  rgba(255,255,255,0.08);
+  --fg:      #e2e8f0;
+  --muted:   #6b7280;
+  --green:   #00e082;
+  --red:     #ff4d4f;
+  --yellow:  #f0c040;
+  --blue:    #4ea8de;
+  --purple:  #ab7df8;
+  --accent:  #4ea8de;
+  --card-radius: 8px;
+  --font: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+#header-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+#header-status {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+#header-status.connected::before {
+  content: '● ';
+  color: var(--green);
+}
+
+#header-status.disconnected::before {
+  content: '● ';
+  color: var(--red);
+}
+
+/* ── Symbol Tabs ──────────────────────────────────────────────────────────── */
+#symbol-tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.sym-tab {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.04em;
+}
+
+.sym-tab:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.sym-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── Last Price Display ───────────────────────────────────────────────────── */
+#last-price {
+  margin-left: auto;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+
+#price-change {
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+#price-change.up   { color: var(--green); }
+#price-change.down { color: var(--red); }
+
+/* ── Alert Bar ────────────────────────────────────────────────────────────── */
+#alert-bar {
+  padding: 6px 20px;
+  font-size: 11px;
+  color: var(--yellow);
+  background: rgba(240,192,64,0.08);
+  border-bottom: 1px solid rgba(240,192,64,0.15);
+  display: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#alert-bar.visible { display: block; }
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+#main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  grid-template-rows: auto auto;
+  gap: 12px;
+  padding: 12px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* Price chart takes full width on first row */
+#card-price {
+  grid-column: 1 / 2;
+  grid-row: 1 / 2;
+}
+
+/* OI chart on second row, left */
+#card-oi {
+  grid-column: 1 / 2;
+  grid-row: 2 / 3;
+}
+
+/* Trade tape: full height right column */
+#card-trades {
+  grid-column: 2 / 3;
+  grid-row: 1 / 3;
+}
+
+/* Phase card: below OI */
+#card-phase {
+  grid-column: 1 / 3;
+  grid-row: 3 / 4;
+}
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  padding: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.card-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-green  { background: rgba(0,224,130,0.15); color: var(--green); }
+.badge-red    { background: rgba(255,77,79,0.15);  color: var(--red); }
+.badge-yellow { background: rgba(240,192,64,0.15); color: var(--yellow); }
+.badge-blue   { background: rgba(78,168,222,0.15); color: var(--blue); }
+.badge-purple { background: rgba(171,125,248,0.15); color: var(--purple); }
+
+.card-meta {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+/* ── Price Chart ──────────────────────────────────────────────────────────── */
+#price-chart-container {
+  height: 320px;
+  position: relative;
+}
+
+#price-chart-container.empty::after {
+  content: 'Waiting for data...';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ── OI Chart ─────────────────────────────────────────────────────────────── */
+#oi-chart-container {
+  height: 150px;
+  position: relative;
+}
+
+/* ── CVD Chart ────────────────────────────────────────────────────────────── */
+#cvd-chart-container {
+  height: 120px;
+  position: relative;
+}
+
+/* ── Trade Tape ───────────────────────────────────────────────────────────── */
+#card-trades {
+  display: flex;
+  flex-direction: column;
+}
+
+#trade-tape {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+  font-size: 11px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.trade-row {
+  display: grid;
+  grid-template-columns: 32px 80px 60px 50px;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  transition: background 0.1s;
+}
+
+.trade-row:hover { background: rgba(255,255,255,0.03); }
+
+.trade-side {
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.trade-side.buy  { color: var(--green); }
+.trade-side.sell { color: var(--red); }
+
+.trade-price {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  text-align: right;
+}
+
+.trade-qty {
+  color: var(--muted);
+  text-align: right;
+  font-size: 10px;
+}
+
+.trade-time {
+  color: var(--muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.trade-row.whale .trade-price { color: var(--yellow); font-weight: 700; }
+.trade-row.whale .trade-qty   { color: var(--yellow); }
+
+/* ── Phase Card ───────────────────────────────────────────────────────────── */
+#phase-content {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.phase-name {
+  font-size: 20px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.phase-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.metric-box {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  text-align: center;
+  min-width: 80px;
+}
+
+.metric-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* ── OI Metrics ───────────────────────────────────────────────────────────── */
+#oi-metrics {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.oi-stat {
+  color: var(--muted);
+}
+
+.oi-stat span { color: var(--fg); font-weight: 700; }
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+  #card-price  { grid-column: 1; grid-row: auto; }
+  #card-oi     { grid-column: 1; grid-row: auto; }
+  #card-trades { grid-column: 1; grid-row: auto; }
+  #card-phase  { grid-column: 1; grid-row: auto; }
+
+  #trade-tape  { max-height: 300px; }
+}
+
+/* ── Utilities ────────────────────────────────────────────────────────────── */
+.text-green  { color: var(--green); }
+.text-red    { color: var(--red); }
+.text-yellow { color: var(--yellow); }
+.text-muted  { color: var(--muted); }
+.text-right  { text-align: right; }
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
