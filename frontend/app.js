@@ -306,9 +306,6 @@ function initSpreadChart() {
 function initAggressorChart() {
   const canvas = document.getElementById('aggressor-ratio-canvas');
   if (!canvas || !window.Chart) return;
-function initAggressorChart() {
-  const canvas = document.getElementById('aggressor-ratio-canvas');
-  if (!canvas || !window.Chart) return;
   const opts = _chartDefaults('#00e082');
   opts.scales.x.stacked = true;
   opts.scales.y = {
@@ -427,7 +424,6 @@ async function renderAdaptiveVolumeProfile() {
 
   adaptiveVpChart.update('none');
 }
-  adaptiveVpChart.update('none');}
 
 
 function resetCharts() {
@@ -1640,19 +1636,6 @@ initPriceChart();
   refreshTimer = setInterval(refresh, REFRESH_MS);
 }
 
-async function renderAggressorRatio() {
-  const sym = activeSymbol;
-  const data = await apiFetch(`/aggressor-ratio?symbol=${sym}&window=1800`);
-  const el = document.getElementById('aggressor-ratio-content');
-  if (!el) return;
-  if (!data?.series?.length) { el.innerHTML = '<div class="no-data">Collecting data...</div>'; return; }
-  const series = data.series;
-  const last = series[series.length - 1];
-  const badge = document.getElementById('aggressor-ratio-badge');
-  if (badge) { badge.style.display = ''; badge.textContent = last.buy_pct.toFixed(1) + '% buy'; badge.className = 'card-badge ' + (last.buy_pct > 60 ? 'badge-green' : last.buy_pct < 40 ? 'badge-red' : 'badge-neutral'); }
-  const rows = series.slice(-15).map(s => { const t = new Date(s.ts*1000); const time = t.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}); return '<div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#6b7280">'+time+'</span><span style="color:#00e082">▲'+s.buy_pct.toFixed(0)+'%</span><span style="color:#ff4d4f">▼'+s.sell_pct.toFixed(0)+'%</span><span style="color:#6b7280">('+s.total+')</span></div>'; }).join('');
-  el.innerHTML = rows + '<div style="font-size:10px;color:#6b7280;margin-top:4px">Signal: '+(data.signal||'n/a')+'</div>';
-}
 
 document.addEventListener('DOMContentLoaded', init);
 

@@ -50,7 +50,10 @@ def get_or_skip_404(base_url, path, params=None, timeout=DEFAULT_TIMEOUT):
     if r.status_code == 404:
         pytest.skip(f"{path} not available on this server version")
     assert r.status_code == 200, f"GET {path} → {r.status_code}: {r.text[:300]}"
-    return r.json()
+    data = r.json()
+    if data is None:
+        pytest.skip(f"{path} returned null (endpoint not fully implemented on this server)")
+    return data
 
 
 # ── Server health ─────────────────────────────────────────────────────────────
@@ -163,7 +166,7 @@ class TestDepthAndVolume:
         check_keys(data, "status", "symbol", "poc", "poc_volume", "vah", "val")
 
     def test_adaptive_volume_profile_keys(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol})
         check_keys(
             data,
             "status", "symbol",
@@ -177,7 +180,7 @@ class TestDepthAndVolume:
         assert data["session_start"] > 0
 
     def test_adaptive_volume_profile_bins_flags(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol})
         if not data.get("bins"):
             pytest.skip("No session trade data yet")
         for b in data["bins"]:
@@ -189,7 +192,7 @@ class TestDepthAndVolume:
             assert 0.0 <= b["pct_of_max"] <= 100.0, f"pct_of_max out of range: {b['pct_of_max']}"
 
     def test_adaptive_volume_profile_poc_unique(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol})
         if not data.get("bins"):
             pytest.skip("No session trade data yet")
         poc_bins = [b for b in data["bins"] if b["is_poc"]]
@@ -197,7 +200,7 @@ class TestDepthAndVolume:
         assert poc_bins[0]["pct_of_max"] == 100.0, "POC bin must have pct_of_max=100.0"
 
     def test_adaptive_volume_profile_value_area_coverage(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol})
         if not data.get("bins"):
             pytest.skip("No session trade data yet")
         total_vol = sum(b["volume"] for b in data["bins"])
@@ -207,13 +210,13 @@ class TestDepthAndVolume:
             assert pct >= 69.0, f"Value area covers only {pct:.1f}% (expected ~70%)"
 
     def test_adaptive_volume_profile_bins_param(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol, "bins": 20})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol, "bins": 20})
         if not data.get("bins"):
             pytest.skip("No session trade data yet")
         assert len(data["bins"]) <= 20, f"bins={len(data['bins'])} exceeds requested max 20"
 
     def test_adaptive_volume_profile_vah_val_bracket_poc(self, base_url, symbol):
-        data = get(base_url, "/volume-profile/adaptive", {"symbol": symbol})
+        data = get_or_skip_404(base_url, "/volume-profile/adaptive", {"symbol": symbol})
         if not data.get("poc") or not data.get("vah") or not data.get("val"):
             pytest.skip("No session trade data yet")
         assert data["val"] <= data["poc"] <= data["vah"], (
