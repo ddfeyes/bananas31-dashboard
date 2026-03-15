@@ -599,6 +599,152 @@ async def compute_volume_profile(
     }
 
 
+async def compute_volume_profile_adaptive(
+    symbol: str,
+    bins: int = 50,
+    value_area_pct: float = 0.70,
+) -> dict:
+    """
+    Adaptive Volume Profile for the current trading session (midnight UTC → now).
+
+    Differences from compute_volume_profile:
+    - Window is always current session (since midnight UTC), not a fixed seconds window.
+    - Each bin is annotated with:
+        is_poc       — True for the single bin with highest volume
+        in_value_area — True if the bin falls within the 70% value area
+        pct_of_max   — Volume expressed as 0–100% of the POC volume (chart bar width)
+    - Returns session_start (Unix timestamp) and window_seconds for reference.
+    """
+    import datetime
+    import math
+
+    now = time.time()
+    midnight_utc = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    session_start = midnight_utc
+
+    rows, tick_size = await get_trades_for_volume_profile(
+        since=session_start, symbol=symbol
+    )
+
+    empty: dict = {
+        "poc": None,
+        "poc_volume": None,
+        "vah": None,
+        "val": None,
+        "bins": [],
+        "total_volume": 0.0,
+        "value_area_pct": round(value_area_pct * 100, 2),
+        "tick_size": None,
+        "session_start": session_start,
+        "window_seconds": int(now - session_start),
+    }
+    if not rows:
+        return empty
+
+    decimals = (
+        max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 6
+    )
+
+    raw_profile = [
+        {
+            "price": row["price_level"],
+            "volume": row["volume"],
+            "buy_vol": row.get("buy_vol", 0) or 0,
+            "sell_vol": row.get("sell_vol", 0) or 0,
+        }
+        for row in rows
+    ]
+
+    # Downsample to requested bin count
+    if len(raw_profile) > bins > 0:
+        p_low = raw_profile[0]["price"]
+        p_high = raw_profile[-1]["price"]
+        p_rng = p_high - p_low
+        bin_size = p_rng / bins if p_rng > 0 else 1.0
+
+        bin_map: dict = {}
+        for entry in raw_profile:
+            b_idx = min(bins - 1, int((entry["price"] - p_low) / bin_size))
+            center = round(p_low + (b_idx + 0.5) * bin_size, decimals)
+            if center not in bin_map:
+                bin_map[center] = {
+                    "price": center,
+                    "volume": 0.0,
+                    "buy_vol": 0.0,
+                    "sell_vol": 0.0,
+                }
+            bin_map[center]["volume"] += entry["volume"]
+            bin_map[center]["buy_vol"] += entry["buy_vol"]
+            bin_map[center]["sell_vol"] += entry["sell_vol"]
+
+        profile = sorted(bin_map.values(), key=lambda x: x["price"])
+    else:
+        profile = raw_profile
+
+    total_volume = sum(p["volume"] for p in profile)
+    if total_volume == 0:
+        return empty
+
+    # POC — bin with highest volume
+    poc_entry = max(profile, key=lambda x: x["volume"])
+    poc_price = poc_entry["price"]
+    poc_volume = poc_entry["volume"]
+
+    # Value area: expand outward from POC until target % is covered
+    va_target = total_volume * value_area_pct
+    poc_idx = next(i for i, p in enumerate(profile) if p["price"] == poc_price)
+    lo_idx = hi_idx = poc_idx
+    accumulated = poc_volume
+
+    while accumulated < va_target:
+        can_up = hi_idx + 1 < len(profile)
+        can_dn = lo_idx - 1 >= 0
+        if not can_up and not can_dn:
+            break
+        vol_up = profile[hi_idx + 1]["volume"] if can_up else -1.0
+        vol_dn = profile[lo_idx - 1]["volume"] if can_dn else -1.0
+        if vol_up >= vol_dn:
+            hi_idx += 1
+            accumulated += vol_up
+        else:
+            lo_idx -= 1
+            accumulated += vol_dn
+
+    vah = profile[hi_idx]["price"]
+    val = profile[lo_idx]["price"]
+
+    # Annotate bins with POC/value-area flags and pct_of_max for chart scaling
+    annotated_bins = [
+        {
+            "price": round(p["price"], decimals),
+            "volume": round(p["volume"], 6),
+            "buy_vol": round(p["buy_vol"], 6),
+            "sell_vol": round(p["sell_vol"], 6),
+            "is_poc": p["price"] == poc_price,
+            "in_value_area": lo_idx <= i <= hi_idx,
+            "pct_of_max": round(p["volume"] / poc_volume * 100, 2),
+        }
+        for i, p in enumerate(profile)
+    ]
+
+    return {
+        "poc": round(poc_price, decimals),
+        "poc_volume": round(poc_volume, 6),
+        "vah": round(vah, decimals),
+        "val": round(val, decimals),
+        "total_volume": round(total_volume, 6),
+        "value_area_pct": round(accumulated / total_volume * 100, 2),
+        "tick_size": tick_size,
+        "bins": annotated_bins,
+        "session_start": session_start,
+        "window_seconds": int(now - session_start),
+    }
+
+
 async def detect_funding_extreme(
     symbol: str = None, threshold_pct: float = 0.1
 ) -> Dict:
@@ -3165,12 +3311,12 @@ def compute_tod_volatility(
     """
     if not candles:
         return {
-            "current_hour":   None,
-            "current_vol":    0.0,
+            "current_hour": None,
+            "current_vol": 0.0,
             "historical_avg": 0.0,
-            "ratio":          0.0,
-            "elevated":       False,
-            "hours":          [],
+            "ratio": 0.0,
+            "elevated": False,
+            "hours": [],
         }
 
     sorted_c = sorted(candles, key=lambda x: float(x["ts"]))
@@ -3199,10 +3345,12 @@ def compute_tod_volatility(
         elif hour_of_day == current_hour:
             historical_vals.append(pct)
 
-    current_vol    = sum(current_vals)    / len(current_vals)    if current_vals    else 0.0
-    historical_avg = sum(historical_vals) / len(historical_vals) if historical_vals else 0.0
+    current_vol = sum(current_vals) / len(current_vals) if current_vals else 0.0
+    historical_avg = (
+        sum(historical_vals) / len(historical_vals) if historical_vals else 0.0
+    )
 
-    ratio    = (current_vol / historical_avg) if historical_avg > 0 else 0.0
+    ratio = (current_vol / historical_avg) if historical_avg > 0 else 0.0
     elevated = ratio >= elevation_threshold
 
     # Build per-hour profile using ALL candles
@@ -3215,20 +3363,20 @@ def compute_tod_volatility(
 
     hours = [
         {
-            "hour":         h,
-            "avg_vol":      round(sum(vals) / len(vals), 6),
+            "hour": h,
+            "avg_vol": round(sum(vals) / len(vals), 6),
             "sample_count": len(vals),
         }
         for h, vals in sorted(hour_buckets.items())
     ]
 
     return {
-        "current_hour":   current_hour,
-        "current_vol":    round(current_vol,    6),
+        "current_hour": current_hour,
+        "current_vol": round(current_vol, 6),
         "historical_avg": round(historical_avg, 6),
-        "ratio":          round(ratio,          6),
-        "elevated":       elevated,
-        "hours":          hours,
+        "ratio": round(ratio, 6),
+        "elevated": elevated,
+        "hours": hours,
     }
 
 
@@ -3258,13 +3406,13 @@ def compute_tick_imbalance_bars(
     """
     if not trades:
         return {
-            "bars":                [],
-            "current_imbalance":   0,
+            "bars": [],
+            "current_imbalance": 0,
             "current_trade_count": 0,
-            "current_direction":   "neutral",
-            "threshold":           threshold,
-            "bar_count":           0,
-            "alert":               False,
+            "current_direction": "neutral",
+            "threshold": threshold,
+            "bar_count": 0,
+            "alert": False,
         }
 
     sorted_trades = sorted(trades, key=lambda x: float(x["ts"]))
@@ -3288,7 +3436,7 @@ def compute_tick_imbalance_bars(
         elif price < prev_price:
             direction = -1
         else:
-            direction = prev_direction   # tick rule
+            direction = prev_direction  # tick rule
 
         if direction != 0:
             prev_direction = direction
@@ -3299,18 +3447,20 @@ def compute_tick_imbalance_bars(
 
         # Close bar when |imbalance| >= threshold
         if abs(bar_imbalance) >= threshold:
-            bars.append({
-                "ts_start":    float(bar_trades[0]["ts"]),
-                "ts_end":      float(bar_trades[-1]["ts"]),
-                "direction":   "buy" if bar_imbalance > 0 else "sell",
-                "imbalance":   bar_imbalance,
-                "trade_count": len(bar_trades),
-                "open":        float(bar_trades[0]["price"]),
-                "close":       float(bar_trades[-1]["price"]),
-            })
+            bars.append(
+                {
+                    "ts_start": float(bar_trades[0]["ts"]),
+                    "ts_end": float(bar_trades[-1]["ts"]),
+                    "direction": "buy" if bar_imbalance > 0 else "sell",
+                    "imbalance": bar_imbalance,
+                    "trade_count": len(bar_trades),
+                    "open": float(bar_trades[0]["price"]),
+                    "close": float(bar_trades[-1]["price"]),
+                }
+            )
             bar_imbalance = 0
             bar_trades = []
-            prev_direction = 0   # reset tick rule on bar boundary
+            prev_direction = 0  # reset tick rule on bar boundary
 
     # Current open bar
     current_imbalance = bar_imbalance
@@ -3325,13 +3475,13 @@ def compute_tick_imbalance_bars(
     alert = abs(current_imbalance) >= threshold * 0.8
 
     return {
-        "bars":                bars,
-        "current_imbalance":   current_imbalance,
+        "bars": bars,
+        "current_imbalance": current_imbalance,
         "current_trade_count": current_trade_count,
-        "current_direction":   current_direction,
-        "threshold":           threshold,
-        "bar_count":           len(bars),
-        "alert":               alert,
+        "current_direction": current_direction,
+        "threshold": threshold,
+        "bar_count": len(bars),
+        "alert": alert,
     }
 
 
@@ -3353,12 +3503,12 @@ def compute_volume_bars(trades, volume_threshold=1.0):
     """
     if not trades:
         return {
-            "bars":                [],
-            "current_volume":      0.0,
+            "bars": [],
+            "current_volume": 0.0,
             "current_trade_count": 0,
-            "volume_threshold":    float(volume_threshold),
-            "bar_count":           0,
-            "pct_to_close":        0.0,
+            "volume_threshold": float(volume_threshold),
+            "bar_count": 0,
+            "pct_to_close": 0.0,
         }
 
     sorted_trades = sorted(trades, key=lambda t: t["ts"])
@@ -3405,19 +3555,21 @@ def compute_volume_bars(trades, volume_threshold=1.0):
 
         if bar_volume >= volume_threshold:
             vwap = bar_pv / bar_volume if bar_volume > 0 else price
-            bars.append({
-                "ts_start":    bar_ts_start,
-                "ts_end":      bar_ts_end,
-                "open":        bar_open,
-                "high":        bar_high,
-                "low":         bar_low,
-                "close":       bar_close,
-                "volume":      bar_volume,
-                "buy_volume":  bar_buy_volume,
-                "sell_volume": bar_sell_volume,
-                "trade_count": bar_trade_count,
-                "vwap":        vwap,
-            })
+            bars.append(
+                {
+                    "ts_start": bar_ts_start,
+                    "ts_end": bar_ts_end,
+                    "open": bar_open,
+                    "high": bar_high,
+                    "low": bar_low,
+                    "close": bar_close,
+                    "volume": bar_volume,
+                    "buy_volume": bar_buy_volume,
+                    "sell_volume": bar_sell_volume,
+                    "trade_count": bar_trade_count,
+                    "vwap": vwap,
+                }
+            )
             # Reset for next bar
             bar_open = bar_high = bar_low = bar_close = None
             bar_ts_start = bar_ts_end = None
@@ -3432,12 +3584,12 @@ def compute_volume_bars(trades, volume_threshold=1.0):
     pct_to_close = current_volume / volume_threshold * 100.0
 
     return {
-        "bars":                bars,
-        "current_volume":      current_volume,
+        "bars": bars,
+        "current_volume": current_volume,
         "current_trade_count": current_trade_count,
-        "volume_threshold":    float(volume_threshold),
-        "bar_count":           len(bars),
-        "pct_to_close":        pct_to_close,
+        "volume_threshold": float(volume_threshold),
+        "bar_count": len(bars),
+        "pct_to_close": pct_to_close,
     }
 
 
@@ -3458,18 +3610,18 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
         total_bid_vol, total_ask_vol, snapshot_count, bin_size
     """
     empty = {
-        "levels":         [],
-        "mid_price":      0.0,
-        "best_bid":       0.0,
-        "best_ask":       0.0,
-        "spread":         0.0,
+        "levels": [],
+        "mid_price": 0.0,
+        "best_bid": 0.0,
+        "best_ask": 0.0,
+        "spread": 0.0,
         "bid_wall_price": None,
         "ask_wall_price": None,
         "wall_threshold": 0.0,
-        "total_bid_vol":  0.0,
-        "total_ask_vol":  0.0,
+        "total_bid_vol": 0.0,
+        "total_ask_vol": 0.0,
         "snapshot_count": 0,
-        "bin_size":       bin_size or 0.0,
+        "bin_size": bin_size or 0.0,
     }
     if not snapshots:
         return empty
@@ -3478,10 +3630,10 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     snaps_sorted = sorted(snapshots, key=lambda s: s["ts"])
     latest = snaps_sorted[-1]
 
-    best_bid  = float(latest["bids"][0][0]) if latest["bids"] else 0.0
-    best_ask  = float(latest["asks"][0][0]) if latest["asks"] else 0.0
+    best_bid = float(latest["bids"][0][0]) if latest["bids"] else 0.0
+    best_ask = float(latest["asks"][0][0]) if latest["asks"] else 0.0
     mid_price = float(latest.get("mid_price") or 0.0)
-    spread    = (best_ask - best_bid) if (best_bid and best_ask) else 0.0
+    spread = (best_ask - best_bid) if (best_bid and best_ask) else 0.0
 
     # Auto bin_size
     if bin_size is None:
@@ -3495,6 +3647,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
 
     # Build price grid: levels at mid_grid ± k * bin_size for k = 1..num_levels
     import math
+
     mid_grid = math.floor(mid_price / bin_size) * bin_size
 
     # bid side: levels at mid_grid - k*bin_size  (k=1..num_levels)
@@ -3502,7 +3655,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     # ask side: levels at mid_grid + k*bin_size  (k=1..num_levels)
     ask_prices = [mid_grid + (i + 1) * bin_size for i in range(num_levels)]
 
-    bid_vol_acc = [0.0] * num_levels   # index 0 = nearest to mid
+    bid_vol_acc = [0.0] * num_levels  # index 0 = nearest to mid
     ask_vol_acc = [0.0] * num_levels
 
     n_snaps = len(snaps_sorted)
@@ -3534,6 +3687,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     # Wall detection: mean + wall_sigma * std over ALL 2*num_levels values (incl. zeros)
     # Using all values (not just non-zero) so zeros dilute the mean/std appropriately.
     import statistics as _stats
+
     all_level_vols = bid_vols + ask_vols
     if len(all_level_vols) >= 2:
         mean_v = _stats.mean(all_level_vols)
@@ -3548,21 +3702,25 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     # Build levels list (bid side descending → combine and sort asc)
     levels = []
     for i in range(num_levels):
-        levels.append({
-            "price":       round(bid_prices[i], 8),
-            "bid_vol":     round(bid_vols[i], 6),
-            "ask_vol":     0.0,
-            "is_bid_wall": wall_threshold > 0 and bid_vols[i] > wall_threshold,
-            "is_ask_wall": False,
-        })
+        levels.append(
+            {
+                "price": round(bid_prices[i], 8),
+                "bid_vol": round(bid_vols[i], 6),
+                "ask_vol": 0.0,
+                "is_bid_wall": wall_threshold > 0 and bid_vols[i] > wall_threshold,
+                "is_ask_wall": False,
+            }
+        )
     for i in range(num_levels):
-        levels.append({
-            "price":       round(ask_prices[i], 8),
-            "bid_vol":     0.0,
-            "ask_vol":     round(ask_vols[i], 6),
-            "is_bid_wall": False,
-            "is_ask_wall": wall_threshold > 0 and ask_vols[i] > wall_threshold,
-        })
+        levels.append(
+            {
+                "price": round(ask_prices[i], 8),
+                "bid_vol": 0.0,
+                "ask_vol": round(ask_vols[i], 6),
+                "is_bid_wall": False,
+                "is_ask_wall": wall_threshold > 0 and ask_vols[i] > wall_threshold,
+            }
+        )
 
     levels.sort(key=lambda lv: lv["price"])
 
@@ -3576,18 +3734,18 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     ask_wall_price = max_ask_lv["price"] if max_ask_lv["ask_vol"] > 0 else None
 
     return {
-        "levels":         levels,
-        "mid_price":      mid_price,
-        "best_bid":       best_bid,
-        "best_ask":       best_ask,
-        "spread":         round(spread, 8),
+        "levels": levels,
+        "mid_price": mid_price,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread": round(spread, 8),
         "bid_wall_price": bid_wall_price,
         "ask_wall_price": ask_wall_price,
         "wall_threshold": round(wall_threshold, 6),
-        "total_bid_vol":  round(total_bid_vol, 6),
-        "total_ask_vol":  round(total_ask_vol, 6),
+        "total_bid_vol": round(total_bid_vol, 6),
+        "total_ask_vol": round(total_ask_vol, 6),
         "snapshot_count": n_snaps,
-        "bin_size":       bin_size,
+        "bin_size": bin_size,
     }
 
 
@@ -3644,7 +3802,9 @@ def compute_market_microstructure_score(
     else:
         log_range = math.log(max_trade_rate / min_trade_rate)
         trade_rate_score = _clamp(
-            100.0 * math.log(max(trade_rate, min_trade_rate) / min_trade_rate) / log_range
+            100.0
+            * math.log(max(trade_rate, min_trade_rate) / min_trade_rate)
+            / log_range
         )
 
     # ── noise score (lower = better, linear inverted) ─────────────────────────
@@ -3653,10 +3813,10 @@ def compute_market_microstructure_score(
     # ── composite ─────────────────────────────────────────────────────────────
     total_weight = sum(weights.values())
     composite = (
-        weights["spread"]     * spread_score
-        + weights["depth"]    * depth_score
+        weights["spread"] * spread_score
+        + weights["depth"] * depth_score
         + weights["trade_rate"] * trade_rate_score
-        + weights["noise"]    * noise_score
+        + weights["noise"] * noise_score
     ) / total_weight
     composite = round(_clamp(composite), 2)
 
@@ -3679,10 +3839,26 @@ def compute_market_microstructure_score(
         "grade": grade,
         "label": label,
         "components": {
-            "spread":     {"score": round(spread_score,      2), "value": spread_bps,  "weight": norm_weights["spread"]},
-            "depth":      {"score": round(depth_score,       2), "value": depth_usd,   "weight": norm_weights["depth"]},
-            "trade_rate": {"score": round(trade_rate_score,  2), "value": trade_rate,  "weight": norm_weights["trade_rate"]},
-            "noise":      {"score": round(noise_score,       2), "value": noise_ratio, "weight": norm_weights["noise"]},
+            "spread": {
+                "score": round(spread_score, 2),
+                "value": spread_bps,
+                "weight": norm_weights["spread"],
+            },
+            "depth": {
+                "score": round(depth_score, 2),
+                "value": depth_usd,
+                "weight": norm_weights["depth"],
+            },
+            "trade_rate": {
+                "score": round(trade_rate_score, 2),
+                "value": trade_rate,
+                "weight": norm_weights["trade_rate"],
+            },
+            "noise": {
+                "score": round(noise_score, 2),
+                "value": noise_ratio,
+                "weight": norm_weights["noise"],
+            },
         },
         "weights": norm_weights,
     }
@@ -3715,56 +3891,56 @@ def compute_session_stats(trades, session_start=None):
     session = [t for t in trades if float(t["ts"]) >= session_start]
 
     empty = {
-        "total_volume_usd":   0.0,
-        "total_qty":          0.0,
-        "trade_count":        0,
+        "total_volume_usd": 0.0,
+        "total_qty": 0.0,
+        "trade_count": 0,
         "avg_trade_size_usd": 0.0,
-        "max_trade_usd":      0.0,
-        "max_trade_price":    0.0,
-        "buy_volume_usd":     0.0,
-        "sell_volume_usd":    0.0,
-        "buy_qty":            0.0,
-        "sell_qty":           0.0,
-        "buy_sell_ratio":     0.5,
-        "buy_count":          0,
-        "sell_count":         0,
-        "session_start":      session_start,
-        "first_trade_ts":     None,
-        "last_trade_ts":      None,
-        "vwap":               0.0,
-        "price_high":         0.0,
-        "price_low":          0.0,
+        "max_trade_usd": 0.0,
+        "max_trade_price": 0.0,
+        "buy_volume_usd": 0.0,
+        "sell_volume_usd": 0.0,
+        "buy_qty": 0.0,
+        "sell_qty": 0.0,
+        "buy_sell_ratio": 0.5,
+        "buy_count": 0,
+        "sell_count": 0,
+        "session_start": session_start,
+        "first_trade_ts": None,
+        "last_trade_ts": None,
+        "vwap": 0.0,
+        "price_high": 0.0,
+        "price_low": 0.0,
     }
 
     if not session:
         return empty
 
-    total_vol_usd   = 0.0
-    total_qty       = 0.0
-    buy_vol_usd     = 0.0
-    sell_vol_usd    = 0.0
-    buy_qty         = 0.0
-    sell_qty        = 0.0
-    buy_count       = 0
-    sell_count      = 0
-    max_usd         = 0.0
-    max_price       = 0.0
-    price_high      = 0.0
-    price_low       = float("inf")
-    pv_sum          = 0.0   # sum(price*qty) for VWAP
+    total_vol_usd = 0.0
+    total_qty = 0.0
+    buy_vol_usd = 0.0
+    sell_vol_usd = 0.0
+    buy_qty = 0.0
+    sell_qty = 0.0
+    buy_count = 0
+    sell_count = 0
+    max_usd = 0.0
+    max_price = 0.0
+    price_high = 0.0
+    price_low = float("inf")
+    pv_sum = 0.0  # sum(price*qty) for VWAP
 
     timestamps = []
 
     for t in session:
-        ts    = float(t["ts"])
+        ts = float(t["ts"])
         price = float(t["price"])
-        qty   = float(t["qty"])
-        side  = t.get("side", "buy")
-        usd   = price * qty
+        qty = float(t["qty"])
+        side = t.get("side", "buy")
+        usd = price * qty
 
         total_vol_usd += usd
-        total_qty     += qty
-        pv_sum        += usd
+        total_qty += qty
+        pv_sum += usd
         timestamps.append(ts)
 
         if price > price_high:
@@ -3773,44 +3949,44 @@ def compute_session_stats(trades, session_start=None):
             price_low = price
 
         if usd > max_usd:
-            max_usd   = usd
+            max_usd = usd
             max_price = price
 
         if side == "buy":
             buy_vol_usd += usd
-            buy_qty     += qty
-            buy_count   += 1
+            buy_qty += qty
+            buy_count += 1
         else:
             sell_vol_usd += usd
-            sell_qty     += qty
-            sell_count   += 1
+            sell_qty += qty
+            sell_count += 1
 
     n = len(session)
     avg_usd = total_vol_usd / n if n > 0 else 0.0
-    vwap    = pv_sum / total_qty if total_qty > 0 else 0.0
+    vwap = pv_sum / total_qty if total_qty > 0 else 0.0
     total_both = buy_vol_usd + sell_vol_usd
     buy_sell_ratio = buy_vol_usd / total_both if total_both > 0 else 0.5
 
     return {
-        "total_volume_usd":   round(total_vol_usd, 4),
-        "total_qty":          round(total_qty, 8),
-        "trade_count":        n,
+        "total_volume_usd": round(total_vol_usd, 4),
+        "total_qty": round(total_qty, 8),
+        "trade_count": n,
         "avg_trade_size_usd": round(avg_usd, 4),
-        "max_trade_usd":      round(max_usd, 4),
-        "max_trade_price":    round(max_price, 8),
-        "buy_volume_usd":     round(buy_vol_usd, 4),
-        "sell_volume_usd":    round(sell_vol_usd, 4),
-        "buy_qty":            round(buy_qty, 8),
-        "sell_qty":           round(sell_qty, 8),
-        "buy_sell_ratio":     round(buy_sell_ratio, 6),
-        "buy_count":          buy_count,
-        "sell_count":         sell_count,
-        "session_start":      session_start,
-        "first_trade_ts":     min(timestamps),
-        "last_trade_ts":      max(timestamps),
-        "vwap":               round(vwap, 8),
-        "price_high":         round(price_high, 8),
-        "price_low":          round(price_low if price_low != float("inf") else 0.0, 8),
+        "max_trade_usd": round(max_usd, 4),
+        "max_trade_price": round(max_price, 8),
+        "buy_volume_usd": round(buy_vol_usd, 4),
+        "sell_volume_usd": round(sell_vol_usd, 4),
+        "buy_qty": round(buy_qty, 8),
+        "sell_qty": round(sell_qty, 8),
+        "buy_sell_ratio": round(buy_sell_ratio, 6),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "session_start": session_start,
+        "first_trade_ts": min(timestamps),
+        "last_trade_ts": max(timestamps),
+        "vwap": round(vwap, 8),
+        "price_high": round(price_high, 8),
+        "price_low": round(price_low if price_low != float("inf") else 0.0, 8),
     }
 
 
@@ -3836,16 +4012,16 @@ def compute_inter_exchange_oi_divergence(
     Severity bands: none → low → medium → high (opposing always → high).
     """
     _empty = {
-        "divergence":         False,
-        "divergence_pct":     0.0,
-        "mean_pct_change":    0.0,
+        "divergence": False,
+        "divergence_pct": 0.0,
+        "mean_pct_change": 0.0,
         "diverging_exchange": None,
-        "opposing":           False,
-        "severity":           "none",
-        "alert":              False,
-        "exchange_count":     0,
-        "exchanges":          {},
-        "description":        "Insufficient data across exchanges",
+        "opposing": False,
+        "severity": "none",
+        "alert": False,
+        "exchange_count": 0,
+        "exchanges": {},
+        "description": "Insufficient data across exchanges",
         "min_divergence_pct": min_divergence_pct,
     }
 
@@ -3858,31 +4034,35 @@ def compute_inter_exchange_oi_divergence(
         if len(snapshots) < 2:
             continue
         oi_start = float(snapshots[0]["oi_value"])
-        oi_end   = float(snapshots[-1]["oi_value"])
+        oi_end = float(snapshots[-1]["oi_value"])
         pct_change = (oi_end - oi_start) / oi_start * 100 if oi_start != 0 else 0.0
         ex_stats[exchange] = {
-            "pct_change":     round(pct_change, 4),
-            "latest_oi":      round(oi_end, 6),
-            "first_oi":       round(oi_start, 6),
-            "direction":      "up" if pct_change > 0 else ("down" if pct_change < 0 else "flat"),
+            "pct_change": round(pct_change, 4),
+            "latest_oi": round(oi_end, 6),
+            "first_oi": round(oi_start, 6),
+            "direction": (
+                "up" if pct_change > 0 else ("down" if pct_change < 0 else "flat")
+            ),
             "snapshot_count": len(snapshots),
         }
 
     if len(ex_stats) < 2:
         result = dict(_empty)
         result["exchange_count"] = len(ex_stats)
-        result["exchanges"] = {ex: {**s, "deviation": 0.0} for ex, s in ex_stats.items()}
+        result["exchanges"] = {
+            ex: {**s, "deviation": 0.0} for ex, s in ex_stats.items()
+        }
         result["description"] = (
             f"Insufficient exchanges with data (need ≥2, got {len(ex_stats)})"
         )
         return result
 
     # ── Mean and deviations ───────────────────────────────────────────────────
-    pcts      = {ex: s["pct_change"] for ex, s in ex_stats.items()}
-    mean_pct  = sum(pcts.values()) / len(pcts)
+    pcts = {ex: s["pct_change"] for ex, s in ex_stats.items()}
+    mean_pct = sum(pcts.values()) / len(pcts)
     deviations = {ex: pct - mean_pct for ex, pct in pcts.items()}
 
-    divergence_pct     = max(abs(d) for d in deviations.values())
+    divergence_pct = max(abs(d) for d in deviations.values())
     diverging_exchange = max(deviations, key=lambda ex: abs(deviations[ex]))
 
     # ── Opposing flag ─────────────────────────────────────────────────────────
@@ -3904,8 +4084,7 @@ def compute_inter_exchange_oi_divergence(
 
     # ── Build per-exchange output ─────────────────────────────────────────────
     exchanges_out = {
-        ex: {**s, "deviation": round(deviations[ex], 4)}
-        for ex, s in ex_stats.items()
+        ex: {**s, "deviation": round(deviations[ex], 4)} for ex, s in ex_stats.items()
     }
 
     # ── Description ──────────────────────────────────────────────────────────
@@ -3913,7 +4092,7 @@ def compute_inter_exchange_oi_divergence(
         div_dev = deviations[diverging_exchange]
         dev_str = f"{div_dev:+.2f}%"
         if opposing:
-            up_exs   = [ex for ex, p in pcts.items() if p > 0]
+            up_exs = [ex for ex, p in pcts.items() if p > 0]
             down_exs = [ex for ex, p in pcts.items() if p < 0]
             description = (
                 f"\u26a0 OI direction conflict: "
@@ -3934,16 +4113,16 @@ def compute_inter_exchange_oi_divergence(
         )
 
     return {
-        "divergence":         divergence,
-        "divergence_pct":     round(divergence_pct, 4),
-        "mean_pct_change":    round(mean_pct, 4),
+        "divergence": divergence,
+        "divergence_pct": round(divergence_pct, 4),
+        "mean_pct_change": round(mean_pct, 4),
         "diverging_exchange": diverging_exchange if divergence else None,
-        "opposing":           opposing,
-        "severity":           severity,
-        "alert":              divergence,
-        "exchange_count":     len(ex_stats),
-        "exchanges":          exchanges_out,
-        "description":        description,
+        "opposing": opposing,
+        "severity": severity,
+        "alert": divergence,
+        "exchange_count": len(ex_stats),
+        "exchanges": exchanges_out,
+        "description": description,
         "min_divergence_pct": min_divergence_pct,
     }
 
@@ -4002,8 +4181,13 @@ def compute_whale_clustering(
         side = str(t.get("side", "buy")).lower()
         idx = int((price - price_min) / bin_size)
         if idx not in bins_data:
-            bins_data[idx] = {"buy_usd": 0.0, "sell_usd": 0.0, "count": 0,
-                               "buy_count": 0, "sell_count": 0}
+            bins_data[idx] = {
+                "buy_usd": 0.0,
+                "sell_usd": 0.0,
+                "count": 0,
+                "buy_count": 0,
+                "sell_count": 0,
+            }
         b = bins_data[idx]
         b["count"] += 1
         if side == "buy":
@@ -4017,7 +4201,11 @@ def compute_whale_clustering(
     if bins_data:
         max_idx = max(bins_data.keys())
         all_vols = [
-            bins_data[i]["buy_usd"] + bins_data[i]["sell_usd"] if i in bins_data else 0.0
+            (
+                bins_data[i]["buy_usd"] + bins_data[i]["sell_usd"]
+                if i in bins_data
+                else 0.0
+            )
             for i in range(max_idx + 1)
         ]
     else:
@@ -4049,38 +4237,39 @@ def compute_whale_clustering(
         else:
             dominance = "neutral"
 
-        result_bins.append({
-            "price_low":    price_low,
-            "price_high":   price_high,
-            "price_mid":    price_mid,
-            "total_usd":    total_usd,
-            "buy_usd":      buy_usd,
-            "sell_usd":     sell_usd,
-            "count":        b["count"],
-            "buy_count":    b["buy_count"],
-            "sell_count":   b["sell_count"],
-            "is_zone":      is_zone,
-            "dominance":    dominance,
-        })
+        result_bins.append(
+            {
+                "price_low": price_low,
+                "price_high": price_high,
+                "price_mid": price_mid,
+                "total_usd": total_usd,
+                "buy_usd": buy_usd,
+                "sell_usd": sell_usd,
+                "count": b["count"],
+                "buy_count": b["buy_count"],
+                "sell_count": b["sell_count"],
+                "is_zone": is_zone,
+                "dominance": dominance,
+            }
+        )
 
     zone_bins = [b for b in result_bins if b["is_zone"]]
     zones = [b["price_mid"] for b in zone_bins]
     top_zone_price = (
-        max(zone_bins, key=lambda b: b["total_usd"])["price_mid"]
-        if zone_bins else None
+        max(zone_bins, key=lambda b: b["total_usd"])["price_mid"] if zone_bins else None
     )
 
     total_usd = sum(b["total_usd"] for b in result_bins)
 
     return {
-        "trade_count":        len(trades),
-        "bins":               result_bins,
-        "zones":              zones,
-        "top_zone_price":     top_zone_price,
-        "bin_size":           bin_size,
-        "non_empty_bins":     len(result_bins),
-        "total_usd":          total_usd,
-        "price_min":          price_min,
-        "price_max":          price_max,
+        "trade_count": len(trades),
+        "bins": result_bins,
+        "zones": zones,
+        "top_zone_price": top_zone_price,
+        "bin_size": bin_size,
+        "non_empty_bins": len(result_bins),
+        "total_usd": total_usd,
+        "price_min": price_min,
+        "price_max": price_max,
         "zone_threshold_usd": zone_threshold,
     }
