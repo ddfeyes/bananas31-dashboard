@@ -1030,3 +1030,83 @@ async def detect_cross_symbol_oi_spike(
         "threshold_pct": threshold_pct,
         "window_seconds": window_seconds,
     }
+
+
+async def detect_funding_arbitrage(
+    symbol: str = None,
+    threshold_bps: float = 5.0,
+) -> Dict:
+    """
+    Funding arbitrage signal: compare Binance vs Bybit funding rates.
+    If |binance_rate - bybit_rate| >= threshold_bps (basis points), flag as arbitrage opportunity.
+    threshold_bps: divergence threshold in basis points (1 bp = 0.0001%)
+    """
+    funding = await get_funding_history(limit=4, symbol=symbol)
+    if not funding:
+        return {
+            "arb": False,
+            "binance": None,
+            "bybit": None,
+            "divergence_bps": 0.0,
+            "description": "No funding data",
+            "signal": None,
+        }
+
+    rates = {}
+    for row in funding:
+        ex = row["exchange"].lower()
+        if ex not in rates:
+            rates[ex] = row["rate"]
+
+    binance = rates.get("binance")
+    bybit = rates.get("bybit")
+
+    if binance is None or bybit is None:
+        available = list(rates.keys())
+        return {
+            "arb": False,
+            "binance": binance,
+            "bybit": bybit,
+            "divergence_bps": 0.0,
+            "description": f"Only have data for: {available}",
+            "signal": None,
+        }
+
+    # divergence in basis points (1 bps = 0.01% = 0.0001)
+    div_raw = binance - bybit  # positive = Binance higher
+    div_bps = div_raw * 10000  # convert to bps
+
+    arb = abs(div_bps) >= threshold_bps
+
+    signal = None
+    description = ""
+    if arb:
+        if div_bps > 0:
+            signal = "binance_high"
+            description = (
+                f"⚡ Funding arb: Binance {binance*100:+.4f}% >> Bybit {bybit*100:+.4f}% "
+                f"(+{div_bps:.2f} bps) — longs costly on Binance"
+            )
+        else:
+            signal = "bybit_high"
+            description = (
+                f"⚡ Funding arb: Bybit {bybit*100:+.4f}% >> Binance {binance*100:+.4f}% "
+                f"({div_bps:.2f} bps) — longs costly on Bybit"
+            )
+    else:
+        description = (
+            f"Funding aligned: Binance {binance*100:+.4f}% / Bybit {bybit*100:+.4f}% "
+            f"(div {div_bps:+.2f} bps)"
+        )
+
+    return {
+        "arb": arb,
+        "binance": round(binance, 8),
+        "bybit": round(bybit, 8),
+        "binance_pct": round(binance * 100, 6),
+        "bybit_pct": round(bybit * 100, 6),
+        "divergence_bps": round(div_bps, 4),
+        "threshold_bps": threshold_bps,
+        "signal": signal,
+        "description": description,
+    }

@@ -38,6 +38,7 @@ from metrics import (
     compute_market_regime,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
+    detect_funding_arbitrage,
 )
 
 router = APIRouter(prefix="/api")
@@ -240,6 +241,18 @@ async def funding_extreme(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/funding-arb")
+async def funding_arb_endpoint(
+    symbol: Optional[str] = None,
+    threshold_bps: float = Query(default=5.0, ge=0.1, le=100.0),
+):
+    """Funding arbitrage signal: Binance vs Bybit rate divergence."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/cvd-momentum")
 async def cvd_momentum_endpoint(
     symbol: Optional[str] = None,
@@ -394,9 +407,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     detect_liquidation_cascade(window_seconds=60, threshold_usd=50000, symbol=symbol),
                     detect_volume_spike(window_seconds=30, baseline_seconds=300, symbol=symbol),
                     detect_funding_extreme(symbol=symbol, threshold_pct=0.1),
+                    detect_funding_arbitrage(symbol=symbol, threshold_bps=5.0),
                     return_exceptions=True,
                 )
-                div_result, oi_result, liq_result, vol_result, funding_ex_result = alert_tasks
+                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result = alert_tasks
 
                 fired_alerts = []
                 if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
@@ -410,6 +424,8 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     fired_alerts.append(("volume_spike", "medium", vol_result.get("description", ""), vol_result))
                 if isinstance(funding_ex_result, dict) and funding_ex_result.get("extreme"):
                     fired_alerts.append(("funding_extreme", "high", funding_ex_result.get("description", ""), funding_ex_result))
+                if isinstance(funding_arb_result, dict) and funding_arb_result.get("arb"):
+                    fired_alerts.append(("funding_arb", "medium", funding_arb_result.get("description", ""), funding_arb_result))
 
                 # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
                 cross_sym_result = None
@@ -449,7 +465,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
 
                 # Deduplicate: only save if no same-type alert in last 60s
                 # funding_extreme uses 300s cooldown (fires constantly otherwise)
-                cooldowns = {"funding_extreme": 300, "phase_change": 120}
+                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180}
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
@@ -484,6 +500,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "liq_cascade": liq_result if isinstance(liq_result, dict) else None,
                     "delta_divergence": div_result if isinstance(div_result, dict) else None,
                     "cross_symbol_oi_spike": cross_sym_result if isinstance(cross_sym_result, dict) else None,
+                    "funding_arb": funding_arb_result if isinstance(funding_arb_result, dict) else None,
                     "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))

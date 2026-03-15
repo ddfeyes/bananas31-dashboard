@@ -688,6 +688,12 @@
       <div id="funding-extreme-text" style="color:var(--muted)">Loading...</div>
     </div>
 
+    <div id="alert-funding-arb" class="alert-box">
+      <div class="alert-label">⚡ FUNDING ARB (Binance vs Bybit)</div>
+      <div id="funding-arb-text" style="color:var(--muted)">Loading...</div>
+      <div id="funding-arb-detail" style="font-size:11px;margin-top:4px;color:var(--muted);"></div>
+    </div>
+
     <div id="alert-phase-change" class="alert-box">
       <div class="alert-label">PHASE CHANGE</div>
       <div id="phase-change-text" style="color:var(--muted)">No recent changes</div>
@@ -780,6 +786,7 @@
       <button class="ah-filter-btn" data-type="liq_cascade" onclick="setAlertHistoryFilter('liq_cascade',this)">Liq Cascade</button>
       <button class="ah-filter-btn" data-type="volume_spike" onclick="setAlertHistoryFilter('volume_spike',this)">Vol Spike</button>
       <button class="ah-filter-btn" data-type="funding_extreme" onclick="setAlertHistoryFilter('funding_extreme',this)">Funding Extreme</button>
+      <button class="ah-filter-btn" data-type="funding_arb" onclick="setAlertHistoryFilter('funding_arb',this)">Funding Arb</button>
       <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
       <button class="ah-filter-btn" data-type="cross_symbol_oi_spike" onclick="setAlertHistoryFilter('cross_symbol_oi_spike',this)">Cross-Symbol OI</button>
     </div>
@@ -1565,6 +1572,28 @@ function updateSummary(summary) {
       feText.style.color = 'var(--muted)';
       feText.textContent = fe.description || 'Normal';
       feBox.className = 'alert-box';
+    }
+  }
+
+  // ── Funding arb alert ─────────────────────────────────────────────────────
+  if (summary.funding_arb) {
+    const fa = summary.funding_arb;
+    const faBox = document.getElementById('alert-funding-arb');
+    const faText = document.getElementById('funding-arb-text');
+    const faDetail = document.getElementById('funding-arb-detail');
+    if (fa.arb) {
+      const isHigh = fa.signal === 'binance_high';
+      faText.style.color = isHigh ? 'var(--red)' : 'var(--green)';
+      faText.textContent = fa.description;
+      faBox.className = 'alert-box active';
+      faDetail.textContent = `Binance: ${fa.binance_pct !== undefined ? fa.binance_pct.toFixed(4) : '?'}%  |  Bybit: ${fa.bybit_pct !== undefined ? fa.bybit_pct.toFixed(4) : '?'}%  |  Δ ${fa.divergence_bps !== undefined ? fa.divergence_bps.toFixed(2) : '?'} bps`;
+    } else {
+      faText.style.color = 'var(--muted)';
+      faText.textContent = fa.description || 'Aligned';
+      faBox.className = 'alert-box';
+      faDetail.textContent = fa.binance_pct !== undefined
+        ? `Binance: ${fa.binance_pct.toFixed(4)}%  |  Bybit: ${fa.bybit_pct !== undefined ? fa.bybit_pct.toFixed(4) : '?'}%`
+        : '';
     }
   }
 
