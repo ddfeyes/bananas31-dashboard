@@ -29,15 +29,19 @@ let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-async function apiFetch(path) {
+async function apiFetch(path, timeoutMs = 8000) {
   const url = API + path;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch(url);
+    const r = await fetch(url, { signal: controller.signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   } catch (e) {
-    console.warn('[apiFetch]', path, e.message);
+    console.warn('[apiFetch timeout]', path, e.message);
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
