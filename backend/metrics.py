@@ -1423,3 +1423,82 @@ async def predict_liquidation_cascade(
         "description": description,
         "risk_factors": risk_factors,
     }
+
+
+async def compute_max_drawdown(window_seconds: int = 3600, symbol: str = None) -> Dict:
+    """
+    Compute peak-to-trough max drawdown and max run-up over last `window_seconds`.
+    Returns per-symbol dict with fields expected by the frontend.
+    """
+    import storage
+    since = time.time() - window_seconds
+    trades = await storage.get_recent_trades(since=since, symbol=symbol, limit=10000)
+
+    symbols_data: Dict[str, List] = {}
+    for t in trades:
+        sym = t["symbol"]
+        if sym not in symbols_data:
+            symbols_data[sym] = []
+        symbols_data[sym].append((t["ts"], float(t["price"])))
+
+    results = {}
+    for sym, pts in symbols_data.items():
+        if not pts:
+            results[sym] = {
+                "max_drawdown_pct": 0.0,
+                "max_runup_pct": 0.0,
+                "current_dd_pct": 0.0,
+                "peak_price": None,
+                "trough_price": None,
+                "recent_peak": None,
+                "current_price": None,
+                "samples": 0,
+            }
+            continue
+        pts.sort(key=lambda x: x[0])
+        prices = [p for _, p in pts]
+
+        # Max drawdown: peak-to-trough
+        peak = prices[0]
+        max_dd = 0.0
+        peak_price = prices[0]
+        trough_price = prices[0]
+
+        for price in prices[1:]:
+            if price > peak:
+                peak = price
+            dd = (peak - price) / peak * 100 if peak > 0 else 0.0
+            if dd > max_dd:
+                max_dd = dd
+                peak_price = peak
+                trough_price = price
+
+        # Max run-up: trough-to-peak (forward)
+        trough = prices[0]
+        max_ru = 0.0
+        for price in prices[1:]:
+            if price < trough:
+                trough = price
+            ru = (price - trough) / trough * 100 if trough > 0 else 0.0
+            if ru > max_ru:
+                max_ru = ru
+
+        # Current drawdown from recent peak (last 10% of window)
+        recent_slice = prices[max(0, len(prices) - max(10, len(prices) // 10)):]
+        recent_peak = max(recent_slice) if recent_slice else prices[-1]
+        current_price = prices[-1]
+        current_dd = (recent_peak - current_price) / recent_peak * 100 if recent_peak > 0 else 0.0
+
+        results[sym] = {
+            "max_drawdown_pct": -round(max_dd, 4),  # negative = drawdown
+            "max_runup_pct": round(max_ru, 4),
+            "current_dd_pct": -round(current_dd, 4),
+            "peak_price": round(peak_price, 8),
+            "trough_price": round(trough_price, 8),
+            "recent_peak": round(recent_peak, 8),
+            "current_price": round(current_price, 8),
+            "window_seconds": window_seconds,
+            "samples": len(prices),
+        }
+
+    return results

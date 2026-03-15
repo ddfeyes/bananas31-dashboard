@@ -1231,6 +1231,23 @@ async def price_correlations(window: int = Query(default=3600, le=86400)):
     }
 
 
+@router.get("/max-drawdown")
+async def max_drawdown_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, le=86400),
+):
+    """Peak-to-trough max drawdown over the last window_seconds."""
+    from metrics import compute_max_drawdown
+    # Always fetch all symbols so frontend can look up by name
+    data = await compute_max_drawdown(window_seconds=window, symbol=None)
+    # If a specific symbol was requested and we got no data for it, try with filter
+    if symbol and symbol not in data:
+        sym_data = await compute_max_drawdown(window_seconds=window, symbol=symbol)
+        if sym_data:
+            data.update(sym_data)
+    return {"status": "ok", "symbols": data, "window_seconds": window}
+
+
 @router.get("/health")
 async def health_check():
     """Backend health: DB size, record counts, uptime."""
