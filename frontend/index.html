@@ -617,6 +617,14 @@
     </div>
   </div>
 
+  <!-- OI Delta Histogram -->
+  <div class="card">
+    <h2><span class="card-icon">📊</span>OI Delta per Candle
+      <span id="oi-delta-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <canvas id="chart-oi-delta" style="height:140px !important;"></canvas>
+  </div>
+
   <!-- CVD + Price Overlay -->
   <div class="card">
     <h2><span class="card-icon">⚖️</span>CVD vs Price (1h)</h2>
@@ -1451,6 +1459,43 @@ const charts = {
   dom:     mkDomChart('chart-dom'),
 };
 
+// OI Delta histogram chart
+let chartOiDelta = null;
+(function initOiDeltaChart() {
+  const ctx = document.getElementById('chart-oi-delta');
+  if (!ctx) return;
+  chartOiDelta = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: [], datasets: [{
+      label: 'OI Δ',
+      data: [],
+      backgroundColor: [],
+      borderWidth: 0,
+      barPercentage: 0.9,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              return `OI Δ: ${v > 0 ? '+' : ''}${fmtK(v)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: TICK_COLOR, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 }, grid: { color: GRID_COLOR } },
+        y: { ticks: { color: TICK_COLOR, font: { size: 8 } }, grid: { color: GRID_COLOR } }
+      }
+    }
+  });
+})();
+
 let chartRsi = null;
 function initRsiChart() {
   const ctx = document.getElementById('chart-rsi').getContext('2d');
@@ -2177,7 +2222,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -2191,6 +2236,7 @@ async function refreshAll() {
     fetchJSON(`/api/whale-history?window=3600&min_usd=50000&limit=50&symbol=${sym}`),
     fetchJSON(`/api/pattern?symbol=${sym}`),
     fetchJSON(`/api/pattern-history?symbol=${sym}&limit=20&since=${Math.floor(Date.now()/1000)-7200}`),
+    fetchJSON(`/api/oi-delta?interval=300&window=3600&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -2212,6 +2258,25 @@ async function refreshAll() {
     const binanceOI = oi.data.filter(d => d.exchange === 'binance');
     const src = binanceOI.length > 0 ? binanceOI : oi.data;
     updateChart(charts.oi, src.map(d => fmtTs(d.ts)), src.map(d => d.oi_value), '#42a5f5');
+  }
+
+  // OI delta histogram
+  if (chartOiDelta && oiDelta?.candles?.length) {
+    const candles = oiDelta.candles;
+    const labels = candles.map(c => fmtTs(c.ts));
+    const values = candles.map(c => c.oi_change);
+    const colors = values.map(v => v > 0 ? 'rgba(0,230,130,0.75)' : 'rgba(255,80,80,0.75)');
+    chartOiDelta.data.labels = labels;
+    chartOiDelta.data.datasets[0].data = values;
+    chartOiDelta.data.datasets[0].backgroundColor = colors;
+    chartOiDelta.update('none');
+    // Show total net OI change in header
+    const netOi = values.reduce((a, b) => a + b, 0);
+    const infoEl = document.getElementById('oi-delta-info');
+    if (infoEl) {
+      infoEl.textContent = `net 1h: ${netOi > 0 ? '+' : ''}${fmtK(netOi)}`;
+      infoEl.style.color = netOi > 0 ? 'var(--green)' : netOi < 0 ? 'var(--red)' : 'var(--muted)';
+    }
   }
 
   // Funding chart + countdown

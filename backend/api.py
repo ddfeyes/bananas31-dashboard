@@ -1097,6 +1097,50 @@ async def multi_summary():
     return {"status": "ok", "symbols": results}
 
 
+@router.get("/oi-delta")
+async def oi_delta_candles(
+    interval: int = Query(default=300, ge=60, le=3600),
+    window: int = Query(default=3600, le=86400),
+    symbol: Optional[str] = None,
+    exchange: str = Query(default="binance"),
+):
+    """OI change per candle as histogram data. interval=candle size (s), window=lookback (s)."""
+    target = symbol or get_symbols()[0]
+    since = time.time() - window
+    rows = await get_oi_history(limit=10000, since=since, symbol=target)
+    if not rows:
+        return {"status": "ok", "symbol": target, "interval": interval, "candles": []}
+
+    # Filter to one exchange
+    filtered = [r for r in rows if r.get("exchange") == exchange]
+    if not filtered:
+        filtered = rows  # fallback to all
+
+    rows = filtered
+
+    # Bucket rows into candles
+    candles: dict[int, list] = {}
+    for r in rows:
+        ts = r.get("ts", 0)
+        bucket = int(ts // interval) * interval
+        if bucket not in candles:
+            candles[bucket] = []
+        candles[bucket].append(r.get("oi_value") or r.get("open_interest") or 0)
+
+    result = []
+    for bucket in sorted(candles):
+        vals = candles[bucket]
+        if len(vals) >= 2:
+            oi_change = vals[-1] - vals[0]
+        elif len(vals) == 1:
+            oi_change = 0.0
+        else:
+            continue
+        result.append({"ts": bucket, "oi_change": round(oi_change, 2), "oi_end": round(vals[-1], 2)})
+
+    return {"status": "ok", "symbol": target, "interval": interval, "candles": result}
+
+
 @router.get("/momentum")
 async def momentum_table():
     """Price momentum for all symbols: 1h, 4h, 24h change%."""
