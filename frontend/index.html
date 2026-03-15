@@ -2232,7 +2232,9 @@ function renderSymbolTabs() {
         badgesBit = `<div class="sym-badges">${badges.join('')}</div>`;
       }
     }
-    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')" style="display:flex;flex-direction:column;align-items:flex-start;">${base}${priceBit}${badgesBit}</div>`;
+    const sparkSVG = buildSparklineSVG(symbolSparklines[sym] || []);
+    const sparkBit = sparkSVG ? `<div style="width:50px;overflow:hidden;">${sparkSVG}</div>` : '';
+    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')" style="display:flex;flex-direction:column;align-items:flex-start;">${base}${priceBit}${badgesBit}${sparkBit}</div>`;
   }).join('');
 }
 
@@ -3785,6 +3787,44 @@ async function refreshPriceChart() {
 
 // ── Multi-symbol overview bar ─────────────────────────────────────────────────
 let multiOverviewData = {};
+let symbolSparklines = {};  // sym → array of price points (last 5 min)
+
+function buildSparklineSVG(prices, width=50, height=18) {
+  if (!prices || prices.length < 2) return '';
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;
+  const w = width, h = height, pad = 1;
+  const pts = prices.map((p, i) => {
+    const x = pad + (i / (prices.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((p - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const first = prices[0], last = prices[prices.length - 1];
+  const strokeColor = last >= first ? 'rgba(129,199,132,0.8)' : 'rgba(239,83,80,0.8)';
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block;margin-top:3px;">
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+async function refreshSymbolSparklines() {
+  // Fetch price data for all symbols (5-min candles or recent trades)
+  for (const sym of allSymbols) {
+    const enc = encodeURIComponent(sym);
+    const tradesData = await fetchJSON(`/api/trades/recent?symbol=${enc}&limit=200`);
+    if (tradesData?.data?.length >= 2) {
+      // Downsample to ~20 points
+      const trades = tradesData.data.sort((a,b) => a.ts - b.ts);
+      const step = Math.max(1, Math.floor(trades.length / 20));
+      const sampled = [];
+      for (let i = 0; i < trades.length; i += step) {
+        sampled.push(trades[i].price || 0);
+      }
+      symbolSparklines[sym] = sampled;
+    }
+  }
+  renderSymbolTabs();  // re-render tabs with sparklines
+}
 
 async function refreshMultiOverview() {
   const data = await fetchJSON('/api/multi-summary');
@@ -5179,6 +5219,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshPriceVelocity, 5000);  // every 5s — fast indicator
   refreshCvdDivergence();
   setInterval(refreshCvdDivergence, 20000);  // every 20s
+  refreshSymbolSparklines();
+  setInterval(refreshSymbolSparklines, 30000);  // every 30s
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();
