@@ -544,6 +544,7 @@
     <div id="funding-annotation">
       <span id="funding-signal" style="font-weight:700;">—</span>
       <span id="funding-next" style="color:var(--muted); margin-left:8px; font-size:10px;"></span>
+      <span id="funding-countdown" style="color:var(--accent); margin-left:8px; font-size:10px; font-variant-numeric:tabular-nums;"></span>
     </div>
     <canvas id="chart-funding"></canvas>
     <div id="funding-rates" style="margin-top:10px;"></div>
@@ -653,6 +654,15 @@
       </div>
     </div>
     <div id="lt-list" style="max-height:140px; overflow-y:auto; font-size:11px;"></div>
+  </div>
+
+  <!-- Live Tape -->
+  <div class="card">
+    <h2>
+      <span class="card-icon">📟</span>Live Trade Tape
+      <span id="tape-count" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="tape-list" style="max-height:300px; overflow-y:auto; font-size:11px; font-family:'Menlo','Monaco','Consolas',monospace;"></div>
   </div>
 
   <!-- Liquidations -->
@@ -1029,6 +1039,8 @@ function updateSummary(summary) {
       </div>`
     ).join('');
 
+    // Update funding countdown from refreshAll data (handled there)
+
     const rates = Object.values(fr);
     if (rates.length > 0) {
       const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
@@ -1122,6 +1134,11 @@ function selectSymbol(sym) {
   connectWS(sym);
   heatmapData = null;
   tfData = null;
+  tapeEntries.length = 0;
+  _lastTapeTs = 0;
+  _nextFundingTs = 0;
+  const tapeEl = document.getElementById('tape-list');
+  if (tapeEl) tapeEl.innerHTML = '';
   renderHeatmap();
   renderTradeFlowHeatmap();
   refreshAll();
@@ -1129,6 +1146,7 @@ function selectSymbol(sym) {
   refreshTradeFlowHeatmap();
   refreshPriceChart();
   refreshMultiOverview();
+  initTape();
 }
 
 async function loadSymbols() {
@@ -1176,10 +1194,15 @@ async function refreshAll() {
     updateChart(charts.oi, src.map(d => fmtTs(d.ts)), src.map(d => d.oi_value), '#42a5f5');
   }
 
-  // Funding chart
+  // Funding chart + countdown
   if (funding?.data?.length) {
     const src = funding.data.filter(d => d.exchange === 'binance');
     updateChart(charts.funding, src.map(d => fmtTs(d.ts)), src.map(d => d.rate * 100), '#f0c040');
+    // Grab next_funding_ts from most recent row
+    const latestFunding = [...funding.data].reverse().find(d => d.next_funding_ts > 0);
+    if (latestFunding?.next_funding_ts) {
+      _nextFundingTs = latestFunding.next_funding_ts;
+    }
   }
 
   // Liquidations list + chart
@@ -1440,6 +1463,115 @@ async function refreshHeatmap() {
     heatmapData = data;
     renderHeatmap();
   }
+}
+
+// ── Live Trade Tape ───────────────────────────────────────────────────────────
+const tapeEntries = [];
+const TAPE_MAX = 100;
+
+function initTape() {
+  // Preload last 50 trades from REST
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  fetchJSON(`/api/trades/recent?limit=50&symbol=${sym}`).then(data => {
+    if (!data?.data) return;
+    tapeEntries.length = 0;
+    // data is DESC, we want chronological for tape
+    const sorted = [...data.data].reverse();
+    for (const t of sorted) pushTrade(t, false);
+    renderTape();
+  });
+}
+
+function pushTrade(t, autoScroll = true) {
+  tapeEntries.push(t);
+  if (tapeEntries.length > TAPE_MAX) tapeEntries.shift();
+  if (autoScroll) renderTapeIncremental(t);
+}
+
+function renderTape() {
+  const list = document.getElementById('tape-list');
+  if (!list) return;
+  list.innerHTML = tapeEntries.slice().reverse().map(t => makeTapeRow(t)).join('');
+  updateTapeCount();
+}
+
+function renderTapeIncremental(t) {
+  const list = document.getElementById('tape-list');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.innerHTML = makeTapeRow(t);
+  const row = div.firstElementChild;
+  if (row) {
+    list.insertBefore(row, list.firstChild);
+    // Trim excess rows
+    while (list.childElementCount > TAPE_MAX) {
+      list.removeChild(list.lastChild);
+    }
+  }
+  updateTapeCount();
+}
+
+function updateTapeCount() {
+  const el = document.getElementById('tape-count');
+  if (el) el.textContent = `${tapeEntries.length} trades`;
+}
+
+function makeTapeRow(t) {
+  const side = t.side || 'buy';
+  const isBuy = side === 'buy';
+  const color = isBuy ? 'var(--green)' : 'var(--red)';
+  const val = (t.price || 0) * (t.qty || 0);
+  const sizeStyle = val > 50000 ? 'font-weight:700;font-size:12px;' : val > 10000 ? 'font-weight:600;' : '';
+  const sizeFlag = val > 50000 ? ' 🐋' : val > 10000 ? ' 🔔' : '';
+  return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border);${sizeStyle}">
+    <span style="color:${color};width:28px;">${isBuy ? 'BUY' : 'SELL'}</span>
+    <span style="color:var(--text);font-variant-numeric:tabular-nums;">${fmt(t.price, 5)}</span>
+    <span style="color:var(--muted);font-variant-numeric:tabular-nums;">${fmtK(t.qty)}</span>
+    <span style="color:var(--accent);font-variant-numeric:tabular-nums;">$${fmtK(val)}${sizeFlag}</span>
+    <span style="color:var(--muted);font-size:10px;">${fmtTs(t.ts)}</span>
+  </div>`;
+}
+
+// Feed tape from WS summary
+const _origUpdateSummary = updateSummary;
+function updateSummaryWithTape(summary) {
+  _origUpdateSummary(summary);
+  // WS doesn't push individual trades, poll handled separately
+}
+
+// Poll trades for tape (every 2s)
+let _lastTapeTs = 0;
+async function pollTape() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const since = _lastTapeTs > 0 ? _lastTapeTs - 0.1 : (Date.now() / 1000 - 10);
+  const data = await fetchJSON(`/api/trades/recent?limit=100&since=${since}&symbol=${sym}`);
+  if (!data?.data?.length) return;
+  // Filter to only new trades
+  const newTrades = data.data.filter(t => t.ts > _lastTapeTs).reverse(); // chronological
+  for (const t of newTrades) {
+    pushTrade(t);
+    if (t.ts > _lastTapeTs) _lastTapeTs = t.ts;
+  }
+}
+
+// ── Funding countdown ─────────────────────────────────────────────────────────
+let _nextFundingTs = 0;
+let _fundingCountdownInterval = null;
+
+function startFundingCountdown() {
+  if (_fundingCountdownInterval) clearInterval(_fundingCountdownInterval);
+  _fundingCountdownInterval = setInterval(() => {
+    const el = document.getElementById('funding-countdown');
+    if (!el || !_nextFundingTs) return;
+    const remaining = Math.max(0, _nextFundingTs - Date.now() / 1000);
+    if (remaining === 0) { el.textContent = ''; return; }
+    const h = Math.floor(remaining / 3600);
+    const m = Math.floor((remaining % 3600) / 60);
+    const s = Math.floor(remaining % 60);
+    el.textContent = `⏱ ${h > 0 ? h + 'h ' : ''}${m}m ${s.toString().padStart(2,'0')}s`;
+  }, 1000);
 }
 
 // ── Trade Flow Heatmap ────────────────────────────────────────────────────────
@@ -1780,11 +1912,14 @@ async function syncSymbols() {
     updateExportLinks(activeSymbol);
   }
   await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview(), refreshTradeFlowHeatmap()]);
+  initTape();
+  startFundingCountdown();
   setInterval(refreshAll, 5000);
   setInterval(refreshHeatmap, 5000);
   setInterval(refreshPriceChart, 10000);
   setInterval(refreshMultiOverview, 15000);
   setInterval(refreshTradeFlowHeatmap, 10000);
+  setInterval(pollTape, 2000);
   setInterval(syncSymbols, 30000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
 })();
