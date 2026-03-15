@@ -929,6 +929,25 @@
       <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
     </div>
 
+    <div id="alert-kalman" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">🔬 KALMAN NOISE FILTER</div>
+      <div id="kalman-text" style="color:var(--muted)">Loading...</div>
+      <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;">
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Raw price</div>
+          <div id="kalman-raw" style="font-size:13px;font-weight:bold;">—</div>
+        </div>
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Smooth (Kalman)</div>
+          <div id="kalman-smooth" style="font-size:13px;font-weight:bold;">—</div>
+        </div>
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Δ deviation</div>
+          <div id="kalman-dev" style="font-size:13px;font-weight:bold;">—</div>
+        </div>
+      </div>
+    </div>
+
     <div id="alert-aggressor" class="alert-box" style="margin-bottom:12px;">
       <div class="alert-label">⚔️ TRADE AGGRESSOR RATIO (30m)</div>
       <div id="aggressor-text" style="color:var(--muted)">Loading...</div>
@@ -2752,6 +2771,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshKalmanPrice();
   refreshAggressorRatio();
   refreshMtfRsi();
   refreshRealizedVol();
@@ -4708,6 +4728,38 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── Kalman Price Filter ───────────────────────────────────────────────────────
+async function refreshKalmanPrice() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/kalman-price?symbol=${enc}&window=1800`);
+  const box = document.getElementById('alert-kalman');
+  const textEl = document.getElementById('kalman-text');
+  const rawEl = document.getElementById('kalman-raw');
+  const smoothEl = document.getElementById('kalman-smooth');
+  const devEl = document.getElementById('kalman-dev');
+  if (!data || !textEl) return;
+
+  if (data.raw_price !== null) {
+    const sig = data.signal;
+    const color = sig === 'high_noise' ? 'var(--red)' : sig === 'moderate_noise' ? '#f0c040' : 'var(--green)';
+    textEl.style.color = color;
+    textEl.textContent = data.description || '';
+    box.className = sig === 'high_noise' ? 'alert-box active' : 'alert-box';
+    rawEl.textContent = data.raw_price !== null ? data.raw_price.toFixed(6) : '—';
+    smoothEl.textContent = data.smoothed_price !== null ? data.smoothed_price.toFixed(6) : '—';
+    smoothEl.style.color = 'var(--accent)';
+    const dev = data.deviation_pct;
+    devEl.textContent = dev !== null ? (dev >= 0 ? '+' : '') + dev.toFixed(4) + '%' : '—';
+    devEl.style.color = color;
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+  }
+}
+
 // ── Trade Aggressor Ratio ─────────────────────────────────────────────────────
 async function refreshAggressorRatio() {
   const sym = activeSymbol || currentSymbol;
@@ -6200,6 +6252,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshKalmanPrice();
+  setInterval(refreshKalmanPrice, 15000);  // every 15s
   refreshAggressorRatio();
   setInterval(refreshAggressorRatio, 15000);  // every 15s
   refreshMtfRsi();

@@ -2313,3 +2313,129 @@ async def compute_aggressor_ratio_series(
         "window_seconds": window_seconds,
         "bucket_size": bucket_size,
     }
+
+
+async def compute_kalman_price(
+    symbol: str = None,
+    window_seconds: int = 1800,
+    process_noise: float = 1e-5,
+    measurement_noise: float = 1e-3,
+) -> Dict:
+    """
+    Kalman filter smoothed price vs raw price.
+    
+    1D Kalman filter for price smoothing:
+    - State: [price, velocity]
+    - Process noise Q controls how much we trust the model
+    - Measurement noise R controls how much we trust raw price
+    
+    Returns:
+    - Smoothed price series
+    - Current smoothed vs raw deviation
+    - Noise ratio (signal for micro-structure noise detection)
+    """
+    import time
+    import math
+    from storage import get_recent_trades
+    
+    since = time.time() - window_seconds
+    trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
+    
+    if not trades or len(trades) < 10:
+        return {
+            "smoothed_price": None,
+            "raw_price": None,
+            "deviation_pct": None,
+            "noise_ratio": None,
+            "description": "Insufficient data",
+            "series": [],
+        }
+    
+    trades.sort(key=lambda t: t["ts"])
+    prices = [(t["ts"], t["price"]) for t in trades if t.get("price", 0) > 0]
+    
+    if not prices:
+        return {
+            "smoothed_price": None,
+            "raw_price": None,
+            "deviation_pct": None,
+            "noise_ratio": None,
+            "description": "No valid prices",
+            "series": [],
+        }
+    
+    # 1D Kalman filter: state = price estimate
+    # x_k = x_{k-1} + w_k  (constant model)
+    # z_k = x_k + v_k
+    # P: estimate covariance, K: Kalman gain
+    
+    x = prices[0][1]  # initial estimate = first price
+    P = 1.0           # initial covariance
+    Q = process_noise   # process noise
+    R = measurement_noise  # measurement noise
+    
+    smoothed = []
+    raw_list = []
+    
+    for ts, z in prices:
+        # Predict
+        x_pred = x
+        P_pred = P + Q
+        
+        # Update
+        K = P_pred / (P_pred + R)
+        x = x_pred + K * (z - x_pred)
+        P = (1 - K) * P_pred
+        
+        smoothed.append((ts, x))
+        raw_list.append(z)
+    
+    # Downsample for response (max 200 points)
+    step = max(1, len(smoothed) // 200)
+    series = [
+        {"ts": int(ts), "raw": round(raw_list[i], 8), "smooth": round(sm, 8)}
+        for i, (ts, sm) in enumerate(smoothed)
+        if i % step == 0
+    ]
+    
+    current_raw = prices[-1][1]
+    current_smooth = smoothed[-1][1]
+    deviation_pct = (current_raw - current_smooth) / current_smooth * 100 if current_smooth > 0 else 0
+    
+    # Noise ratio: std of (raw - smoothed) / mean price
+    residuals = [r - s for r, (_, s) in zip(raw_list, smoothed)]
+    if len(residuals) > 1:
+        mean_r = sum(residuals) / len(residuals)
+        std_r = math.sqrt(sum((r - mean_r) ** 2 for r in residuals) / len(residuals))
+        mean_price = sum(raw_list) / len(raw_list)
+        noise_ratio = std_r / mean_price if mean_price > 0 else 0
+    else:
+        noise_ratio = 0
+    
+    # Signal
+    abs_dev = abs(deviation_pct)
+    if abs_dev >= 0.5:
+        signal = "high_noise"
+        emoji = "🔴"
+        desc = f"{emoji} High microstructure noise: raw {abs_dev:.3f}% from Kalman smooth {'above' if deviation_pct > 0 else 'below'}"
+    elif abs_dev >= 0.1:
+        signal = "moderate_noise"
+        emoji = "🟡"
+        desc = f"{emoji} Moderate noise: raw {deviation_pct:+.3f}% vs smooth"
+    else:
+        signal = "low_noise"
+        emoji = "🟢"
+        desc = f"{emoji} Low noise: raw ≈ smooth (Δ {deviation_pct:+.4f}%)"
+    
+    return {
+        "smoothed_price": round(current_smooth, 8),
+        "raw_price": round(current_raw, 8),
+        "deviation_pct": round(deviation_pct, 6),
+        "noise_ratio": round(noise_ratio * 100, 6),  # as percentage
+        "signal": signal,
+        "description": desc,
+        "series": series,
+        "n_points": len(prices),
+        "process_noise": process_noise,
+        "measurement_noise": measurement_noise,
+    }

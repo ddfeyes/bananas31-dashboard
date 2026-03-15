@@ -54,6 +54,7 @@ from metrics import (
     compute_realized_vs_implied_vol,
     compute_mtf_rsi_divergence,
     compute_aggressor_ratio_series,
+    compute_kalman_price,
 )
 
 router = APIRouter(prefix="/api")
@@ -454,6 +455,24 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/kalman-price")
+async def kalman_price_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=1800, ge=300, le=86400),
+    q: float = Query(default=1e-5, ge=1e-8, le=0.1, description="Process noise"),
+    r: float = Query(default=1e-3, ge=1e-6, le=1.0, description="Measurement noise"),
+):
+    """Kalman filter smoothed price series + noise metrics."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_kalman_price(
+        symbol=target, window_seconds=window,
+        process_noise=q, measurement_noise=r
+    )
     return {"status": "ok", "symbol": target, **data}
 
 
