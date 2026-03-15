@@ -41,6 +41,7 @@ from metrics import (
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
     compute_vwap_deviation,
+    fetch_oi_mcap_ratio,
 )
 
 router = APIRouter(prefix="/api")
@@ -240,6 +241,15 @@ async def funding_extreme(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_extreme(symbol=target, threshold_pct=threshold_pct)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/oi-mcap")
+async def oi_mcap_endpoint(symbol: Optional[str] = None):
+    """Open Interest / Market Cap ratio — leverage risk signal."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await fetch_oi_mcap_ratio(symbol=target)
     return {"status": "ok", "symbol": target, **data}
 
 

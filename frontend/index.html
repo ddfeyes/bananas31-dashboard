@@ -715,6 +715,12 @@
       <div id="cross-symbol-oi-symbols" style="font-size:11px;margin-top:4px;"></div>
     </div>
 
+    <div id="alert-oi-mcap" class="alert-box">
+      <div class="alert-label">📊 OI / MARKET CAP</div>
+      <div id="oi-mcap-text" style="color:var(--muted)">Loading...</div>
+      <div id="oi-mcap-detail" style="font-size:10px;margin-top:3px;color:var(--muted);"></div>
+    </div>
+
     <div class="divider"></div>
     <div class="section-title">Large Trades &gt;$10k (5min)</div>
     <div class="metrics-grid" style="margin-bottom:8px;">
@@ -1969,6 +1975,7 @@ function selectSymbol(sym) {
   refreshMarketRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshOiMcap();
   initTape();
 }
 
@@ -3606,6 +3613,40 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── OI / Market Cap Ratio ────────────────────────────────────────────────────
+async function refreshOiMcap() {
+  const sym = activeSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/oi-mcap?symbol=${enc}`);
+  const textEl  = document.getElementById('oi-mcap-text');
+  const detailEl = document.getElementById('oi-mcap-detail');
+  const box = document.getElementById('alert-oi-mcap');
+  if (!data || !textEl) return;
+
+  const sig = data.signal;
+  const sigColors = {
+    low:      'var(--green)',
+    moderate: 'var(--muted)',
+    high:     'var(--accent)',
+    extreme:  'var(--red)',
+  };
+  const color = sigColors[sig] || 'var(--muted)';
+  textEl.style.color = color;
+
+  if (data.ratio_pct !== null && data.ratio_pct !== undefined) {
+    textEl.textContent = data.description || `${data.ratio_pct.toFixed(2)}%`;
+    box.className = (sig === 'high' || sig === 'extreme') ? 'alert-box active' : 'alert-box';
+    const oiUsd = data.oi_usd ? `OI: $${(data.oi_usd/1e6).toFixed(2)}M` : '';
+    const mcapUsd = data.mcap_usd ? `MCap: $${(data.mcap_usd/1e6).toFixed(0)}M` : '';
+    detailEl.textContent = [oiUsd, mcapUsd].filter(Boolean).join('  |  ');
+  } else {
+    textEl.textContent = data.error || data.mcap_error || 'No data';
+    box.className = 'alert-box';
+    detailEl.textContent = data.coin_id ? `coin: ${data.coin_id}` : '';
+  }
+}
+
 // ── Phase Timeline ───────────────────────────────────────────────────────────
 const PHASE_COLORS = {
   'accumulation':  'var(--green)',
@@ -4207,6 +4248,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshOiMcap();
+  setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {

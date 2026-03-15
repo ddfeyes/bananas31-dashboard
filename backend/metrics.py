@@ -1185,3 +1185,98 @@ async def compute_vwap_deviation(window_seconds: int = 3600, symbol: str = None)
         "window_seconds": window_seconds,
         "trade_count": len(trades),
     }
+
+
+# CoinGecko symbol → coin id mapping (extend as needed)
+_COINGECKO_IDS = {
+    "BANANAS31USDT": "banana",   # likely id; fallback graceful
+    "COSUSDT": "contentos",
+    "DEXEUSDT": "dexe",
+    "LYNUSDT": "lynex",
+}
+
+async def fetch_oi_mcap_ratio(symbol: str = None) -> Dict:
+    """
+    Fetch open interest (from DB) and market cap (from CoinGecko free API).
+    Returns OI/Mcap ratio as a signal.
+    High OI/Mcap (>15-20%) = elevated leverage risk.
+    """
+    import httpx
+
+    # Get latest OI from DB
+    oi_data = await get_oi_history(limit=2, symbol=symbol)
+    if not oi_data:
+        return {"error": "No OI data", "ratio_pct": None}
+
+    # Take the most recent OI value
+    latest_oi_row = oi_data[0] if oi_data else None
+    if not latest_oi_row:
+        return {"error": "No OI row", "ratio_pct": None}
+
+    oi_contracts = latest_oi_row.get("oi_contracts") or latest_oi_row.get("oi_value", 0)
+
+    # Get price to compute OI in USD
+    price_data = await get_oi_history(limit=2, symbol=symbol)
+    # We'll get price from latest orderbook
+    ob = await get_latest_orderbook(symbol=symbol, limit=1)
+    price = None
+    if ob and isinstance(ob, list) and ob[0]:
+        price = ob[0].get("mid_price") or ob[0].get("best_bid")
+
+    oi_usd = (oi_contracts * price) if (oi_contracts and price) else None
+
+    # Fetch market cap from CoinGecko (free, no key)
+    coin_id = None
+    if symbol:
+        for k, v in _COINGECKO_IDS.items():
+            if k.upper() == symbol.upper():
+                coin_id = v
+                break
+
+    mcap = None
+    mcap_error = None
+    if coin_id:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(
+                    f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                    params={"localization": "false", "tickers": "false",
+                            "market_data": "true", "community_data": "false",
+                            "developer_data": "false"},
+                    headers={"Accept": "application/json"}
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    mcap = data.get("market_data", {}).get("market_cap", {}).get("usd")
+        except Exception as e:
+            mcap_error = str(e)
+
+    ratio_pct = None
+    signal = None
+    description = ""
+    if oi_usd and mcap and mcap > 0:
+        ratio_pct = (oi_usd / mcap) * 100
+        if ratio_pct < 5:
+            signal = "low"
+            description = f"OI/Mcap {ratio_pct:.2f}% — low leverage"
+        elif ratio_pct < 15:
+            signal = "moderate"
+            description = f"OI/Mcap {ratio_pct:.2f}% — moderate leverage"
+        elif ratio_pct < 30:
+            signal = "high"
+            description = f"⚠️ OI/Mcap {ratio_pct:.2f}% — elevated leverage risk"
+        else:
+            signal = "extreme"
+            description = f"🚨 OI/Mcap {ratio_pct:.2f}% — extreme leverage, squeeze risk"
+
+    return {
+        "oi_contracts": round(oi_contracts, 2) if oi_contracts else None,
+        "oi_usd": round(oi_usd, 2) if oi_usd else None,
+        "price": round(price, 8) if price else None,
+        "mcap_usd": mcap,
+        "coin_id": coin_id,
+        "ratio_pct": round(ratio_pct, 4) if ratio_pct is not None else None,
+        "signal": signal,
+        "description": description,
+        "mcap_error": mcap_error,
+    }
