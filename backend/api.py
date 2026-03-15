@@ -79,6 +79,53 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+class AlertManager:
+    """Fan-out alert events to /ws/alerts subscribers."""
+    def __init__(self):
+        self._clients: Set[WebSocket] = set()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._clients.add(ws)
+
+    def disconnect(self, ws: WebSocket):
+        self._clients.discard(ws)
+
+    async def broadcast(self, alert: dict):
+        dead = set()
+        for ws in self._clients.copy():
+            try:
+                await ws.send_text(json.dumps(alert))
+            except Exception:
+                dead.add(ws)
+        for ws in dead:
+            self._clients.discard(ws)
+
+
+alert_manager = AlertManager()
+
+
+@router.websocket("/ws/alerts")
+async def ws_alerts(ws: WebSocket):
+    """WebSocket: real-time alert push. Sends {type:'alert', ts, symbol, alert_type, severity, description}."""
+    await alert_manager.connect(ws)
+    try:
+        # Send recent alerts on connect
+        recent = await get_alert_history(limit=20)
+        for a in recent:
+            await ws.send_text(json.dumps({"type": "alert_history", **a}))
+        # Keep alive
+        while True:
+            try:
+                await asyncio.wait_for(ws.receive_text(), timeout=30)
+            except asyncio.TimeoutError:
+                await ws.send_text(json.dumps({"type": "ping"}))
+    except WebSocketDisconnect:
+        alert_manager.disconnect(ws)
+    except Exception:
+        alert_manager.disconnect(ws)
+
+
 @router.get("/symbols")
 async def list_symbols():
     """Return all tracked symbols."""
@@ -630,6 +677,14 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     if time.time() - last > cooldown:
                         await insert_alert(symbol, a_type, sev, desc, data)
                         ws._last_alert_ts[a_type] = time.time()
+                        await alert_manager.broadcast({
+                            "type": "alert",
+                            "ts": time.time(),
+                            "symbol": symbol,
+                            "alert_type": a_type,
+                            "severity": sev,
+                            "description": desc,
+                        })
 
                 msg = {
                     "type": "summary",

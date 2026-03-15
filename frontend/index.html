@@ -1629,6 +1629,54 @@ function connectWS(symbol) {
   activeWS = ws;
 }
 
+// ── Alerts WebSocket ──────────────────────────────────────────────────────────
+let _alertsWS = null;
+function connectAlertsWS() {
+  if (_alertsWS && _alertsWS.readyState < 2) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/api/ws/alerts`);
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'alert') showAlertToast(msg);
+    } catch {}
+  };
+  ws.onclose = () => setTimeout(connectAlertsWS, 5000);
+  _alertsWS = ws;
+}
+
+function showAlertToast(alert) {
+  const colors = { high: 'var(--red)', medium: 'var(--accent)', low: 'var(--muted)' };
+  const bg = { high: '#2a0a0a', medium: '#2a1e00', low: 'var(--bg3)' };
+  const color = colors[alert.severity] || 'var(--text)';
+  const bgColor = bg[alert.severity] || 'var(--bg3)';
+  const sym = (alert.symbol || '').replace('USDT','');
+  const container = document.getElementById('alert-toast-container') || createToastContainer();
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    background:${bgColor};border:1px solid ${color};border-radius:6px;
+    padding:8px 12px;font-size:11px;max-width:300px;pointer-events:auto;
+    box-shadow:0 2px 8px rgba(0,0,0,0.4);animation:slideIn 0.2s ease;
+  `;
+  toast.innerHTML = `<span style="color:${color};font-weight:700">[${alert.severity?.toUpperCase()}] ${sym}</span> — ${alert.alert_type?.replace(/_/g,' ')}<br><span style="color:var(--muted)">${alert.description || ''}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.5s'; setTimeout(() => toast.remove(), 500); }, 6000);
+}
+
+function createToastContainer() {
+  let c = document.getElementById('alert-toast-container');
+  if (c) return c;
+  c = document.createElement('div');
+  c.id = 'alert-toast-container';
+  c.style.cssText = 'position:fixed;bottom:60px;right:16px;z-index:9999;display:flex;flex-direction:column-reverse;gap:6px;pointer-events:none;';
+  document.body.appendChild(c);
+  // Add slide-in keyframe
+  const style = document.createElement('style');
+  style.textContent = '@keyframes slideIn { from { transform: translateX(20px); opacity:0; } to { transform: translateX(0); opacity:1; } }';
+  document.head.appendChild(style);
+  return c;
+}
+
 function updateSummary(summary) {
   if (summary.price) {
     updatePriceDisplay(summary.price);
@@ -4412,6 +4460,7 @@ async function refreshSignalsScanner() {
     updateExportLinks(activeSymbol);
     loadPriceAlertsFromStorage();
   }
+  connectAlertsWS();
   await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview(), refreshTradeFlowHeatmap()]);
   initTape();
   startFundingCountdown();
