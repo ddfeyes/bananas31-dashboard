@@ -73,6 +73,7 @@ from metrics import (
     compute_whale_clustering,
     compute_tape_speed,
     compute_aggressor_imbalance_streak,
+    compute_oi_weighted_price,
 )
 
 router = APIRouter(prefix="/api")
@@ -581,6 +582,15 @@ async def vwap_deviation_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_vwap_deviation(window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/oi-weighted-price")
+async def oi_weighted_price_endpoint(symbol: Optional[str] = None):
+    """OI-weighted average price level and deviation from current price."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_oi_weighted_price(symbol=target)
     return {"status": "ok", "symbol": target, **data}
 
 

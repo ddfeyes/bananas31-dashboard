@@ -4470,3 +4470,96 @@ def compute_aggressor_imbalance_streak(
         "alert_streak": alert_streak,
         "description": desc,
     }
+
+
+async def compute_oi_weighted_price(symbol: str = None, limit: int = 50) -> Dict:
+    """
+    OI-weighted average price level.
+
+    For each of the last `limit` OI snapshots, finds the nearest trade price,
+    then computes OI-weighted average: sum(OI[i] * price[i]) / sum(OI[i]).
+
+    Returns deviation of current price from OI-weighted avg and a bias label:
+      - long_heavy:  price > OI-weight by >1% (longs overextended)
+      - short_heavy: price < OI-weight by >1% (shorts overextended)
+      - neutral:     within ±1%
+    """
+    oi_rows = await get_oi_history(limit=limit, since=time.time() - 86400, symbol=symbol)
+
+    if not oi_rows:
+        return {
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "oi_count": 0,
+            "description": "No OI data",
+        }
+
+    min_ts = oi_rows[0]["ts"]
+    trades = await get_recent_trades(since=min_ts - 120, symbol=symbol)
+
+    if not trades:
+        return {
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "oi_count": len(oi_rows),
+            "description": "No trade data",
+        }
+
+    # get_recent_trades returns DESC order — reverse to ascending for binary search
+    trades_asc = list(reversed(trades))
+
+    cum_wt = 0.0
+    cum_wp = 0.0
+    for oi in oi_rows:
+        oi_ts = oi["ts"]
+        oi_val = float(oi.get("oi_value") or 0)
+        if oi_val <= 0:
+            continue
+        # Binary search: find latest trade with ts <= oi_ts + 10 (small clock-skew tolerance)
+        price = None
+        lo, hi = 0, len(trades_asc) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if trades_asc[mid]["ts"] <= oi_ts + 10:
+                price = float(trades_asc[mid]["price"])
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if price is None or price <= 0:
+            continue
+        cum_wt += oi_val
+        cum_wp += oi_val * price
+
+    if cum_wt == 0:
+        return {
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "oi_count": len(oi_rows),
+            "description": "No matched OI/price data",
+        }
+
+    oi_wp = cum_wp / cum_wt
+    current_price = float(trades_asc[-1]["price"])
+    deviation_pct = (current_price - oi_wp) / oi_wp * 100
+
+    if deviation_pct > 1.0:
+        bias = "long_heavy"
+    elif deviation_pct < -1.0:
+        bias = "short_heavy"
+    else:
+        bias = "neutral"
+
+    return {
+        "oi_weighted_price": round(oi_wp, 8),
+        "current_price": round(current_price, 8),
+        "deviation_pct": round(deviation_pct, 4),
+        "bias": bias,
+        "oi_count": len(oi_rows),
+        "description": f"Price {deviation_pct:+.3f}% vs OI-weighted avg",
+    }

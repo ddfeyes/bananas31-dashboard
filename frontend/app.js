@@ -1209,6 +1209,56 @@ async function renderVwapDeviation() {
   `;
 }
 
+// ── Render: OI-Weighted Price ─────────────────────────────────────────────────
+async function renderOiWeightedPrice() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/oi-weighted-price?symbol=${sym}`);
+  const el    = document.getElementById('oi-weighted-price-content');
+  const badge = document.getElementById('oi-weighted-price-badge');
+  if (!el) return;
+
+  if (!data) {
+    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
+
+  const devPct   = data.deviation_pct != null ? parseFloat(data.deviation_pct) : null;
+  const bias     = data.bias || 'neutral';
+  const oiWp     = data.oi_weighted_price != null ? fmtPrice(data.oi_weighted_price) : '—';
+  const curPrice = data.current_price     != null ? fmtPrice(data.current_price)     : '—';
+  const devStr   = devPct != null ? (devPct >= 0 ? '+' : '') + devPct.toFixed(3) + '%' : '—';
+
+  // Red = price above OI weight (overextended longs), green = below (overextended shorts)
+  const devColor = devPct == null  ? 'var(--muted)'
+                 : devPct >  1.0   ? 'var(--red)'
+                 : devPct < -1.0   ? 'var(--green)'
+                 :                   'var(--muted)';
+
+  if (badge) {
+    badge.textContent = bias.replace('_', ' ');
+    badge.className   = 'card-badge ' + (bias === 'long_heavy' ? 'badge-red' : bias === 'short_heavy' ? 'badge-green' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Deviation</div>
+        <div class="metric-value" style="color:${devColor};font-size:22px">${devStr}</div>
+        <div class="metric-label" style="color:${devColor}">${bias.replace('_', ' ')}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Price</div>
+        <div class="metric-value">${curPrice}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">OI Anchor</div>
+        <div class="metric-value" style="color:var(--muted)">${oiWp}</div>
+      </div>
+    </div>
+  `;
+}
+
 // ── Render: Market Regime ─────────────────────────────────────────────────────
 async function renderMarketRegime() {
   const sym = encodeURIComponent(activeSymbol);
@@ -1641,6 +1691,7 @@ async function refresh() {
   await Promise.all([
     safe(renderWhaleClustering),
     safe(renderVwapDeviation),
+    safe(renderOiWeightedPrice),
     safe(renderMarketRegime),
     safe(renderMomentum),
     safe(renderRegimeTimeline),
