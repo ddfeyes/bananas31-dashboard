@@ -3230,3 +3230,106 @@ def compute_tod_volatility(
         "elevated":       elevated,
         "hours":          hours,
     }
+
+
+def compute_tick_imbalance_bars(
+    trades: List[dict],
+    threshold: int = 20,
+) -> dict:
+    """Detect tick imbalance bars: consecutive same-side ticks exceeding threshold.
+
+    Tick direction per trade (vs previous trade price):
+      price > prev_price  →  +1  (uptick)
+      price < prev_price  →  -1  (downtick)
+      price == prev_price →  prev_direction  (tick rule; 0 for first trade)
+
+    A bar closes when |cumulative imbalance| >= threshold.
+    After closing, imbalance resets to 0 for the next bar.
+
+    Returns:
+      bars:                 [{ts_start, ts_end, direction, imbalance,
+                               trade_count, open, close}]
+      current_imbalance:    running imbalance in open bar (int)
+      current_trade_count:  number of trades in open bar
+      current_direction:    "buy" / "sell" / "neutral"
+      threshold:            int
+      bar_count:            len(bars)
+      alert:                True if |current_imbalance| >= threshold * 0.8
+    """
+    if not trades:
+        return {
+            "bars":                [],
+            "current_imbalance":   0,
+            "current_trade_count": 0,
+            "current_direction":   "neutral",
+            "threshold":           threshold,
+            "bar_count":           0,
+            "alert":               False,
+        }
+
+    sorted_trades = sorted(trades, key=lambda x: float(x["ts"]))
+
+    bars: List[dict] = []
+    prev_price: Optional[float] = None
+    prev_direction: int = 0
+
+    # Current (open) bar state
+    bar_imbalance: int = 0
+    bar_trades: List[dict] = []
+
+    for trade in sorted_trades:
+        price = float(trade["price"])
+
+        # Determine tick direction
+        if prev_price is None:
+            direction = 0
+        elif price > prev_price:
+            direction = 1
+        elif price < prev_price:
+            direction = -1
+        else:
+            direction = prev_direction   # tick rule
+
+        if direction != 0:
+            prev_direction = direction
+        prev_price = price
+
+        bar_imbalance += direction
+        bar_trades.append(trade)
+
+        # Close bar when |imbalance| >= threshold
+        if abs(bar_imbalance) >= threshold:
+            bars.append({
+                "ts_start":    float(bar_trades[0]["ts"]),
+                "ts_end":      float(bar_trades[-1]["ts"]),
+                "direction":   "buy" if bar_imbalance > 0 else "sell",
+                "imbalance":   bar_imbalance,
+                "trade_count": len(bar_trades),
+                "open":        float(bar_trades[0]["price"]),
+                "close":       float(bar_trades[-1]["price"]),
+            })
+            bar_imbalance = 0
+            bar_trades = []
+            prev_direction = 0   # reset tick rule on bar boundary
+
+    # Current open bar
+    current_imbalance = bar_imbalance
+    current_trade_count = len(bar_trades)
+    if current_imbalance > 0:
+        current_direction = "buy"
+    elif current_imbalance < 0:
+        current_direction = "sell"
+    else:
+        current_direction = "neutral"
+
+    alert = abs(current_imbalance) >= threshold * 0.8
+
+    return {
+        "bars":                bars,
+        "current_imbalance":   current_imbalance,
+        "current_trade_count": current_trade_count,
+        "current_direction":   current_direction,
+        "threshold":           threshold,
+        "bar_count":           len(bars),
+        "alert":               alert,
+    }
