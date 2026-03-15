@@ -55,6 +55,7 @@ from metrics import (
     compute_mtf_rsi_divergence,
     compute_aggressor_ratio_series,
     compute_kalman_price,
+    compute_ob_pressure_gradient,
 )
 
 router = APIRouter(prefix="/api")
@@ -455,6 +456,23 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/ob-pressure-gradient")
+async def ob_pressure_gradient_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=600, ge=60, le=3600),
+    bucket: int = Query(default=60, ge=10, le=300),
+    depth: int = Query(default=10, ge=1, le=50),
+):
+    """Order book pressure gradient: rate of change of bid/ask imbalance."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_ob_pressure_gradient(
+        symbol=target, window_seconds=window, bucket_size=bucket, depth_levels=depth
+    )
     return {"status": "ok", "symbol": target, **data}
 
 

@@ -929,6 +929,25 @@
       <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
     </div>
 
+    <div id="alert-ob-gradient" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">📐 OB PRESSURE GRADIENT</div>
+      <div id="ob-grad-text" style="color:var(--muted)">Loading...</div>
+      <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;">
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Imbalance</div>
+          <div id="ob-grad-imb" style="font-size:14px;font-weight:bold;">—</div>
+        </div>
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Gradient/min</div>
+          <div id="ob-grad-val" style="font-size:14px;font-weight:bold;">—</div>
+        </div>
+        <div>
+          <div style="color:var(--muted);margin-bottom:2px;">Trend</div>
+          <div id="ob-grad-trend" style="font-size:14px;">—</div>
+        </div>
+      </div>
+    </div>
+
     <div id="alert-kalman" class="alert-box" style="margin-bottom:12px;">
       <div class="alert-label">🔬 KALMAN NOISE FILTER</div>
       <div id="kalman-text" style="color:var(--muted)">Loading...</div>
@@ -2771,6 +2790,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshObPressureGradient();
   refreshKalmanPrice();
   refreshAggressorRatio();
   refreshMtfRsi();
@@ -4728,6 +4748,44 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── OB Pressure Gradient ─────────────────────────────────────────────────────
+async function refreshObPressureGradient() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/ob-pressure-gradient?symbol=${enc}&window=600&bucket=60`);
+  const box = document.getElementById('alert-ob-gradient');
+  const textEl = document.getElementById('ob-grad-text');
+  const imbEl = document.getElementById('ob-grad-imb');
+  const valEl = document.getElementById('ob-grad-val');
+  const trendEl = document.getElementById('ob-grad-trend');
+  if (!data || !textEl) return;
+
+  if (data.current_imbalance !== null) {
+    const sig = data.signal;
+    const isBid = sig.includes('bid');
+    const isAsk = sig.includes('ask');
+    const color = isBid ? 'var(--green)' : isAsk ? 'var(--red)' : 'var(--muted)';
+    const isAlert = sig === 'strong_bid_pressure' || sig === 'strong_ask_pressure';
+    textEl.style.color = color;
+    textEl.textContent = data.description || '';
+    box.className = isAlert ? 'alert-box active' : 'alert-box';
+    const imb = data.current_imbalance;
+    imbEl.textContent = (imb >= 0 ? '+' : '') + imb.toFixed(3);
+    imbEl.style.color = imb > 0 ? 'var(--green)' : imb < 0 ? 'var(--red)' : 'var(--muted)';
+    const grad = data.avg_gradient;
+    valEl.textContent = grad !== null ? (grad >= 0 ? '+' : '') + grad.toFixed(4) : '—';
+    valEl.style.color = color;
+    const arrow = isBid ? '▲ bid' : isAsk ? '▼ ask' : '↔ neutral';
+    trendEl.textContent = arrow;
+    trendEl.style.color = color;
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+  }
+}
+
 // ── Kalman Price Filter ───────────────────────────────────────────────────────
 async function refreshKalmanPrice() {
   const sym = activeSymbol || currentSymbol;
@@ -6252,6 +6310,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshObPressureGradient();
+  setInterval(refreshObPressureGradient, 15000);  // every 15s
   refreshKalmanPrice();
   setInterval(refreshKalmanPrice, 15000);  // every 15s
   refreshAggressorRatio();

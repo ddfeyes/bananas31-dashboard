@@ -2439,3 +2439,123 @@ async def compute_kalman_price(
         "process_noise": process_noise,
         "measurement_noise": measurement_noise,
     }
+
+
+async def compute_ob_pressure_gradient(
+    symbol: str = None,
+    window_seconds: int = 600,
+    bucket_size: int = 60,
+    depth_levels: int = 10,
+) -> Dict:
+    """
+    Order book pressure gradient: rate of change of bid/ask imbalance per minute.
+    
+    For each OB snapshot: imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol)
+    Gradient = imbalance[t] - imbalance[t-1]
+    
+    Positive gradient → increasing bid pressure
+    Negative gradient → increasing ask pressure (selling)
+    """
+    import json
+    import time
+    from storage import get_orderbook_history
+    
+    ob_rows = await get_orderbook_history(limit=200, symbol=symbol)
+    
+    if not ob_rows or len(ob_rows) < 2:
+        return {
+            "gradient": None,
+            "current_imbalance": None,
+            "description": "Insufficient OB data",
+            "series": [],
+        }
+    
+    # Compute imbalance per snapshot
+    def compute_imbalance(row: dict) -> float:
+        """Compute bid/ask volume imbalance from OB snapshot."""
+        try:
+            bids = json.loads(row.get("bids", "[]")) if isinstance(row.get("bids"), str) else (row.get("bids") or [])
+            asks = json.loads(row.get("asks", "[]")) if isinstance(row.get("asks"), str) else (row.get("asks") or [])
+        except Exception:
+            return 0.0
+        
+        bid_vol = sum(float(b[1]) for b in bids[:depth_levels] if len(b) >= 2)
+        ask_vol = sum(float(a[1]) for a in asks[:depth_levels] if len(a) >= 2)
+        total = bid_vol + ask_vol
+        if total < 1e-12:
+            return 0.0
+        return (bid_vol - ask_vol) / total
+    
+    # Build imbalance time series bucketed by minute
+    buckets = {}
+    for row in ob_rows:
+        ts = row["ts"]
+        imb = compute_imbalance(row)
+        b = int(ts // bucket_size) * bucket_size
+        if b not in buckets:
+            buckets[b] = []
+        buckets[b].append(imb)
+    
+    sorted_buckets = sorted(buckets.items())
+    imb_series = [(ts, sum(vals) / len(vals)) for ts, vals in sorted_buckets if vals]
+    
+    if len(imb_series) < 2:
+        return {
+            "gradient": None,
+            "current_imbalance": round(imb_series[-1][1] if imb_series else 0, 4),
+            "description": "Insufficient bucketed data",
+            "series": [{"ts": int(ts), "imbalance": round(v, 4)} for ts, v in imb_series],
+        }
+    
+    # Compute gradients (imbalance change per bucket)
+    gradients = []
+    for i in range(1, len(imb_series)):
+        grad = imb_series[i][1] - imb_series[i - 1][1]
+        gradients.append((imb_series[i][0], grad))
+    
+    current_imbalance = imb_series[-1][1]
+    current_gradient = gradients[-1][1] if gradients else 0
+    
+    # Rolling gradient (last 3 buckets)
+    recent_grads = [g for _, g in gradients[-3:]]
+    avg_gradient = sum(recent_grads) / len(recent_grads) if recent_grads else 0
+    
+    # Signal
+    if avg_gradient >= 0.05:
+        signal = "strong_bid_pressure"
+        emoji = "🔼"
+        desc = f"{emoji} Strong bid pressure building: gradient +{avg_gradient:.3f}/min"
+    elif avg_gradient >= 0.02:
+        signal = "mild_bid_pressure"
+        emoji = "📈"
+        desc = f"{emoji} Mild bid pressure: gradient +{avg_gradient:.3f}/min"
+    elif avg_gradient <= -0.05:
+        signal = "strong_ask_pressure"
+        emoji = "🔽"
+        desc = f"{emoji} Strong ask pressure building: gradient {avg_gradient:.3f}/min"
+    elif avg_gradient <= -0.02:
+        signal = "mild_ask_pressure"
+        emoji = "📉"
+        desc = f"{emoji} Mild ask pressure: gradient {avg_gradient:.3f}/min"
+    else:
+        signal = "neutral"
+        emoji = "➡️"
+        desc = f"{emoji} Neutral pressure: gradient {avg_gradient:+.4f}/min, imbalance {current_imbalance:+.3f}"
+    
+    # Build response series
+    series = []
+    for i, (ts, imb) in enumerate(imb_series):
+        grad = gradients[i - 1][1] if i > 0 else 0
+        series.append({"ts": int(ts), "imbalance": round(imb, 4), "gradient": round(grad, 4)})
+    
+    return {
+        "gradient": round(current_gradient, 4),
+        "avg_gradient": round(avg_gradient, 4),
+        "current_imbalance": round(current_imbalance, 4),
+        "signal": signal,
+        "description": desc,
+        "series": series,
+        "n_buckets": len(imb_series),
+        "window_seconds": window_seconds,
+        "bucket_size": bucket_size,
+    }
