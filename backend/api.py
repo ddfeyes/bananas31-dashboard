@@ -46,6 +46,7 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
+    compute_market_regime_v2,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
@@ -921,7 +922,7 @@ async def market_regime_endpoint(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_market_regime(symbol=target)
+    data = await compute_market_regime_v2(symbol=target)
     return {"status": "ok", **data}
 
 

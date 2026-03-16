@@ -1206,55 +1206,82 @@ async function renderMarketRegime() {
   const badge = document.getElementById('market-regime-badge');
   if (!el) return;
 
-  const regime = data.regime || '—';
-  const phase  = data.phase  || '—';
-  const score  = data.score  != null ? parseFloat(data.score).toFixed(1) : '—';
-  const conf   = data.phase_confidence != null ? (parseFloat(data.phase_confidence) * 100).toFixed(0) + '%' : '—';
-  const action = data.action || '—';
-  const weights = data.weights || {};
+  const regime     = data.regime     || '—';
+  const confidence = data.confidence != null ? (parseFloat(data.confidence) * 100).toFixed(0) : null;
+  const volatility = data.volatility != null ? parseFloat(data.volatility).toFixed(5) : '—';
+  const momentum   = data.momentum   != null ? (parseFloat(data.momentum) * 100).toFixed(2) + '%' : '—';
+  const history    = Array.isArray(data.regime_history) ? data.regime_history : [];
 
-  const regimeColors = { Bull: 'var(--green)', Bear: 'var(--red)', Neutral: 'var(--yellow)' };
-  const color = regimeColors[regime] || 'var(--fg)';
-  const scoreColor = parseFloat(data.score) > 0 ? 'var(--green)' : parseFloat(data.score) < 0 ? 'var(--red)' : 'var(--muted)';
+  // Color-code by regime
+  const REGIME_COLORS = {
+    trending_bull: 'var(--green)',
+    trending_bear: 'var(--red)',
+    choppy:        'var(--yellow)',
+    ranging:       'var(--blue)',
+    crisis:        'var(--red)',
+  };
+  const REGIME_BADGES = {
+    trending_bull: 'badge-green',
+    trending_bear: 'badge-red',
+    choppy:        'badge-yellow',
+    ranging:       'badge-blue',
+    crisis:        'badge-red',
+  };
+  const REGIME_LABELS = {
+    trending_bull: 'Trending Bull',
+    trending_bear: 'Trending Bear',
+    choppy:        'Choppy',
+    ranging:       'Ranging',
+    crisis:        'Crisis',
+  };
+
+  const color      = REGIME_COLORS[regime] || 'var(--fg)';
+  const badgeCls   = REGIME_BADGES[regime] || 'badge-yellow';
+  const label      = REGIME_LABELS[regime] || regime;
 
   if (badge) {
-    badge.textContent = regime;
-    badge.className   = 'card-badge ' + (
-      regime === 'Bull' ? 'badge-green' :
-      regime === 'Bear' ? 'badge-red' :
-      'badge-yellow'
-    );
+    badge.textContent = label;
+    badge.className   = 'card-badge ' + badgeCls;
     badge.style.display = 'inline-block';
   }
 
-  const wParts = Object.entries(weights)
-    .filter(([, v]) => v !== 0)
-    .map(([k, v]) => {
-      const vc = v > 0 ? 'var(--green)' : 'var(--red)';
-      return `<span style="color:var(--muted)">${k} <span style="color:${vc}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span></span>`;
-    }).join(' · ');
+  // Confidence bar
+  const confPct  = confidence != null ? confidence : '—';
+  const confFill = confidence != null ? `<div style="width:${confidence}%;height:4px;background:${color};border-radius:2px;transition:width .4s"></div>` : '';
+
+  // History list (last 5 regime changes)
+  const histHtml = history.length > 0
+    ? history.slice().reverse().map(h => {
+        const ts    = new Date(h.timestamp * 1000).toLocaleTimeString();
+        const hcol  = REGIME_COLORS[h.regime] || 'var(--fg)';
+        const hlbl  = REGIME_LABELS[h.regime] || h.regime;
+        return `<div style="font-size:10px;color:var(--muted)">${ts} → <span style="color:${hcol}">${hlbl}</span></div>`;
+      }).join('')
+    : '<div style="font-size:10px;color:var(--muted)">No regime changes yet</div>';
 
   el.innerHTML = `
-    <div class="phase-name" style="color:${color};font-size:16px">${regime}</div>
+    <div class="phase-name" style="color:${color};font-size:16px;margin-bottom:4px">${label}</div>
+    <div style="background:var(--bg2);border-radius:2px;height:4px;margin-bottom:8px">
+      ${confFill}
+    </div>
     <div class="phase-metrics">
       <div class="metric-box">
-        <div class="metric-label">Phase</div>
-        <div class="metric-value" style="color:${color};font-size:13px">${phase}</div>
-      </div>
-      <div class="metric-box">
-        <div class="metric-label">Score</div>
-        <div class="metric-value" style="color:${scoreColor}">${score}</div>
-      </div>
-      <div class="metric-box">
         <div class="metric-label">Confidence</div>
-        <div class="metric-value" style="color:${color}">${conf}</div>
+        <div class="metric-value" style="color:${color}">${confPct}%</div>
       </div>
       <div class="metric-box">
-        <div class="metric-label">Action</div>
-        <div class="metric-value" style="font-size:11px;color:var(--muted)">${action}</div>
+        <div class="metric-label">Volatility</div>
+        <div class="metric-value" style="font-size:12px">${volatility}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Momentum</div>
+        <div class="metric-value" style="font-size:12px;color:${parseFloat(data.momentum||0)>=0?'var(--green)':'var(--red)'}">${momentum}</div>
       </div>
     </div>
-    ${wParts ? `<div style="font-size:9px;color:var(--muted);margin-top:4px;line-height:1.6">${wParts}</div>` : ''}
+    <div style="margin-top:6px">
+      <div style="font-size:9px;color:var(--muted);margin-bottom:2px;text-transform:uppercase;letter-spacing:.5px">Regime History</div>
+      ${histHtml}
+    </div>
   `;
 }
 
