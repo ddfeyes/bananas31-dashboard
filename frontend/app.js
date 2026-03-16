@@ -1913,6 +1913,101 @@ async function renderObWalls() {
     </table>`;
 }
 
+// ── Liquidation Heatmap ───────────────────────────────────────────────────────
+async function renderLiqHeatmap() {
+  const data = await apiFetch('/liquidation-heatmap?window_s=3600&buckets=20');
+  const el    = document.getElementById('liq-heatmap-content');
+  const badge = document.getElementById('liq-heatmap-badge');
+  if (!el) return;
+
+  if (!data) { setErr('liq-heatmap-content'); return; }
+
+  const syms = Object.keys(data.symbols || {});
+  if (syms.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No liquidation data</div>';
+    return;
+  }
+
+  // Compute cross-symbol max for consistent colour scale
+  let globalMax = 0;
+  for (const s of syms) {
+    const entry = data.symbols[s];
+    for (const b of (entry.buckets || [])) globalMax = Math.max(globalMax, b.total_usd);
+  }
+
+  function liqColor(totalUsd, longUsd, shortUsd) {
+    if (totalUsd <= 0 || globalMax <= 0) return 'var(--bg3)';
+    const intensity = Math.log1p(totalUsd) / Math.log1p(globalMax);
+    const alpha = Math.max(0.08, intensity);
+    // long liquidations = price was dropping (forced longs out) → red
+    // short liquidations = price was rising (forced shorts out) → green
+    if (longUsd >= shortUsd) return `rgba(255,77,79,${alpha.toFixed(2)})`;
+    return `rgba(0,224,130,${alpha.toFixed(2)})`;
+  }
+
+  function fmtUsd(v) {
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  // Badge: total liquidated across all symbols
+  const grandTotal = syms.reduce((s, k) => s + (data.symbols[k].total_usd || 0), 0);
+  if (badge) {
+    badge.textContent = fmtUsd(grandTotal);
+    badge.className = 'card-badge ' + (grandTotal > 50000 ? 'badge-red' : grandTotal > 5000 ? 'badge-yellow' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  let html = '';
+  for (const sym of syms) {
+    const entry = data.symbols[sym];
+    const buckets = entry.buckets || [];
+    const label = sym.replace('USDT', '');
+    const symTotal = entry.total_usd || 0;
+    const nLiqs = entry.n_liquidations || 0;
+
+    html += `<div style="margin-bottom:10px">`;
+    html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px">`;
+    html += `<span style="font-weight:600;color:var(--fg)">${label}</span>`;
+    html += `<span>${nLiqs} liqs · ${fmtUsd(symTotal)}</span></div>`;
+
+    if (buckets.length === 0) {
+      html += `<div style="font-size:10px;color:var(--muted);padding:4px 0">No liquidations in window</div>`;
+    } else {
+      html += `<div style="display:flex;flex-direction:column;gap:1px">`;
+      // Render bucket strip: reversed so high price is on the right
+      const reversed = [...buckets].reverse();
+      html += `<div style="display:flex;gap:1px;height:28px;align-items:stretch">`;
+      for (const b of reversed) {
+        const col = liqColor(b.total_usd, b.long_usd, b.short_usd);
+        const tip = b.total_usd > 0
+          ? `${fmtUsd(b.total_usd)} (L:${fmtUsd(b.long_usd)} S:${fmtUsd(b.short_usd)})`
+          : '';
+        html += `<div title="${tip}" style="flex:1;background:${col};border-radius:1px;min-width:2px"></div>`;
+      }
+      html += `</div>`;
+      // Price axis: low price left, high price right
+      if (entry.price_min != null) {
+        const dec = entry.price_min < 0.01 ? 6 : entry.price_min < 1 ? 4 : 2;
+        html += `<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">`;
+        html += `<span>${entry.price_min.toFixed(dec)}</span><span>${entry.price_max.toFixed(dec)}</span></div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Legend
+  html += `<div style="display:flex;gap:12px;font-size:9px;color:var(--muted);margin-top:4px">`;
+  html += `<span><span style="color:var(--red)">■</span> longs liq'd</span>`;
+  html += `<span><span style="color:var(--green)">■</span> shorts liq'd</span>`;
+  html += `<span style="margin-left:auto">darker = larger</span>`;
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2019,6 +2114,7 @@ async function refresh() {
     safe(renderAggressorStreak),
     safe(renderObWalls),
     safe(renderTopMovers),
+    safe(renderLiqHeatmap),
   ]);
 }
 

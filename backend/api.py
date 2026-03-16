@@ -5132,53 +5132,74 @@ async def trade_size_percentiles(symbol: Optional[str] = None):
 
 @router.get("/liquidation-heatmap")
 async def liquidation_heatmap_endpoint(
-    symbol: Optional[str] = None,
+    window_s: int = Query(default=3600, ge=60, le=86400),
     buckets: int = Query(default=20, ge=5, le=100),
-    window: int = Query(default=86400, ge=3600, le=2592000),
 ):
-    """Liquidation heatmap: bucket liquidations by price level."""
-    from storage import DB_PATH
+    """
+    Return last `window_s` seconds of liquidations bucketed by price range,
+    for all tracked symbols. Each bucket carries long_usd, short_usd, total_usd.
+    """
+    now = time.time()
+    since = now - window_s
+    symbols = get_symbols()
+    result: dict = {}
 
-    syms = get_symbols()
-    target = symbol if symbol and symbol in syms else syms[0]
-    since = time.time() - window
+    for sym in symbols:
+        liqs = await get_recent_liquidations(limit=5000, since=since, symbol=sym)
+        if not liqs:
+            result[sym] = {
+                "buckets": [],
+                "price_min": None,
+                "price_max": None,
+                "total_usd": 0.0,
+                "n_liquidations": 0,
+            }
+            continue
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT side, price, qty, value FROM liquidations WHERE symbol=? AND ts>=? ORDER BY ts DESC",
-            (target, since),
-        ) as cur:
-            rows = await cur.fetchall()
+        prices = [float(l["price"]) for l in liqs]
+        price_min = min(prices)
+        price_max = max(prices)
 
-    if not rows:
-        return {"status": "ok", "symbol": target, "buckets": [], "total_liqs": 0}
+        # Widen by 0.5% on each side so boundary liquidations fall inside a bucket
+        margin = (price_max - price_min) * 0.005 or price_min * 0.005 or 1e-9
+        price_min -= margin
+        price_max += margin
 
-    prices = [float(r["price"]) for r in rows]
-    price_min, price_max = min(prices), max(prices)
+        step = (price_max - price_min) / buckets
+        bkt_list = [
+            {
+                "price_low":  round(price_min + i * step, 10),
+                "price_high": round(price_min + (i + 1) * step, 10),
+                "long_usd":   0.0,
+                "short_usd":  0.0,
+                "total_usd":  0.0,
+            }
+            for i in range(buckets)
+        ]
 
-    # Avoid division by zero when all liqs are at same price
-    if price_max == price_min:
-        price_max = price_min + 1.0
+        for liq in liqs:
+            p = float(liq["price"])
+            frac = (p - price_min) / (price_max - price_min)
+            idx = max(0, min(buckets - 1, int(frac * buckets)))
+            usd = float(liq.get("value") or p * float(liq["qty"]))
+            if liq["side"] == "long":
+                bkt_list[idx]["long_usd"] += usd
+            else:
+                bkt_list[idx]["short_usd"] += usd
+            bkt_list[idx]["total_usd"] += usd
 
-    bucket_size = (price_max - price_min) / buckets
-    bucket_map: dict = {}  # (bucket_idx, side) -> {count, total_usd}
+        # Round for clean JSON
+        for b in bkt_list:
+            b["long_usd"]  = round(b["long_usd"],  2)
+            b["short_usd"] = round(b["short_usd"], 2)
+            b["total_usd"] = round(b["total_usd"], 2)
 
-    for r in rows:
-        price = float(r["price"])
-        side = r["side"]
-        value = float(r["value"] or 0) or float(r["price"]) * float(r["qty"])
-        idx = min(int((price - price_min) / bucket_size), buckets - 1)
-        key = (idx, side)
-        if key not in bucket_map:
-            bucket_map[key] = {"price": price_min + (idx + 0.5) * bucket_size, "count": 0, "total_usd": 0.0, "side": side}
-        bucket_map[key]["count"] += 1
-        bucket_map[key]["total_usd"] = round(bucket_map[key]["total_usd"] + value, 2)
+        result[sym] = {
+            "buckets":        bkt_list,
+            "price_min":      round(price_min, 10),
+            "price_max":      round(price_max, 10),
+            "total_usd":      round(sum(float(l.get("value") or 0) for l in liqs), 2),
+            "n_liquidations": len(liqs),
+        }
 
-    result_buckets = sorted(bucket_map.values(), key=lambda b: b["price"])
-    return {
-        "status": "ok",
-        "symbol": target,
-        "buckets": result_buckets,
-        "total_liqs": len(rows),
-    }
+    return JSONResponse({"status": "ok", "ts": now, "window_s": window_s, "symbols": result})
