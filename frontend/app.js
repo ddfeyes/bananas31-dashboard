@@ -2837,6 +2837,8 @@ async function refresh() {
     await Promise.all([safe(renderTokenVelocityNvt)]);
     // Batch 16: derivatives heatmap
     await Promise.all([safe(renderDerivativesHeatmap)]);
+    // Batch 16: network health score
+    await Promise.all([safe(renderNetworkHealthScore)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2909,6 +2911,81 @@ async function renderSocialSentiment() {
     <div style="margin-top:4px">${sparkbars}</div>
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
+
+
+// ── Network Health Score ──────────────────────────────────────────────────────
+async function renderNetworkHealthScore() {
+  const el    = document.getElementById('network-health-score-content');
+  const badge = document.getElementById('network-health-score-badge');
+  if (!el) return;
+  const data = await apiFetch('/network-health-score');
+  if (!data) { setErr('network-health-score-content'); return; }
+
+  const score  = data.score ?? 50;
+  const label  = data.label || 'neutral';
+  const trend  = data.trend || 'stable';
+  const comps  = data.components || {};
+  const hist   = data.history    || [];
+
+  const labelCls = label === 'excellent' ? 'badge-green'
+                 : label === 'healthy'   ? 'badge-green'
+                 : label === 'stressed'  ? 'badge-red'
+                 : label === 'critical'  ? 'badge-red'
+                 : 'badge-blue';
+  if (badge) {
+    badge.textContent = label.toUpperCase();
+    badge.className   = `card-badge ${labelCls}`;
+    badge.style.display = '';
+  }
+
+  // Gauge arc — score 0-100 → 0-180 deg half-circle
+  const gaugeCol = score >= 70 ? 'var(--green)' : score >= 50 ? 'var(--blue)' : score >= 30 ? 'var(--yellow, #f0a500)' : 'var(--red)';
+  const trendArrow = trend === 'improving' ? '↑' : trend === 'declining' ? '↓' : '→';
+  const trendCol   = trend === 'improving' ? 'var(--green)' : trend === 'declining' ? 'var(--red)' : 'var(--muted)';
+
+  // Component rows
+  const compDefs = [
+    { key: 'hash_rate',        label: 'Hash Rate',    icon: '⛏' },
+    { key: 'mempool',          label: 'Mempool',      icon: '📬' },
+    { key: 'active_addresses', label: 'Addresses',    icon: '👥' },
+    { key: 'fee_pressure',     label: 'Fees',         icon: '💸' },
+  ];
+  const compRows = compDefs.map(({ key, label: lbl }) => {
+    const c   = comps[key] || {};
+    const s   = c.score ?? 50;
+    const col = s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--blue)' : s >= 30 ? 'var(--muted)' : 'var(--red)';
+    const barW = s.toFixed(0);
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding:2px 4px;white-space:nowrap">${lbl}</td>
+      <td style="padding:2px 4px;width:80px">
+        <div style="background:var(--border);height:5px;border-radius:3px">
+          <div style="width:${barW}%;background:${col};height:100%;border-radius:3px"></div>
+        </div>
+      </td>
+      <td style="font-size:10px;color:${col};font-weight:600;text-align:right;padding:2px 4px">${s.toFixed(0)}</td>
+    </tr>`;
+  }).join('');
+
+  // Sparkline
+  const sparkbars = hist.slice(-14).map(h => {
+    const s   = h.score ?? 50;
+    const col = s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--blue)' : 'var(--red)';
+    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:6px">
+      <span style="font-size:28px;font-weight:700;color:${gaugeCol}">${score.toFixed(0)}</span>
+      <span style="font-size:12px;color:var(--muted)">/100</span>
+      <span style="font-size:14px;color:${trendCol};margin-left:6px">${trendArrow}</span>
+    </div>
+    <table style="border-collapse:collapse;width:100%;margin-bottom:6px">
+      <tbody>${compRows}</tbody>
+    </table>
+    <div style="margin-top:4px">${sparkbars}</div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
 
 // ── Miner Reserve Indicator ───────────────────────────────────────────────────
 async function renderMinerReserve() {
