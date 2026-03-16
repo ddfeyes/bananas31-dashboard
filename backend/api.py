@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_dex_vs_cex_flow,
+    compute_token_unlock_calendar,
 )
 
 router = APIRouter(prefix="/api")
@@ -5329,4 +5330,8 @@ async def holder_distribution_endpoint():
 async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None, window_hours: int = 24):
     """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot, Z-score, price discovery."""
     data = await compute_dex_vs_cex_flow(symbol=symbol, window_hours=window_hours)
+@router.get("/token-unlock-calendar")
+async def token_unlock_calendar_endpoint():
+    """Token unlock calendar: top 20 tokens by unlock size in 90-day window with sell pressure risk score."""
+    data = await compute_token_unlock_calendar()
     return JSONResponse(data)

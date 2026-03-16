@@ -9158,3 +9158,128 @@ async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
         "net_whale_flow_7d": net_whale_flow_7d,
         "whale_signal":      whale_signal,
     }
+# ── Token Unlock Calendar ──────────────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone as _tz
+
+_TOKEN_UNLOCK_EVENTS = [
+    # (name, symbol, days_offset, unlock_usd_million, pct_supply, hist_impact_pct, hist_unlock_count, recipient_category)
+    ("Arbitrum",   "ARB",   3,  485.0,  8.2, -12.5, 4, "team_investors"),
+    ("Optimism",   "OP",    7,  312.0,  6.5,  -8.3, 3, "ecosystem"),
+    ("Aptos",      "APT",  12,  278.0, 11.4, -15.2, 5, "team_investors"),
+    ("Starknet",   "STRK", 15,  245.0,  9.7, -10.8, 3, "early_backers"),
+    ("Worldcoin",  "WLD",  19,  220.0, 13.1, -18.4, 4, "team_investors"),
+    ("dYdX",       "DYDX", 22,  198.0,  7.3,  -9.6, 4, "team_investors"),
+    ("Celestia",   "TIA",  26,  175.0,  5.8,  -7.2, 3, "ecosystem"),
+    ("Blur",       "BLUR", 31,  162.0, 10.5, -14.1, 4, "early_backers"),
+    ("zkSync",     "ZK",   35,  148.0, 12.3, -16.7, 3, "team_investors"),
+    ("Sui",        "SUI",  38,  135.0,  4.9,  -6.8, 5, "team_investors"),
+    ("Avalanche",  "AVAX", 42,  122.0,  3.2,  -4.5, 6, "ecosystem"),
+    ("Sei",        "SEI",  45,  110.0,  8.8, -11.3, 3, "early_backers"),
+    ("LayerZero",  "ZRO",  49,   98.0,  6.1,  -8.9, 3, "team_investors"),
+    ("Jupiter",    "JUP",  53,   89.0, 14.2, -19.5, 2, "team_investors"),
+    ("EigenLayer", "EIGEN",57,   82.0,  9.5, -13.2, 3, "early_backers"),
+    ("Pyth",       "PYTH", 62,   75.0,  5.4,  -7.8, 4, "ecosystem"),
+    ("Notcoin",    "NOT",  65,   68.0,  7.9, -10.2, 3, "community"),
+    ("Wormhole",   "W",    71,   62.0, 11.8, -15.9, 2, "early_backers"),
+    ("Saga",       "SAGA", 78,   55.0,  8.3, -11.7, 2, "team_investors"),
+    ("AltLayer",   "ALT",  85,   48.0, 15.6, -20.3, 2, "team_investors"),
+]
+
+
+def _compute_unlock_risk_score(
+    pct_supply: float, hist_impact_pct: float, days_until: int
+) -> float:
+    """Sell pressure risk score 0–100.
+
+    Components:
+      - Supply pressure  0–50 pts  (10% supply = 50 pts)
+      - Historical impact 0–30 pts  (only for negative historical impact)
+      - Urgency          0–20 pts  (inversely proportional to days_until / 90)
+    """
+    supply_score = min(50.0, pct_supply * 5.0)
+    impact_score = min(30.0, abs(hist_impact_pct) * 3.0) if hist_impact_pct < 0 else 0.0
+    urgency_score = max(0.0, 20.0 * (1.0 - days_until / 90.0))
+    raw = supply_score + impact_score + urgency_score
+    return round(min(100.0, max(0.0, raw)), 1)
+
+
+async def compute_token_unlock_calendar() -> dict:
+    """Token unlock calendar: top 20 tokens by unlock size in next 90 days.
+
+    Returns upcoming vesting events with circulating supply %, historical price
+    impact, and a sell pressure risk score (0–100).
+
+    Fields per event:
+      token                      – token name
+      symbol                     – ticker symbol
+      unlock_date                – ISO date string (YYYY-MM-DD)
+      days_until                 – days from now until unlock
+      unlock_usd                 – estimated USD value of tokens unlocking
+      unlock_usd_formatted       – human-readable size (e.g. "$485M")
+      pct_circulating_supply     – % of current circulating supply being unlocked
+      historical_price_impact_pct – avg % price change in 7d after past unlocks
+      historical_unlock_count    – number of past unlock events studied
+      risk_score                 – sell pressure risk score 0–100
+      risk_label                 – low | medium | high | critical
+      recipient_category         – team_investors | early_backers | ecosystem | community
+    """
+    now = datetime.now(_tz.utc)
+    events = []
+
+    for (name, symbol, days_offset, unlock_usd_m, pct_supply,
+         hist_impact, hist_count, category) in _TOKEN_UNLOCK_EVENTS:
+        unlock_dt = now + timedelta(days=days_offset)
+        risk = _compute_unlock_risk_score(pct_supply, hist_impact, days_offset)
+
+        if risk >= 75:
+            risk_label = "critical"
+        elif risk >= 50:
+            risk_label = "high"
+        elif risk >= 25:
+            risk_label = "medium"
+        else:
+            risk_label = "low"
+
+        events.append({
+            "token": name,
+            "symbol": symbol,
+            "unlock_date": unlock_dt.strftime("%Y-%m-%d"),
+            "days_until": days_offset,
+            "unlock_usd": round(unlock_usd_m * 1_000_000),
+            "unlock_usd_formatted": f"${unlock_usd_m:.0f}M",
+            "pct_circulating_supply": pct_supply,
+            "historical_price_impact_pct": hist_impact,
+            "historical_unlock_count": hist_count,
+            "risk_score": risk,
+            "risk_label": risk_label,
+            "recipient_category": category,
+        })
+
+    # Sorted by unlock size descending (already ordered, but explicit)
+    events.sort(key=lambda e: e["unlock_usd"], reverse=True)
+
+    total_usd = sum(e["unlock_usd"] for e in events)
+    avg_risk = round(sum(e["risk_score"] for e in events) / len(events), 1) if events else 0.0
+    highest_risk_event = max(events, key=lambda e: e["risk_score"]) if events else {}
+    critical_count = sum(1 for e in events if e["risk_label"] == "critical")
+    high_count = sum(1 for e in events if e["risk_label"] == "high")
+
+    return {
+        "events": events,
+        "summary": {
+            "total_unlock_usd": total_usd,
+            "events_count": len(events),
+            "window_days": 90,
+            "avg_risk_score": avg_risk,
+            "highest_risk_token": highest_risk_event.get("token", ""),
+            "highest_risk_score": highest_risk_event.get("risk_score", 0.0),
+            "critical_count": critical_count,
+            "high_risk_count": high_count,
+        },
+        "description": (
+            f"{len(events)} token unlock events in next 90 days: "
+            f"${total_usd / 1e9:.1f}B total; "
+            f"{critical_count} critical, {high_count} high-risk events"
+        ),
+    }
