@@ -70,7 +70,6 @@ from metrics import (
     compute_macro_liquidity_indicator,
     compute_token_velocity_nvt,
     compute_layer2_metrics,
-    compute_derivatives_heatmap,
     compute_network_health_score,
     compute_nft_market_pulse,
 )
@@ -5309,12 +5308,6 @@ async def leverage_ratio_heatmap_endpoint():
 async def layer2_metrics_endpoint():
     """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
     data = await compute_layer2_metrics()
-@router.get("/derivatives-heatmap")
-async def derivatives_heatmap_endpoint(
-    asset: str = Query("BTC", regex="^(BTC|ETH)$"),
-):
-    """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
-    data = await compute_derivatives_heatmap(asset=asset)
 @router.get("/nft-market-pulse")
 async def nft_market_pulse_endpoint():
     """NFT market pulse: floor trends, wash-adjusted volume, blue-chip index, liquidity signals."""
