@@ -71,6 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
+    compute_options_flow_tracker,
 )
 
 router = APIRouter(prefix="/api")
@@ -5318,4 +5319,11 @@ async def nft_market_pulse_endpoint():
 async def holder_distribution_endpoint():
     """Holder distribution: wallet bands, Gini, HHI, whale accumulation delta."""
     data = await compute_holder_distribution_card()
+    return JSONResponse(data)
+
+
+@router.get("/options-flow-tracker")
+async def options_flow_tracker_endpoint():
+    """Options flow: large trades >$100k notional (Deribit/Lyra), call/put skew by expiry, unusual flow alerts, strike heatmap."""
+    data = await compute_options_flow_tracker()
     return JSONResponse(data)

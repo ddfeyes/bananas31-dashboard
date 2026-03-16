@@ -8356,3 +8356,535 @@ async def compute_holder_distribution_card() -> dict:
     }
 
 
+# ── Options Flow Tracker ──────────────────────────────────────────────────────
+
+def _oft_skew_label(call_ratio: float) -> str:
+    """Classify call/put skew direction from call ratio (0-1)."""
+    if call_ratio >= 0.60:
+        return "bullish"
+    if call_ratio <= 0.40:
+        return "bearish"
+    return "neutral"
+
+
+def _oft_is_unusual(vol_oi_ratio: float, threshold: float = 0.20) -> bool:
+    """Return True if volume/OI ratio indicates unusual activity."""
+    return vol_oi_ratio > threshold
+
+
+def _oft_strike_bucket(strike: float, atm: float) -> str:
+    """Bucket a strike relative to ATM price."""
+    if atm <= 0:
+        return "ATM"
+    pct = (strike - atm) / atm
+    if pct < -0.10:
+        return "DITM"
+    if pct < -0.03:
+        return "ITM"
+    if pct <= 0.03:
+        return "ATM"
+    if pct <= 0.10:
+        return "OTM"
+    return "DOTM"
+
+
+def _oft_expiry_weight(days_to_expiry: int) -> float:
+    """Gamma-weighted importance: near-term expiries carry higher weight."""
+    import math as _math
+    if days_to_expiry <= 0:
+        return 0.0
+    return round(1.0 / _math.sqrt(max(days_to_expiry, 1)), 4)
+
+
+def _oft_call_put_ratio(call_notional: float, put_notional: float) -> float:
+    """Call / (call + put) ratio, 0.5 when balanced."""
+    total = call_notional + put_notional
+    if total <= 0:
+        return 0.5
+    return round(call_notional / total, 4)
+
+
+def _oft_iv_skew_label(iv_skew: float) -> str:
+    """Label the 25-delta IV skew (call IV - put IV)."""
+    if iv_skew > 2.0:
+        return "call_premium"
+    if iv_skew < -2.0:
+        return "put_premium"
+    return "flat"
+
+
+def _oft_flow_severity(notional_usd: float) -> str:
+    """Classify flow severity by notional size."""
+    if notional_usd >= 1_000_000:
+        return "high"
+    if notional_usd >= 300_000:
+        return "medium"
+    return "low"
+
+
+def _oft_aggregate_by_strike(trades: list) -> dict:
+    """Aggregate call/put OI and notional by strike."""
+    strikes: dict = {}
+    for t in trades:
+        s = t["strike"]
+        if s not in strikes:
+            strikes[s] = {"call_notional": 0.0, "put_notional": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+        if t["type"] == "call":
+            strikes[s]["call_notional"] += t["notional_usd"]
+            strikes[s]["call_oi"] += t["qty"]
+        else:
+            strikes[s]["put_notional"] += t["notional_usd"]
+            strikes[s]["put_oi"] += t["qty"]
+    return strikes
+
+
+def _oft_net_gamma(call_oi: float, call_delta: float, put_oi: float, put_delta: float) -> float:
+    """Dealer net gamma proxy: call OI * call_delta - put OI * |put_delta|."""
+    return round(call_oi * call_delta - put_oi * abs(put_delta), 2)
+
+
+async def compute_options_flow_tracker() -> dict:
+    """Options flow: large trades (>$100k), call/put skew by expiry, unusual alerts, strike heatmap."""
+    import datetime as _dt
+    import time as _time
+
+    NOW = _time.time()
+    TODAY = _dt.date.today()
+
+    EXPIRIES = [
+        {"label": "28MAR25", "date": TODAY + _dt.timedelta(days=12), "dte": 12},
+        {"label": "25APR25", "date": TODAY + _dt.timedelta(days=40), "dte": 40},
+        {"label": "27JUN25", "date": TODAY + _dt.timedelta(days=103), "dte": 103},
+        {"label": "26SEP25", "date": TODAY + _dt.timedelta(days=194), "dte": 194},
+    ]
+
+    _RAW_TRADES = [
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 95000,  "expiry_idx": 0, "side": "buy",  "qty": 12,  "iv": 62.5, "delta": 0.42,  "price_usd": 1850},
+        {"exchange": "deribit", "underlying": "BTC", "type": "put",  "strike": 90000,  "expiry_idx": 0, "side": "buy",  "qty": 20,  "iv": 68.1, "delta": -0.31, "price_usd": 1120},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 100000, "expiry_idx": 0, "side": "sell", "qty": 8,   "iv": 58.3, "delta": 0.22,  "price_usd": 680},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "call", "strike": 2800,   "expiry_idx": 0, "side": "buy",  "qty": 150, "iv": 71.2, "delta": 0.55,  "price_usd": 185},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "put",  "strike": 2400,   "expiry_idx": 0, "side": "buy",  "qty": 80,  "iv": 78.4, "delta": -0.28, "price_usd": 95},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 105000, "expiry_idx": 1, "side": "buy",  "qty": 25,  "iv": 55.0, "delta": 0.38,  "price_usd": 2100},
+        {"exchange": "deribit", "underlying": "BTC", "type": "put",  "strike": 85000,  "expiry_idx": 1, "side": "sell", "qty": 15,  "iv": 63.5, "delta": -0.25, "price_usd": 890},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 110000, "expiry_idx": 1, "side": "buy",  "qty": 40,  "iv": 52.1, "delta": 0.31,  "price_usd": 1640},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "call", "strike": 3200,   "expiry_idx": 1, "side": "buy",  "qty": 200, "iv": 67.8, "delta": 0.45,  "price_usd": 310},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "put",  "strike": 2200,   "expiry_idx": 1, "side": "buy",  "qty": 120, "iv": 73.2, "delta": -0.22, "price_usd": 72},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 120000, "expiry_idx": 2, "side": "buy",  "qty": 60,  "iv": 49.3, "delta": 0.35,  "price_usd": 3200},
+        {"exchange": "deribit", "underlying": "BTC", "type": "put",  "strike": 75000,  "expiry_idx": 2, "side": "buy",  "qty": 30,  "iv": 57.4, "delta": -0.18, "price_usd": 1100},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 130000, "expiry_idx": 3, "side": "buy",  "qty": 50,  "iv": 47.1, "delta": 0.29,  "price_usd": 2850},
+        {"exchange": "deribit", "underlying": "ETH", "type": "call", "strike": 4000,   "expiry_idx": 3, "side": "buy",  "qty": 300, "iv": 61.0, "delta": 0.41,  "price_usd": 420},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "put",  "strike": 1800,   "expiry_idx": 3, "side": "sell", "qty": 180, "iv": 66.7, "delta": -0.15, "price_usd": 48},
+        {"exchange": "deribit", "underlying": "BTC", "type": "call", "strike": 95000,  "expiry_idx": 1, "side": "buy",  "qty": 18,  "iv": 59.8, "delta": 0.44,  "price_usd": 1920},
+        {"exchange": "deribit", "underlying": "BTC", "type": "put",  "strike": 88000,  "expiry_idx": 0, "side": "buy",  "qty": 22,  "iv": 70.5, "delta": -0.33, "price_usd": 1250},
+        {"exchange": "lyra",    "underlying": "ETH", "type": "call", "strike": 3000,   "expiry_idx": 2, "side": "buy",  "qty": 250, "iv": 64.5, "delta": 0.40,  "price_usd": 280},
+    ]
+
+    SPOT = {"BTC": 93500.0, "ETH": 2650.0}
+
+    large_trades = []
+    for i, raw in enumerate(_RAW_TRADES):
+        exp = EXPIRIES[raw["expiry_idx"]]
+        spot = SPOT[raw["underlying"]]
+        notional = raw["qty"] * spot
+        if notional < 100_000:
+            continue
+        symbol = (
+            f"{raw['underlying']}-{exp['label']}-{int(raw['strike'])}"
+            f"-{'C' if raw['type'] == 'call' else 'P'}"
+        )
+        large_trades.append({
+            "id": f"oft_{i:04d}",
+            "exchange": raw["exchange"],
+            "symbol": symbol,
+            "underlying": raw["underlying"],
+            "type": raw["type"],
+            "strike": float(raw["strike"]),
+            "expiry": exp["date"].isoformat(),
+            "days_to_expiry": exp["dte"],
+            "side": raw["side"],
+            "qty": float(raw["qty"]),
+            "price_usd": float(raw["price_usd"]),
+            "notional_usd": round(notional, 2),
+            "iv": raw["iv"],
+            "delta": raw["delta"],
+            "timestamp": NOW - (i * 180),
+        })
+
+    # ── Call/Put skew by expiry ───────────────────────────────────────────────
+    expiry_buckets: dict = {}
+    for t in large_trades:
+        key = t["expiry"]
+        if key not in expiry_buckets:
+            expiry_buckets[key] = {
+                "expiry": key,
+                "days_to_expiry": t["days_to_expiry"],
+                "call_notional": 0.0,
+                "put_notional": 0.0,
+                "call_iv_sum": 0.0,
+                "call_iv_count": 0,
+                "put_iv_sum": 0.0,
+                "put_iv_count": 0,
+                "strikes": [],
+            }
+        b = expiry_buckets[key]
+        if t["type"] == "call":
+            b["call_notional"] += t["notional_usd"]
+            b["call_iv_sum"] += t["iv"]
+            b["call_iv_count"] += 1
+        else:
+            b["put_notional"] += t["notional_usd"]
+            b["put_iv_sum"] += t["iv"]
+            b["put_iv_count"] += 1
+        if t["strike"] not in b["strikes"]:
+            b["strikes"].append(t["strike"])
+
+    call_put_skew = {}
+    for key, b in expiry_buckets.items():
+        cp_ratio = _oft_call_put_ratio(b["call_notional"], b["put_notional"])
+        avg_iv_call = round(b["call_iv_sum"] / b["call_iv_count"], 2) if b["call_iv_count"] else 0.0
+        avg_iv_put  = round(b["put_iv_sum"]  / b["put_iv_count"],  2) if b["put_iv_count"]  else 0.0
+        iv_skew_val = round(avg_iv_call - avg_iv_put, 2)
+        total = b["call_notional"] + b["put_notional"]
+        skew_pct = round((b["call_notional"] - b["put_notional"]) / total * 100, 2) if total > 0 else 0.0
+        call_put_skew[key] = {
+            "expiry": key,
+            "days_to_expiry": b["days_to_expiry"],
+            "call_notional": round(b["call_notional"], 2),
+            "put_notional": round(b["put_notional"], 2),
+            "call_put_ratio": cp_ratio,
+            "skew_pct": skew_pct,
+            "skew_label": _oft_skew_label(cp_ratio),
+            "avg_iv_25d_call": avg_iv_call,
+            "avg_iv_25d_put": avg_iv_put,
+            "iv_skew": iv_skew_val,
+            "iv_skew_label": _oft_iv_skew_label(iv_skew_val),
+            "dominant_strikes": sorted(b["strikes"])[:3],
+            "expiry_weight": _oft_expiry_weight(b["days_to_expiry"]),
+        }
+
+    # ── Unusual flow alerts ───────────────────────────────────────────────────
+    SIMULATED_OI = {t["id"]: t["qty"] * 3.5 for t in large_trades}
+    unusual_flow_alerts = []
+    for t in large_trades:
+        oi = SIMULATED_OI.get(t["id"], t["qty"])
+        vol_oi_ratio = round(t["qty"] / oi, 4) if oi > 0 else 0.0
+        if not _oft_is_unusual(vol_oi_ratio):
+            continue
+        flow_type = (
+            "sweep" if t["side"] == "buy" and t["notional_usd"] >= 500_000
+            else "block_trade" if t["notional_usd"] >= 300_000
+            else f"unusual_{'call' if t['type'] == 'call' else 'put'}_buying"
+        )
+        unusual_flow_alerts.append({
+            "type": flow_type,
+            "exchange": t["exchange"],
+            "symbol": t["symbol"],
+            "underlying": t["underlying"],
+            "option_type": t["type"],
+            "strike": t["strike"],
+            "expiry": t["expiry"],
+            "days_to_expiry": t["days_to_expiry"],
+            "notional_usd": t["notional_usd"],
+            "vol_oi_ratio": vol_oi_ratio,
+            "severity": _oft_flow_severity(t["notional_usd"]),
+            "description": (
+                f"{t['exchange'].upper()} {t['underlying']} "
+                f"${t['strike']:,.0f} {t['type'].upper()} "
+                f"{'sweep' if t['side'] == 'buy' else 'block'}: "
+                f"${t['notional_usd'] / 1e6:.2f}M notional "
+                f"(DTE={t['days_to_expiry']})"
+            ),
+            "timestamp": t["timestamp"],
+        })
+    unusual_flow_alerts.sort(key=lambda x: x["notional_usd"], reverse=True)
+
+    # ── Positioning heatmap by strike ─────────────────────────────────────────
+    strike_agg = _oft_aggregate_by_strike(large_trades)
+    positioning_heatmap = []
+    for strike, agg in sorted(strike_agg.items()):
+        total_notional = agg["call_notional"] + agg["put_notional"]
+        call_ratio = _oft_call_put_ratio(agg["call_notional"], agg["put_notional"])
+        net_g = _oft_net_gamma(agg["call_oi"], 0.35, agg["put_oi"], 0.25)
+        dominant = (
+            "call" if call_ratio >= 0.60
+            else "put" if call_ratio <= 0.40
+            else "neutral"
+        )
+        und = "BTC" if strike > 1000 else "ETH"
+        positioning_heatmap.append({
+            "strike": strike,
+            "strike_label": f"${strike / 1000:.0f}k" if und == "BTC" else f"${strike:,.0f}",
+            "underlying": und,
+            "strike_bucket": _oft_strike_bucket(strike, SPOT.get(und, strike)),
+            "call_oi": round(agg["call_oi"], 2),
+            "put_oi": round(agg["put_oi"], 2),
+            "call_notional": round(agg["call_notional"], 2),
+            "put_notional": round(agg["put_notional"], 2),
+            "total_notional": round(total_notional, 2),
+            "call_put_ratio": call_ratio,
+            "net_gamma": net_g,
+            "dominant": dominant,
+        })
+    positioning_heatmap.sort(key=lambda x: x["total_notional"], reverse=True)
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    total_call_notional = sum(t["notional_usd"] for t in large_trades if t["type"] == "call")
+    total_put_notional  = sum(t["notional_usd"] for t in large_trades if t["type"] == "put")
+    total_notional_all  = total_call_notional + total_put_notional
+    overall_cp_ratio    = _oft_call_put_ratio(total_call_notional, total_put_notional)
+    overall_skew        = _oft_skew_label(overall_cp_ratio)
+
+    dominant_expiry = ""
+    if call_put_skew:
+        dominant_expiry = max(
+            call_put_skew.values(),
+            key=lambda v: v["call_notional"] + v["put_notional"],
+        )["expiry"]
+
+    description = (
+        f"Options flow {overall_skew}: "
+        f"${total_call_notional / 1e6:.1f}M calls vs ${total_put_notional / 1e6:.1f}M puts, "
+        f"{len(unusual_flow_alerts)} unusual alerts, "
+        f"dominant expiry {dominant_expiry}"
+    )
+
+    return {
+        "large_trades": large_trades,
+        "call_put_skew": call_put_skew,
+        "unusual_flow_alerts": unusual_flow_alerts,
+        "positioning_heatmap": positioning_heatmap,
+        "summary": {
+            "total_call_notional": round(total_call_notional, 2),
+            "total_put_notional": round(total_put_notional, 2),
+            "total_notional": round(total_notional_all, 2),
+            "call_put_ratio": overall_cp_ratio,
+            "skew": overall_skew,
+            "dominant_expiry": dominant_expiry,
+            "large_trade_count": len(large_trades),
+            "unusual_alert_count": len(unusual_flow_alerts),
+            "exchanges": sorted({t["exchange"] for t in large_trades}),
+        },
+        "description": description,
+    }
+
+
+# ── Options Flow Tracker ───────────────────────────────────────────────────────
+
+import random as _random
+
+# Simulated instruments pool
+_OFT_EXPIRIES = ["28MAR26", "25APR26", "27JUN26", "26SEP26", "25DEC26"]
+_OFT_STRIKES_BTC = [60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000]
+_OFT_EXCHANGES = ["deribit", "lyra"]
+_OFT_SEED = 20260316  # deterministic
+
+
+def _oft_make_instrument(strike: int, expiry: str, opt_type: str) -> str:
+    return f"BTC-{expiry}-{strike}-{opt_type[0].upper()}"
+
+
+def _oft_skew_signal(call_vol: float, put_vol: float) -> str:
+    """Classify call/put skew as bullish/bearish/neutral."""
+    if put_vol == 0:
+        return "bullish"
+    ratio = call_vol / put_vol
+    if ratio > 1.25:
+        return "bullish"
+    if ratio < 0.8:
+        return "bearish"
+    return "neutral"
+
+
+def _oft_skew_ratio(call_vol: float, put_vol: float) -> float:
+    """Call-to-put volume ratio, capped at 10."""
+    if put_vol == 0:
+        return 10.0
+    return round(min(call_vol / put_vol, 10.0), 3)
+
+
+def _oft_unusual_threshold(notional: float, mean_notional: float) -> bool:
+    """True if trade is 3x above mean notional for this expiry."""
+    return notional > mean_notional * 3.0
+
+
+def _oft_net_flow(call_vol: float, put_vol: float) -> float:
+    """Net options flow: positive = net call buying."""
+    return round(call_vol - put_vol, 2)
+
+
+def _oft_dominant_expiry(skew_by_expiry: dict) -> str:
+    """Expiry with highest combined volume."""
+    if not skew_by_expiry:
+        return ""
+    return max(
+        skew_by_expiry,
+        key=lambda e: skew_by_expiry[e]["call_volume_usd"] + skew_by_expiry[e]["put_volume_usd"],
+    )
+
+
+def _oft_skew_percentile(ratio: float) -> float:
+    """Map call/put ratio to 0-100 percentile (simulated)."""
+    # 0.5 ratio → 20th pct, 1.0 → 50th, 2.0 → 80th
+    import math as _math
+    raw = 50.0 + 30.0 * _math.log(max(ratio, 0.01)) / _math.log(4)
+    return round(max(0.0, min(100.0, raw)), 1)
+
+
+def _oft_simulate_large_trades(seed: int = _OFT_SEED) -> list:
+    """Generate deterministic simulated large options trades (>$100k notional)."""
+    rng = _random.Random(seed)
+    now = 1742080000.0  # fixed reference timestamp (2026-03-16)
+    trades = []
+    for i in range(40):
+        expiry = rng.choice(_OFT_EXPIRIES)
+        strike = rng.choice(_OFT_STRIKES_BTC)
+        opt_type = rng.choice(["call", "put"])
+        exchange = rng.choice(_OFT_EXCHANGES)
+        contracts = rng.randint(5, 80)
+        btc_price = rng.uniform(75000, 95000)
+        iv = round(rng.uniform(0.45, 1.20), 4)
+        delta = round(rng.uniform(0.1, 0.9), 3)
+        premium_per = round(rng.uniform(500, 4000), 2)
+        notional_usd = round(contracts * btc_price * 0.001, 2)  # 0.001 BTC per contract
+        # Ensure >$100k
+        if notional_usd < 100_000:
+            notional_usd = round(notional_usd + 100_000, 2)
+        side = rng.choice(["buy", "sell"])
+        ts = now - rng.uniform(0, 3600 * 24)
+        trades.append({
+            "ts": round(ts, 3),
+            "exchange": exchange,
+            "instrument": _oft_make_instrument(strike, expiry, opt_type),
+            "type": opt_type,
+            "strike": strike,
+            "expiry": expiry,
+            "side": side,
+            "contracts": contracts,
+            "btc_price": round(btc_price, 2),
+            "premium_per_contract": premium_per,
+            "notional_usd": notional_usd,
+            "iv": iv,
+            "delta": delta,
+        })
+    # Sort newest first
+    trades.sort(key=lambda t: t["ts"], reverse=True)
+    return trades
+
+
+def _oft_compute_skew_by_expiry(trades: list) -> dict:
+    """Aggregate call/put volume by expiry, compute skew."""
+    agg: dict = {}
+    for t in trades:
+        exp = t["expiry"]
+        if exp not in agg:
+            agg[exp] = {"call_volume_usd": 0.0, "put_volume_usd": 0.0}
+        key = "call_volume_usd" if t["type"] == "call" else "put_volume_usd"
+        agg[exp][key] += t["notional_usd"]
+
+    result = {}
+    for exp, vols in agg.items():
+        cv = round(vols["call_volume_usd"], 2)
+        pv = round(vols["put_volume_usd"], 2)
+        result[exp] = {
+            "call_volume_usd": cv,
+            "put_volume_usd": pv,
+            "skew_ratio": _oft_skew_ratio(cv, pv),
+            "skew_signal": _oft_skew_signal(cv, pv),
+            "net_flow_usd": _oft_net_flow(cv, pv),
+        }
+    return result
+
+
+def _oft_detect_unusual_flow(trades: list) -> list:
+    """Flag trades with notional > 3x mean as unusual flow alerts."""
+    if not trades:
+        return []
+    mean_n = sum(t["notional_usd"] for t in trades) / len(trades)
+    alerts = []
+    for t in trades:
+        if _oft_unusual_threshold(t["notional_usd"], mean_n):
+            severity = "critical" if t["notional_usd"] > mean_n * 6 else "high"
+            alerts.append({
+                "ts": t["ts"],
+                "instrument": t["instrument"],
+                "exchange": t["exchange"],
+                "notional_usd": t["notional_usd"],
+                "side": t["side"],
+                "type": t["type"],
+                "severity": severity,
+                "reason": (
+                    f"Unusual {t['type']} {t['side']}: "
+                    f"${t['notional_usd']:,.0f} notional "
+                    f"({t['notional_usd']/mean_n:.1f}x avg)"
+                ),
+            })
+    alerts.sort(key=lambda a: a["notional_usd"], reverse=True)
+    return alerts
+
+
+def _oft_build_strike_heatmap(trades: list) -> dict:
+    """Aggregate call/put OI-proxy (notional) per strike."""
+    hm: dict = {}
+    for t in trades:
+        k = str(t["strike"])
+        if k not in hm:
+            hm[k] = {"call_notional_usd": 0.0, "put_notional_usd": 0.0, "net_flow_usd": 0.0}
+        if t["type"] == "call":
+            hm[k]["call_notional_usd"] = round(hm[k]["call_notional_usd"] + t["notional_usd"], 2)
+        else:
+            hm[k]["put_notional_usd"] = round(hm[k]["put_notional_usd"] + t["notional_usd"], 2)
+        sign = 1 if t["side"] == "buy" else -1
+        hm[k]["net_flow_usd"] = round(hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2)
+    # Add dominant type per strike
+    for k, v in hm.items():
+        v["dominant"] = "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
+        v["call_notional_usd"] = round(v["call_notional_usd"], 2)
+        v["put_notional_usd"] = round(v["put_notional_usd"], 2)
+    return hm
+
+
+async def compute_options_flow_tracker() -> dict:
+    """
+    Options flow tracker: aggregate large trades (>$100k notional) across
+    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
+    positioning heat map by strike.
+    Uses simulated data — no real API calls needed.
+    """
+    trades = _oft_simulate_large_trades()
+    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
+    unusual_alerts = _oft_detect_unusual_flow(trades)
+    strike_heatmap = _oft_build_strike_heatmap(trades)
+
+    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
+    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
+    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
+    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
+    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
+    skew_pct = _oft_skew_percentile(overall_ratio)
+
+    desc = (
+        f"{overall_signal.capitalize()} options flow: "
+        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
+        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
+        f"dominant expiry {dominant_exp}"
+    )
+
+    return {
+        "large_trades": trades[:20],  # top 20 most recent
+        "skew_by_expiry": skew_by_expiry,
+        "unusual_flow_alerts": unusual_alerts[:10],
+        "strike_heatmap": strike_heatmap,
+        "summary": {
+            "total_call_volume_usd": round(total_call_vol, 2),
+            "total_put_volume_usd": round(total_put_vol, 2),
+            "overall_skew_ratio": overall_ratio,
+            "net_flow_direction": overall_signal,
+            "dominant_expiry": dominant_exp,
+            "skew_percentile": skew_pct,
+            "unusual_activity_count": len(unusual_alerts),
+            "total_trades_analyzed": len(trades),
+            "exchanges": list({t["exchange"] for t in trades}),
+        },
+        "description": desc,
+    }
+
