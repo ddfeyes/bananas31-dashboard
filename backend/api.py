@@ -81,6 +81,8 @@ from metrics import (
     compute_social_sentiment,
     compute_miner_reserve,
     compute_macro_liquidity_indicator,
+    compute_token_velocity_nvt,
+    compute_layer2_metrics,
 )
 
 router = APIRouter(prefix="/api")
@@ -5295,4 +5297,15 @@ async def miner_reserve_endpoint():
 async def macro_liquidity_endpoint():
     """Macro liquidity: M2 proxy, Fed balance sheet, USD/BTC divergence, regime score."""
     data = await compute_macro_liquidity_indicator()
+@router.get("/token-velocity-nvt")
+async def token_velocity_nvt_endpoint():
+    """Token velocity + NVT signal: on-chain BTC valuation using tx volume / market cap."""
+    data = await compute_token_velocity_nvt()
+    return JSONResponse(data)
+
+
+@router.get("/layer2-metrics")
+async def layer2_metrics_endpoint():
+    """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
+    data = await compute_layer2_metrics()
     return JSONResponse(data)
