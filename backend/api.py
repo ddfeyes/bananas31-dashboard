@@ -78,6 +78,7 @@ from metrics import (
     compute_realized_volatility_bands,
     detect_ob_walls,
     compute_session_volume_profile,
+    compute_order_flow_toxicity,
 )
 
 router = APIRouter(prefix="/api")
@@ -922,6 +923,30 @@ async def vpin_endpoint(
         "buckets_used": data.get("n_buckets_used", 0),
         **{k: v for k, v in data.items() if k not in ("vpin", "n_buckets_used")},
     }
+
+
+@router.get("/order-flow-toxicity")
+async def order_flow_toxicity_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, ge=300, le=86400,
+                        description="Lookback window in seconds (default 1h)"),
+    bucket: int = Query(default=300, ge=60, le=3600,
+                        description="Sparkline bucket size in seconds (default 5m)"),
+):
+    """
+    Order Flow Toxicity (OFT): Pearson correlation between trade direction
+    (buy=+1 / sell=-1) and subsequent price movement.
+
+    Multi-window: 5m, 15m, 1h lookaheads weighted 0.5/0.3/0.2.
+    Score 0–100. Severity bands: low (<25), medium (25–50), high (50–75), extreme (≥75).
+    Sparkline: OFT score per bucket interval for trend visualisation.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_order_flow_toxicity(
+        symbol=target, window_seconds=window, sparkline_bucket_s=bucket
+    )
+    return {"status": "ok", "symbol": target, **data}
 
 
 @router.get("/oi-concentration")
