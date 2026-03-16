@@ -5003,3 +5003,163 @@ async def compute_session_volume_profile(
         "current_session": current_session,
         "ts":              now,
     }
+
+
+# ── Order Flow Toxicity (OFT) ──────────────────────────────────────────────────
+
+def _pearson_r(xs: list, ys: list):
+    """Pearson r between two lists. Returns None when variance is zero."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num   = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    var_x = sum((x - mx) ** 2 for x in xs)
+    var_y = sum((y - my) ** 2 for y in ys)
+    if var_x <= 0 or var_y <= 0:
+        return None
+    import math
+    return num / math.sqrt(var_x * var_y)
+
+
+def _encode_direction(trade: dict) -> int:
+    """+1 buy-aggressor, -1 sell-aggressor."""
+    iba = trade.get("is_buyer_aggressor")
+    if iba is not None:
+        return 1 if bool(iba) else -1
+    return 1 if (trade.get("side") or "").lower() == "buy" else -1
+
+
+def _oft_for_trades(trades: list, lookahead_s: float) -> dict:
+    """
+    Compute OFT score for a sorted trade list with the given price-change lookahead.
+    Returns {"score": float|None, "r": float|None, "n_pairs": int}.
+    """
+    if len(trades) < 5:
+        return {"score": None, "r": None, "n_pairs": 0}
+
+    directions: list = []
+    price_changes: list = []
+
+    for i, t in enumerate(trades):
+        p0 = float(t.get("price") or 0)
+        if not p0:
+            continue
+        cutoff = t["ts"] + lookahead_s
+        # Find last trade within lookahead window
+        future_prices = [
+            float(ft.get("price") or 0)
+            for ft in trades[i + 1:]
+            if ft["ts"] <= cutoff and ft.get("price")
+        ]
+        if not future_prices:
+            continue
+        p1 = future_prices[-1]
+        directions.append(_encode_direction(t))
+        price_changes.append((p1 - p0) / p0)
+
+    n = len(directions)
+    r = _pearson_r(directions, price_changes)
+    score = round(abs(r) * 100, 2) if r is not None else None
+    return {"score": score, "r": round(r, 6) if r is not None else None, "n_pairs": n}
+
+
+def _classify_oft(score: float | None) -> str:
+    if score is None:
+        return "insufficient_data"
+    if score >= 75:
+        return "extreme"
+    if score >= 50:
+        return "high"
+    if score >= 25:
+        return "medium"
+    return "low"
+
+
+async def compute_order_flow_toxicity(
+    symbol: str = None,
+    window_seconds: int = 3600,
+    sparkline_bucket_s: int = 300,
+) -> dict:
+    """
+    Order Flow Toxicity: Pearson correlation between trade direction
+    (buy=+1 / sell=-1) and subsequent price movement over rolling lookahead windows.
+
+    Multi-window analysis: 5m (300s), 15m (900s), 1h (3600s) lookaheads.
+    Composite score = weighted average of the three window scores.
+    Sparkline: OFT score per sparkline_bucket_s interval over the window.
+
+    Score 0–100: higher = more informed/toxic flow (adverse selection risk).
+    """
+    from storage import get_recent_trades
+
+    since = time.time() - window_seconds
+    trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
+
+    if not trades or len(trades) < 10:
+        return {
+            "score": None,
+            "severity": "insufficient_data",
+            "windows": {},
+            "sparkline": [],
+            "description": "Insufficient trade data for OFT computation",
+            "window_seconds": window_seconds,
+            "n_trades": len(trades) if trades else 0,
+        }
+
+    trades.sort(key=lambda t: t["ts"])
+    n_trades = len(trades)
+
+    # Multi-window OFT
+    WINDOWS = {"5m": 300.0, "15m": 900.0, "1h": 3600.0}
+    WEIGHTS  = {"5m": 0.5,  "15m": 0.3,   "1h": 0.2}
+
+    windows_out = {}
+    for label, la_s in WINDOWS.items():
+        result = _oft_for_trades(trades, la_s)
+        windows_out[label] = {**result, "severity": _classify_oft(result["score"])}
+
+    # Composite score: weighted average (skip None windows)
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for label, wv in windows_out.items():
+        if wv["score"] is not None:
+            weighted_sum += wv["score"] * WEIGHTS[label]
+            weight_total += WEIGHTS[label]
+
+    composite = round(weighted_sum / weight_total, 2) if weight_total > 0 else None
+    severity  = _classify_oft(composite)
+
+    # Sparkline: one OFT score per bucket (5m lookahead for responsiveness)
+    t_min = trades[0]["ts"]
+    t_max = trades[-1]["ts"]
+    sparkline = []
+    t = t_min
+    while t <= t_max:
+        bucket_trades = [tr for tr in trades if t <= tr["ts"] < t + sparkline_bucket_s]
+        if len(bucket_trades) >= 5:
+            r = _oft_for_trades(bucket_trades, lookahead_s=min(sparkline_bucket_s, 300.0))
+            sparkline.append({"ts": round(t), "score": r["score"]})
+        else:
+            sparkline.append({"ts": round(t), "score": None})
+        t += sparkline_bucket_s
+
+    # Description
+    desc_map = {
+        "extreme": "Extreme toxicity — heavily informed flow, high adverse selection",
+        "high":    "High toxicity — elevated informed trading detected",
+        "medium":  "Medium toxicity — mixed informed and noise flow",
+        "low":     "Low toxicity — noise-dominated, minimal adverse selection",
+        "insufficient_data": "Insufficient data",
+    }
+
+    return {
+        "score":          composite,
+        "severity":       severity,
+        "windows":        windows_out,
+        "sparkline":      sparkline,
+        "description":    desc_map.get(severity, ""),
+        "window_seconds": window_seconds,
+        "n_trades":       n_trades,
+    }

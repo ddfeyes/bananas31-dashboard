@@ -2481,6 +2481,27 @@ async function renderSessionVolumeProfile() {
     none: ['—', 'badge-blue'],
   };
   const [bLabel, bCls] = SESSION_BADGE[cur] || ['—', 'badge-blue'];
+// ── Order Flow Toxicity ───────────────────────────────────────────────────────
+async function renderOrderFlowToxicity() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('order-flow-toxicity-content');
+  const badge = document.getElementById('order-flow-toxicity-badge');
+  if (!el) return;
+  const data = await apiFetch(`/order-flow-toxicity?symbol=${sym}`);
+  if (!data) { setErr('order-flow-toxicity-content'); return; }
+
+  const score    = data.score;
+  const severity = data.severity || 'insufficient_data';
+
+  // Badge
+  const SEV_BADGE = {
+    extreme:           ['EXTREME', 'badge-red'],
+    high:              ['HIGH',    'badge-red'],
+    medium:            ['MEDIUM',  'badge-yellow'],
+    low:               ['low',     'badge-green'],
+    insufficient_data: ['—',       'badge-blue'],
+  };
+  const [bLabel, bCls] = SEV_BADGE[severity] || ['—', 'badge-blue'];
   if (badge) {
     badge.textContent = bLabel;
     badge.className   = `card-badge ${bCls}`;
@@ -2558,6 +2579,76 @@ async function renderSessionVolumeProfile() {
   }
 
   el.innerHTML = html || '<div class="text-muted" style="font-size:11px;">No session data</div>';
+  if (score == null) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;">${data.description || 'Insufficient data'}</div>`;
+    return;
+  }
+
+  // Gauge: horizontal segmented bar (low/medium/high/extreme bands)
+  const gaugePct = Math.max(0, Math.min(100, Math.round(score)));
+  const SEV_COLOR = { extreme: 'var(--red)', high: 'var(--red)', medium: 'var(--yellow)', low: 'var(--green)' };
+  const scoreColor = SEV_COLOR[severity] || 'var(--muted)';
+
+  const gaugeHtml = `
+    <div style="position:relative;height:12px;border-radius:6px;overflow:hidden;background:linear-gradient(to right,var(--green) 0%,var(--green) 25%,var(--yellow) 25%,var(--yellow) 50%,var(--red) 50%,var(--red) 75%,#ff2040 75%);opacity:0.25;margin-bottom:2px"></div>
+    <div style="position:relative;margin-top:-14px;margin-bottom:8px">
+      <div style="height:12px;display:flex;align-items:center">
+        <div style="width:${gaugePct}%;height:4px;background:${scoreColor};border-radius:2px;transition:width .4s"></div>
+        <div style="width:8px;height:12px;background:${scoreColor};border-radius:2px;margin-left:-2px;flex-shrink:0"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:8px">
+      <span>0 low</span><span>25</span><span>50</span><span>75 extreme</span>
+    </div>`;
+
+  // Score + description
+  const scoreHtml = `
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
+      <span style="font-size:24px;font-weight:700;color:${scoreColor};font-family:monospace">${score.toFixed(1)}</span>
+      <span style="font-size:11px;color:var(--muted)">/100</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:4px">${data.n_trades || 0} trades</span>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${data.description || ''}</div>`;
+
+  // Multi-window table
+  const wins = data.windows || {};
+  const WIN_ORDER = ['5m', '15m', '1h'];
+  const winRows = WIN_ORDER.filter(k => wins[k]).map(k => {
+    const w = wins[k];
+    const sc = w.score != null ? w.score.toFixed(1) : '—';
+    const sev = w.severity || 'low';
+    const [sl, sc2] = SEV_BADGE[sev] || ['—', 'badge-blue'];
+    return `<tr>
+      <td style="font-size:10px;color:var(--muted);padding:2px 8px 2px 0">${k}</td>
+      <td style="font-size:11px;font-family:monospace;padding:2px 8px 2px 0;color:${SEV_COLOR[sev]||'var(--fg)'}">${sc}</td>
+      <td style="padding:2px 0"><span class="card-badge ${sc2}" style="font-size:9px">${sl}</span></td>
+      <td style="font-size:10px;color:var(--muted);padding:2px 0 2px 8px">${w.n_pairs} pairs</td>
+    </tr>`;
+  }).join('');
+  const winTableHtml = winRows ? `<table style="width:100%;border-collapse:collapse;margin-bottom:8px">${winRows}</table>` : '';
+
+  // Sparkline: mini SVG line chart
+  const spark = (data.sparkline || []).filter(b => b.score != null);
+  let sparkHtml = '';
+  if (spark.length >= 2) {
+    const W = 200, H = 28;
+    const scores = spark.map(b => b.score);
+    const sMax = Math.max(...scores, 1);
+    const pts = spark.map((b, i) => {
+      const x = Math.round(i / (spark.length - 1) * W);
+      const y = Math.round(H - (b.score / sMax) * H);
+      return `${x},${y}`;
+    }).join(' ');
+    sparkHtml = `
+      <div style="margin-top:4px">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px">toxicity over time</div>
+        <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">
+          <polyline points="${pts}" fill="none" stroke="${scoreColor}" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      </div>`;
+  }
+
+  el.innerHTML = scoreHtml + gaugeHtml + winTableHtml + sparkHtml;
 }
 
 // ── Top Movers ────────────────────────────────────────────────────────────────
@@ -3057,6 +3148,8 @@ async function refresh() {
 
     // Batch 16: session volume profile
     await Promise.all([safe(renderSessionVolumeProfile)]);
+    // Batch 15: OFT
+    await Promise.all([safe(renderOrderFlowToxicity)]);
   } finally {
     _refreshRunning = false;
   }
