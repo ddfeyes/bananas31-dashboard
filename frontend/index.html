@@ -146,42 +146,6 @@
     </div>
   </section>
 
-  <!-- Tape Speed -->
-  <section class="card" id="card-tape-speed">
-    <div class="card-header">
-      <span class="card-title">Tape Speed</span>
-      <span id="tape-speed-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">trades/min · 30 min</span>
-    </div>
-    <div id="tape-speed-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
-    </div>
-  </section>
-
-  <!-- Inter-Exchange OI Divergence -->
-  <section class="card" id="card-oi-divergence">
-    <div class="card-header">
-      <span class="card-title">OI Divergence</span>
-      <span id="oi-divergence-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">Binance · Bybit · OKX · 1h</span>
-    </div>
-    <div id="oi-divergence-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
-    </div>
-  </section>
-
-  <!-- Whale Order Clustering -->
-  <section class="card" id="card-whale-clustering">
-    <div class="card-header">
-      <span class="card-title">Whale Clustering</span>
-      <span id="whale-clustering-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">price zones · 30 min</span>
-    </div>
-    <div id="whale-clustering-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
-    </div>
-  </section>
-
   <!-- Market Microstructure Score -->
   <section class="card" id="card-microstructure">
     <div class="card-header">
@@ -214,18 +178,6 @@
       <span class="card-meta">price vs OI anchor</span>
     </div>
     <div id="oi-weighted-price-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
-    </div>
-  </section>
-
-  <!-- Realized Vol Bands -->
-  <section class="card" id="card-realized-vol-bands">
-    <div class="card-header">
-      <span class="card-title">Realized Vol Bands</span>
-      <span id="realized-vol-bands-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">BB-style realized volatility · 20-candle</span>
-    </div>
-    <div id="realized-vol-bands-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
@@ -330,25 +282,13 @@
   <!-- Adaptive Volume Profile -->
   <section class="card" id="card-adaptive-vp">
     <div class="card-header">
-      <span class="card-title">Volume Profile</span>
+      <span class="card-title">Volume Profile (Adaptive)</span>
       <span id="adaptive-vp-badge" class="card-badge badge-yellow" style="display:none"></span>
       <span class="card-meta">session · adaptive scale</span>
     </div>
     <div id="adaptive-vp-metrics"></div>
     <div id="adaptive-vp-container">
       <canvas id="adaptive-vp-canvas"></canvas>
-    </div>
-  </section>
-
-  <!-- Aggressor Streak -->
-  <section class="card" id="card-aggressor-streak">
-    <div class="card-header">
-      <span class="card-title">Aggressor Streak</span>
-      <span id="aggressor-streak-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">consecutive imbalanced candles · 70% threshold</span>
-    </div>
-    <div id="aggressor-streak-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
 
@@ -376,6 +316,7 @@
     </div>
   </section>
 
+  <!-- Top Movers -->
   <section class="card" id="card-top-movers">
     <div class="card-header">
       <span class="card-title">Top Movers</span>
@@ -443,18 +384,6 @@
       <span class="card-meta">whale orders · ≥$10k · 5 min</span>
     </div>
     <div id="large-trades-content">
-      <div class="text-muted" style="font-size:11px;">Loading…</div>
-    </div>
-  </section>
-
-  <!-- Net Taker Delta -->
-  <section class="card" id="card-net-taker-delta">
-    <div class="card-header">
-      <span class="card-title">Net Taker Delta</span>
-      <span id="net-taker-delta-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">buy − sell vol · 1h · all symbols</span>
-    </div>
-    <div id="net-taker-delta-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
@@ -567,6 +496,7 @@
     </div>
   </section>
 
+  <!-- Cross-Asset Correlation -->
   <section class="card" id="card-cross-asset-corr">
     <div class="card-header">
       <span class="card-title">Cross-Asset Correlation</span>
@@ -578,6 +508,7 @@
     </div>
   </section>
 
+  <!-- Social Sentiment -->
   <section class="card" id="card-social-sentiment">
     <div class="card-header">
       <span class="card-title">Social Sentiment</span>
@@ -589,6 +520,7 @@
     </div>
   </section>
 
+  <!-- Miner Reserve -->
   <section class="card" id="card-miner-reserve">
     <div class="card-header">
       <span class="card-title">Miner Reserve</span>
@@ -600,6 +532,7 @@
     </div>
   </section>
 
+  <!-- Macro Liquidity -->
   <section class="card" id="card-macro-liquidity">
     <div class="card-header">
       <span class="card-title">Macro Liquidity</span>
@@ -607,17 +540,11 @@
       <span class="card-meta">M2 proxy · Fed balance · DXY vs BTC · regime score</span>
     </div>
     <div id="macro-liquidity-content">
-  <section class="card" id="card-derivatives-heatmap">
-    <div class="card-header">
-      <span class="card-title">Derivatives Heatmap</span>
-      <span id="derivatives-heatmap-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">OI by strike · max pain · GEX · put/call ratio</span>
-    </div>
-    <div id="derivatives-heatmap-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
 
+  <!-- Token Velocity & NVT -->
   <section class="card" id="card-token-velocity-nvt">
     <div class="card-header">
       <span class="card-title">Token Velocity &amp; NVT</span>
@@ -625,46 +552,24 @@
       <span class="card-meta">velocity · NVT signal · 28d MA · overbought/oversold</span>
     </div>
     <div id="token-velocity-nvt-content">
-  <section class="card" id="card-validator-activity">
-    <div class="card-header">
-      <span class="card-title">Validator Activity</span>
-      <span id="validator-activity-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">ETH · attestation · queue · APY</span>
-    </div>
-    <div id="network-health-score-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
 
-  <section class="card" id="card-layer2-metrics">
+  <!-- WebSocket Stats -->
+  <section class="card" id="card-ws-stats">
     <div class="card-header">
-      <span class="card-title">Layer 2 Metrics</span>
-      <span id="layer2-metrics-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">ARB/OP/Base/Polygon/zkSync · TVL · bridge · gas</span>
+      <span class="card-title">WebSocket Stats</span>
+      <span id="ws-stats-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">message rate · 60s window</span>
     </div>
-    <div id="layer2-metrics-content">
-  <section class="card" id="card-nft-market-pulse">
-    <div class="card-header">
-      <span class="card-title">NFT Market Pulse</span>
-      <span id="nft-market-pulse-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">Top 5 · floor trends · wash-adj volume · liquidity</span>
-    </div>
-    <div id="nft-market-pulse-content">
+    <div id="ws-stats-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
-  </section>
-
-  <section class="card" id="card-holder-distribution">
-    <div class="card-header">
-      <span class="card-title">Holder Distribution</span>
-      <span id="holder-dist-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">BTC · shrimp/crab/fish/shark/whale · Gini · HHI</span>
-    </div>
-    <div id="holder-dist-content" style="font-size:11px;">Loading…</div>
   </section>
 
 </main>
 
-<script src="app.js?v=99"></script>
+<script src="app.js?v=100"></script>
 </body>
 </html>

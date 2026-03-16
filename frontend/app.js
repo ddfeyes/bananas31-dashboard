@@ -886,75 +886,6 @@ async function renderPhase() {
 }
 
 // ── Render: Inter-Exchange OI Divergence ─────────────────────────────────────
-async function renderOiDivergence() {
-  const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/oi-divergence?symbol=${sym}&window=3600`);
-  if (!data) {
-    setErr('oi-divergence-content');
-    return;
-  }
-
-  const badge = document.getElementById('oi-divergence-badge');
-  if (badge) {
-    if (data.divergence) {
-      const sevClass = data.severity === 'high'   ? 'badge-red'
-                     : data.severity === 'medium' ? 'badge-yellow'
-                     : 'badge-blue';
-      badge.textContent = data.severity.toUpperCase()
-        + (data.opposing ? ' · OPPOSING' : '');
-      badge.className = `card-badge ${sevClass}`;
-      badge.style.display = 'inline-block';
-    } else {
-      badge.style.display = 'none';
-    }
-  }
-
-  const el = document.getElementById('oi-divergence-content');
-  if (!el) return;
-
-  const exs = data.exchanges || {};
-  const exNames = Object.keys(exs);
-
-  if (!exNames.length) {
-    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No exchange data yet</div>';
-    return;
-  }
-
-  const divColor = data.divergence
-    ? (data.severity === 'high' ? 'var(--red)' : data.severity === 'medium' ? 'var(--yellow)' : '#64b4ff')
-    : 'var(--green)';
-
-  const rows = exNames.map(ex => {
-    const e = exs[ex];
-    const pctStr = e.pct_change >= 0 ? `+${e.pct_change.toFixed(2)}%` : `${e.pct_change.toFixed(2)}%`;
-    const devStr = e.deviation  >= 0 ? `+${e.deviation.toFixed(2)}%`  : `${e.deviation.toFixed(2)}%`;
-    const dirColor = e.direction === 'up' ? 'var(--green)' : e.direction === 'down' ? 'var(--red)' : 'var(--muted)';
-    const isDiverging = data.diverging_exchange === ex;
-    return `
-      <div class="metric-box" style="${isDiverging ? 'border:1px solid ' + divColor + ';border-radius:6px;' : ''}">
-        <div class="metric-label">${ex.charAt(0).toUpperCase() + ex.slice(1)}</div>
-        <div class="metric-value" style="color:${dirColor}">${pctStr}</div>
-        <div class="metric-label">dev ${devStr}</div>
-      </div>`;
-  }).join('');
-
-  const meanStr = data.mean_pct_change >= 0
-    ? `+${data.mean_pct_change.toFixed(2)}%`
-    : `${data.mean_pct_change.toFixed(2)}%`;
-
-  el.innerHTML = `
-    <div class="phase-metrics">
-      ${rows}
-      <div class="metric-box">
-        <div class="metric-label">Mean</div>
-        <div class="metric-value" style="color:var(--muted)">${meanStr}</div>
-        <div class="metric-label">max dev ${data.divergence_pct.toFixed(2)}%</div>
-      </div>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">${data.description || ''}</div>
-  `;
-}
-
 // ── Render: Microstructure Score ──────────────────────────────────────────────
 function _compColor(score) {
   if (score == null) return 'var(--muted)';
@@ -1262,78 +1193,6 @@ async function renderOiWeightedPrice() {
 }
 
 // ── Render: Realized Vol Bands ────────────────────────────────────────────────
-async function renderRealizedVolBands() {
-  const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/realized-volatility-bands?symbol=${sym}&window=20`);
-  const el    = document.getElementById('realized-vol-bands-content');
-  const badge = document.getElementById('realized-vol-bands-badge');
-  if (!el) return;
-
-  if (!data) {
-    setErr('realized-vol-bands-content');
-    return;
-  }
-
-  const upper   = data.upper         != null ? fmtPrice(data.upper)         : '—';
-  const center  = data.center        != null ? fmtPrice(data.center)        : '—';
-  const lower   = data.lower         != null ? fmtPrice(data.lower)         : '—';
-  const curP    = data.current_price != null ? fmtPrice(data.current_price) : '—';
-  const vol     = data.realized_vol  != null ? (data.realized_vol * 100).toFixed(4) + '%' : '—';
-  const pct     = data.band_percentile != null ? parseFloat(data.band_percentile) : null;
-  const zone    = data.zone || 'inside';
-
-  const zoneColor = zone === 'above_upper' ? 'var(--red)'
-                  : zone === 'below_lower' ? 'var(--green)'
-                  :                          'var(--yellow)';
-
-  const pctStr = pct != null ? pct.toFixed(1) + '%' : '—';
-
-  // Percentile bar fill
-  const barFill = pct != null ? Math.round(pct) : 50;
-  const barColor = zone === 'above_upper' ? '#e74c3c'
-                 : zone === 'below_lower' ? '#2ecc71'
-                 :                          '#f39c12';
-
-  if (badge) {
-    badge.textContent = zone.replace(/_/g, ' ');
-    badge.className   = 'card-badge ' + (zone === 'above_upper' ? 'badge-red' : zone === 'below_lower' ? 'badge-green' : 'badge-yellow');
-    badge.style.display = 'inline-block';
-  }
-
-  el.innerHTML = `
-    <div class="phase-metrics">
-      <div class="metric-box">
-        <div class="metric-label">Percentile</div>
-        <div class="metric-value" style="color:${zoneColor};font-size:22px">${pctStr}</div>
-        <div class="metric-label" style="color:${zoneColor}">${zone.replace(/_/g, ' ')}</div>
-      </div>
-      <div class="metric-box">
-        <div class="metric-label">Upper</div>
-        <div class="metric-value" style="color:var(--red);font-size:13px">${upper}</div>
-        <div class="metric-label">Center</div>
-        <div class="metric-value" style="font-size:13px">${center}</div>
-        <div class="metric-label">Lower</div>
-        <div class="metric-value" style="color:var(--green);font-size:13px">${lower}</div>
-      </div>
-      <div class="metric-box">
-        <div class="metric-label">Price</div>
-        <div class="metric-value" style="font-size:13px">${curP}</div>
-        <div class="metric-label">RealVol/c</div>
-        <div class="metric-value" style="color:var(--muted);font-size:13px">${vol}</div>
-      </div>
-    </div>
-    <div style="margin-top:6px;padding:0 4px">
-      <div style="background:var(--bg2);border-radius:3px;height:6px;position:relative">
-        <div style="position:absolute;left:0;top:0;height:6px;width:${barFill}%;background:${barColor};border-radius:3px;transition:width 0.4s"></div>
-        <div style="position:absolute;left:50%;top:-2px;width:2px;height:10px;background:var(--muted);opacity:0.4"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">
-        <span>lower</span><span>center</span><span>upper</span>
-      </div>
-    </div>
-  `;
-}
-
 // ── Render: Market Regime ─────────────────────────────────────────────────────
 async function renderMarketRegime() {
   const sym = encodeURIComponent(activeSymbol);
@@ -1633,115 +1492,6 @@ async function renderVpin() {
 }
 
 // ── Render: Tape Speed ────────────────────────────────────────────────────────
-async function renderTapeSpeed() {
-  const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/tape-speed?symbol=${sym}`);
-  const el = document.getElementById('tape-speed-content');
-  if (!el) return;
-  if (!data) { el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>'; return; }
-
-  const cur    = data.current_tpm  != null ? data.current_tpm.toFixed(1)  : '—';
-  const avg    = data.avg_tpm      != null ? data.avg_tpm.toFixed(1)      : '—';
-  const high   = data.high_watermark != null ? data.high_watermark.toFixed(1) : '—';
-  const low    = data.low_watermark  != null ? data.low_watermark.toFixed(1)  : '—';
-
-  const heatColor = data.heating_up ? 'var(--red)' : data.cooling_down ? 'var(--blue)' : 'var(--fg)';
-  const heatLabel = data.heating_up ? 'HEATING' : data.cooling_down ? 'COOLING' : 'STABLE';
-  const badgeClass = data.heating_up ? 'badge-red' : data.cooling_down ? 'badge-blue' : 'badge-yellow';
-
-  const badge = document.getElementById('tape-speed-badge');
-  if (badge) {
-    badge.textContent = heatLabel;
-    badge.className = `card-badge ${badgeClass}`;
-    badge.style.display = '';
-  }
-
-  // Bar chart: last N buckets as sparkline
-  const buckets = (data.buckets || []).slice(-20);
-  const maxTpm  = data.high_watermark || 1;
-  const bars = buckets.map(b => {
-    const pct = Math.min((b.tpm / maxTpm) * 100, 100).toFixed(1);
-    return `<div class="ts-bar" style="height:${pct}%;background:var(--blue)" title="${b.tpm.toFixed(1)} tpm"></div>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div class="ts-metrics">
-      <span class="ts-stat">Current <span style="color:${heatColor};font-weight:700">${cur} tpm</span></span>
-      <span class="ts-stat">Avg <span>${avg} tpm</span></span>
-      <span class="ts-stat">High <span class="text-yellow">${high}</span></span>
-      <span class="ts-stat">Low <span class="text-muted">${low}</span></span>
-    </div>
-    <div class="ts-chart">${bars}</div>
-  `;
-}
-
-
-async function renderAggressorStreak() {
-  const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/aggressor-streak?symbol=${sym}`);
-  if (!data) {
-    setErr('aggressor-streak-content');
-    return;
-  }
-
-  const el    = document.getElementById('aggressor-streak-content');
-  const badge = document.getElementById('aggressor-streak-badge');
-  if (!el) return;
-
-  const streak    = data.streak || 0;
-  const dir       = data.streak_direction;
-  const alert     = data.alert;
-  const threshold = data.alert_streak || 3;
-  const candles   = data.candles || [];
-  const desc      = data.description || '—';
-
-  const dirColor = dir === 'buy' ? 'var(--green)' : dir === 'sell' ? 'var(--red)' : 'var(--muted)';
-  const dirLabel = dir ? dir.toUpperCase() : '—';
-
-  if (badge) {
-    if (streak === 0) {
-      badge.textContent  = 'no streak';
-      badge.className    = 'card-badge badge-gray';
-    } else if (alert) {
-      badge.textContent  = `ALERT ${streak}x ${dirLabel}`;
-      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
-    } else {
-      badge.textContent  = `${streak}x ${dirLabel}`;
-      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
-    }
-    badge.style.display = 'inline-block';
-  }
-
-  // Last 10 candles as mini bar indicators
-  const recent = candles.slice(-10);
-  const bars = recent.map(c => {
-    const col = c.direction === 'buy' ? 'var(--green)' : c.direction === 'sell' ? 'var(--red)' : 'var(--muted)';
-    const pct = c.direction === 'buy' ? c.buy_pct.toFixed(0) : c.direction === 'sell' ? c.sell_pct.toFixed(0) : '—';
-    return `<div class="metric-box" style="border-top:3px solid ${col}">
-      <div class="metric-label">${new Date(c.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
-      <div class="metric-value" style="color:${col};font-size:13px">${pct}%</div>
-    </div>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
-      <div>
-        <div style="font-size:28px;font-weight:700;color:${dirColor}">${streak}</div>
-        <div style="font-size:11px;color:var(--muted)">streak</div>
-      </div>
-      <div style="flex:1">
-        <div style="font-size:13px;color:${alert ? dirColor : 'var(--fg)'}">
-          ${alert ? '⚡ ' : ''}${desc}
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">
-          alert at ${threshold}+ consecutive candles · 70% threshold
-        </div>
-      </div>
-    </div>
-    <div class="phase-metrics" style="flex-wrap:wrap">${bars || '<span style="color:var(--muted);font-size:11px">No candle data</span>'}</div>
-  `;
-}
-
 // ── Render: Correlation Heatmap ───────────────────────────────────────────────
 async function renderCorrHeatmap() {
   const data = await apiFetch('/correlations/heatmap');
@@ -2186,75 +1936,6 @@ async function renderLargeTrades() {
 }
 
 // ── Net Taker Delta ───────────────────────────────────────────────────────────
-async function renderNetTakerDelta() {
-  const el    = document.getElementById('net-taker-delta-content');
-  const badge = document.getElementById('net-taker-delta-badge');
-  if (!el) return;
-
-  // Fetch for all symbols in parallel
-  const symbols = getSymbols();
-  const results = await Promise.all(
-    symbols.map(sym =>
-      apiFetch(`/net-taker-delta?symbol=${encodeURIComponent(sym)}&window=3600`)
-        .then(d => d ? { symbol: sym, total_net: d.total_net, total_buy: d.total_buy, total_sell: d.total_sell } : null)
-        .catch(() => null)
-    )
-  );
-
-  const rows = results.filter(Boolean);
-  if (!rows.length) { setErr('net-taker-delta-content'); return; }
-
-  // Sort by total_net descending for ranking
-  rows.sort((a, b) => b.total_net - a.total_net);
-  rows.forEach((r, i) => { r.rank = i + 1; });
-
-  // Badge reflects top symbol's direction
-  const top = rows[0];
-  if (badge) {
-    let label = 'neutral', cls = 'badge-blue';
-    if (top.total_net > 0)      { label = 'buying';  cls = 'badge-green'; }
-    else if (top.total_net < 0) { label = 'selling'; cls = 'badge-red'; }
-    badge.textContent = label;
-    badge.className   = `card-badge ${cls}`;
-    badge.style.display = '';
-  }
-
-  function fmtVol(v) {
-    const abs = Math.abs(v);
-    if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
-    if (abs >= 1_000)     return `${(v / 1_000).toFixed(1)}k`;
-    return v.toFixed(2);
-  }
-
-  const rowsHtml = rows.map(r => {
-    const total = r.total_buy + r.total_sell;
-    const buyPct = total > 0 ? Math.round(r.total_buy / total * 100) : 50;
-    const netPos = r.total_net >= 0;
-    const netColor = netPos ? 'var(--green)' : 'var(--red)';
-    const netSign  = netPos ? '+' : '';
-    return `<tr>
-      <td style="color:var(--muted);font-size:10px;">#${r.rank}</td>
-      <td style="font-size:11px;">${r.symbol.replace('USDT','')}</td>
-      <td style="font-size:11px;color:${netColor};text-align:right;">${netSign}${fmtVol(r.total_net)}</td>
-      <td style="width:60px;padding-left:6px;">
-        <div style="background:var(--red);height:6px;border-radius:3px;position:relative;">
-          <div style="background:var(--green);width:${buyPct}%;height:100%;border-radius:3px 0 0 3px;"></div>
-        </div>
-      </td>
-    </tr>`;
-  }).join('');
-
-  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
-    <thead><tr>
-      <th style="color:var(--muted);text-align:left;font-size:10px;padding-bottom:4px;">#</th>
-      <th style="color:var(--muted);text-align:left;font-size:10px;">Symbol</th>
-      <th style="color:var(--muted);text-align:right;font-size:10px;">Net Δ</th>
-      <th style="color:var(--muted);font-size:10px;padding-left:6px;">Buy/Sell</th>
-    </tr></thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>`;
-}
-
 // ── Alerts ────────────────────────────────────────────────────────────────────
 async function renderAlerts() {
   const el    = document.getElementById('alerts-content');
@@ -2816,29 +2497,23 @@ async function refresh() {
     await Promise.all([safe(renderSocialSentiment)]);
 
     // Batch 17: rv-iv card
-    await Promise.all([safe(renderRVIV)]);
-    await delay(200);
+        await delay(200);
 
     // Batch 18: session volume profile
-    await Promise.all([safe(renderSessionVolumeProfile)]);
-    // Batch 19: OFT
-    await Promise.all([safe(renderOrderFlowToxicity)]);
-    // Batch 20: momentum divergence
-    await Promise.all([safe(renderMomentumDivergence)]);
-    // Batch 21: spread analysis
-    await Promise.all([safe(renderMarketMicrostructure)]);
-    // Batch 22: options skew
-    await Promise.all([safe(renderOptionsSkew)]);
-    // Batch 23: miner reserve (global BTC signal, no symbol)
+        // Batch 19: OFT
+        // Batch 20: momentum divergence
+        // Batch 21: spread analysis
+        // Batch 22: options skew
+        // Batch 23: miner reserve (global BTC signal, no symbol)
     await Promise.all([safe(renderMinerReserve)]);
     // Batch 24: macro liquidity indicator
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
     // Batch 16: derivatives heatmap
-    await Promise.all([safe(renderDerivativesHeatmap)]);
-    // Batch 25: holder distribution card
-    await Promise.all([safe(renderHolderDistribution)]);
+        // Batch 25: holder distribution card
+        // Batch 26: cross-chain bridge monitor
+    await Promise.all([safe(renderCrossChainBridge)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2914,79 +2589,6 @@ async function renderSocialSentiment() {
 
 
 // ── Network Health Score ──────────────────────────────────────────────────────
-async function renderNetworkHealthScore() {
-  const el    = document.getElementById('network-health-score-content');
-  const badge = document.getElementById('network-health-score-badge');
-  if (!el) return;
-  const data = await apiFetch('/network-health-score');
-  if (!data) { setErr('network-health-score-content'); return; }
-
-  const score  = data.score ?? 50;
-  const label  = data.label || 'neutral';
-  const trend  = data.trend || 'stable';
-  const comps  = data.components || {};
-  const hist   = data.history    || [];
-
-  const labelCls = label === 'excellent' ? 'badge-green'
-                 : label === 'healthy'   ? 'badge-green'
-                 : label === 'stressed'  ? 'badge-red'
-                 : label === 'critical'  ? 'badge-red'
-                 : 'badge-blue';
-  if (badge) {
-    badge.textContent = label.toUpperCase();
-    badge.className   = `card-badge ${labelCls}`;
-    badge.style.display = '';
-  }
-
-  // Gauge arc — score 0-100 → 0-180 deg half-circle
-  const gaugeCol = score >= 70 ? 'var(--green)' : score >= 50 ? 'var(--blue)' : score >= 30 ? 'var(--yellow, #f0a500)' : 'var(--red)';
-  const trendArrow = trend === 'improving' ? '↑' : trend === 'declining' ? '↓' : '→';
-  const trendCol   = trend === 'improving' ? 'var(--green)' : trend === 'declining' ? 'var(--red)' : 'var(--muted)';
-
-  // Component rows
-  const compDefs = [
-    { key: 'hash_rate',        label: 'Hash Rate',    icon: '⛏' },
-    { key: 'mempool',          label: 'Mempool',      icon: '📬' },
-    { key: 'active_addresses', label: 'Addresses',    icon: '👥' },
-    { key: 'fee_pressure',     label: 'Fees',         icon: '💸' },
-  ];
-  const compRows = compDefs.map(({ key, label: lbl }) => {
-    const c   = comps[key] || {};
-    const s   = c.score ?? 50;
-    const col = s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--blue)' : s >= 30 ? 'var(--muted)' : 'var(--red)';
-    const barW = s.toFixed(0);
-    return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding:2px 4px;white-space:nowrap">${lbl}</td>
-      <td style="padding:2px 4px;width:80px">
-        <div style="background:var(--border);height:5px;border-radius:3px">
-          <div style="width:${barW}%;background:${col};height:100%;border-radius:3px"></div>
-        </div>
-      </td>
-      <td style="font-size:10px;color:${col};font-weight:600;text-align:right;padding:2px 4px">${s.toFixed(0)}</td>
-    </tr>`;
-  }).join('');
-
-  // Sparkline
-  const sparkbars = hist.slice(-14).map(h => {
-    const s   = h.score ?? 50;
-    const col = s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--blue)' : 'var(--red)';
-    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="text-align:center;margin-bottom:6px">
-      <span style="font-size:28px;font-weight:700;color:${gaugeCol}">${score.toFixed(0)}</span>
-      <span style="font-size:12px;color:var(--muted)">/100</span>
-      <span style="font-size:14px;color:${trendCol};margin-left:6px">${trendArrow}</span>
-    </div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:6px">
-      <tbody>${compRows}</tbody>
-    </table>
-    <div style="margin-top:4px">${sparkbars}</div>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
-}
-
-
 // ── Miner Reserve Indicator ───────────────────────────────────────────────────
 async function renderMinerReserve() {
   const data  = await apiFetch('/miner-reserve');
@@ -3285,228 +2887,49 @@ async function renderTokenVelocityNvt() {
 }
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
-async function renderDerivativesHeatmap() {
-  const el    = document.getElementById('derivatives-heatmap-content');
-  const badge = document.getElementById('derivatives-heatmap-badge');
-  if (!el) return;
-  const data = await apiFetch('/derivatives-heatmap?asset=BTC');
-  if (!data) { setErr('derivatives-heatmap-content'); return; }
-
-  const mp      = data.max_pain   || {};
-  const gex     = data.gex        || {};
-  const heatmap = data.oi_heatmap || {};
-  const summary = data.summary    || {};
-  const spot    = data.spot_price ?? 0;
-
-  const mpStrike = mp.strike    ?? 0;
-  const mpDist   = mp.distance_pct ?? 0;
-  const pcr      = summary.put_call_ratio ?? 0;
-  const conc     = summary.oi_concentration ?? 0;
-  const totalGex = gex.total ?? 0;
-  const flipPt   = gex.flip_point ?? 0;
-
-  // Badge: overbought / oversold based on PCR
-  const pcrLabel = pcr > 1.2 ? 'PUT HEAVY' : pcr < 0.7 ? 'CALL HEAVY' : 'BALANCED';
-  const pcrCls   = pcr > 1.2 ? 'badge-red' : pcr < 0.7 ? 'badge-green' : 'badge-blue';
-  if (badge) {
-    badge.textContent = pcrLabel;
-    badge.className   = `card-badge ${pcrCls}`;
-    badge.style.display = '';
-  }
-
-  const fmtK = v => v >= 1000 ? '$' + (v / 1000).toFixed(0) + 'k' : '$' + v.toFixed(0);
-  const fmtB = v => {
-    const a = Math.abs(v);
-    const s = v < 0 ? '-' : '+';
-    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(1) + 'B';
-    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1) + 'M';
-    return s + '$' + a.toFixed(0);
-  };
-
-  const mpCol    = mpDist < 0 ? 'var(--red)' : 'var(--green)';
-  const gexCol   = totalGex >= 0 ? 'var(--green)' : 'var(--red)';
-  const gexLabel = totalGex >= 0 ? 'LONG γ' : 'SHORT γ';
-
-  // OI heatmap table (strikes × expiries)
-  const strikes  = heatmap.strikes  || [];
-  const expiries = heatmap.expiries || [];
-  const calls    = heatmap.calls    || {};
-  const puts     = heatmap.puts     || {};
-
-  const maxOI = Math.max(1, ...strikes.flatMap(s => {
-    const sk = String(s);
-    return expiries.flatMap(e => [
-      (calls[sk] || {})[e] || 0,
-      (puts[sk]  || {})[e] || 0,
-    ]);
-  }));
-
-  const expHeaders = expiries.map(e => {
-    const parts = e.split('-');
-    return parts.length === 3 ? parts[1] + '/' + parts[2] : e;
-  });
-
-  const tableRows = strikes.map(s => {
-    const sk = String(s);
-    const isMp = Math.abs(s - mpStrike) < 1;
-    const cells = expiries.map(e => {
-      const c = (calls[sk] || {})[e] || 0;
-      const p = (puts[sk]  || {})[e] || 0;
-      const total = c + p;
-      const pct   = Math.min(total / maxOI * 100, 100).toFixed(0);
-      const col   = c > p ? 'var(--green)' : p > c ? 'var(--red)' : 'var(--muted)';
-      return `<td style="font-size:9px;text-align:right;padding:1px 4px">
-        <div style="background:${col};opacity:0.15;width:${pct}%;height:6px;border-radius:2px;margin-left:auto"></div>
-        <span style="color:${col}">${total > 0 ? total.toFixed(0) : '—'}</span>
-      </td>`;
-    }).join('');
-    const rowStyle = isMp
-      ? 'background:rgba(255,200,0,0.08);border-left:2px solid var(--yellow)'
-      : '';
-    return `<tr style="${rowStyle}">
-      <td style="font-size:9px;color:${isMp?'var(--yellow)':'var(--muted)'};padding:1px 4px;white-space:nowrap">
-        ${fmtK(s)}${isMp?' ★':''}
-      </td>
-      ${cells}
-    </tr>`;
-  }).join('');
-
-  const expCols = expHeaders.map(h =>
-    `<th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 4px">${h}</th>`
-  ).join('');
-
-  el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
-      <span>spot: <b style="color:var(--fg)">${fmtK(spot)}</b></span>
-      <span>max pain: <b style="color:${mpCol}">${fmtK(mpStrike)}</b>
-        <span style="font-size:9px">(${mpDist >= 0 ? '+' : ''}${mpDist.toFixed(1)}%)</span></span>
-      <span>PCR: <b style="color:${pcr>1?'var(--red)':'var(--green)'}">${pcr.toFixed(2)}</b></span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
-      <span>GEX: <b style="color:${gexCol}">${gexLabel} ${fmtB(totalGex)}</b></span>
-      <span>flip: <b style="color:var(--muted)">${fmtK(flipPt)}</b></span>
-      <span>conc: <b style="color:var(--fg)">${(conc * 100).toFixed(0)}%</b></span>
-    </div>
-    <div style="overflow-x:auto;margin-top:4px">
-      <table style="border-collapse:collapse;width:100%;font-size:9px">
-        <thead><tr>
-          <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 4px">strike</th>
-          ${expCols}
-        </tr></thead>
-        <tbody>${tableRows}</tbody>
-      </table>
-    </div>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
-}
-
-
 // ── Holder Distribution ───────────────────────────────────────────────────
-async function renderHolderDistribution() {
-  const el = document.getElementById('holder-dist-content');
+// ── Cross-Chain Bridge Monitor ────────────────────────────────────────────────
+async function renderCrossChainBridge() {
+  const el = document.getElementById('bridge-monitor-content');
   if (!el) return;
-  const data = await fetchJSON('/api/holder-distribution-card');
+  const data = await fetchJSON('/api/cross-chain-bridge-monitor');
   if (!data) { el.textContent = 'Unavailable'; return; }
-  const badge = document.getElementById('holder-dist-badge');
-  const risk = data.hhi?.risk ?? 'unknown';
-  const riskColor = { low: '#26a69a', moderate: '#ffa726', high: '#ef5350', extreme: '#b71c1c' }[risk] ?? '#888';
+  const badge = document.getElementById('bridge-monitor-badge');
+  const cong = data.congestion?.label ?? 'unknown';
+  const congColor = { low: '#26a69a', moderate: '#ffa726', high: '#ef5350', severe: '#b71c1c' }[cong] ?? '#888';
   if (badge) {
-    badge.textContent = risk.toUpperCase();
-    badge.style.background = riskColor;
+    badge.textContent = cong.toUpperCase();
+    badge.style.background = congColor;
     badge.style.display = 'inline-block';
   }
-  const bands = data.bands ?? {};
-  const bandNames = ['shrimp','crab','fish','shark','whale'];
-  const bandRows = bandNames.map(b => {
-    const d = bands[b] ?? {};
-    const bar = Math.round((d.pct_supply ?? 0) * 2);
-    return `<tr><td style="color:#aaa;width:55px">${b}</td><td>${(d.pct_supply ?? 0).toFixed(1)}%</td><td style="color:#666">${(d.count ?? 0).toLocaleString()}</td><td><div style="background:${riskColor};height:6px;width:${bar}px;border-radius:3px"></div></td></tr>`;
+  const chains = data.chains ?? {};
+  const chainNames = ['ETH', 'BSC', 'ARB', 'OP', 'BASE'];
+  const flowColor = f => f > 5 ? '#26a69a' : f < -5 ? '#ef5350' : '#888';
+  const chainRows = chainNames.map(c => {
+    const d = chains[c] ?? {};
+    return `<tr><td style="color:#aaa;width:45px">${c}</td><td>+${(d.inflow_24h??0).toFixed(0)}</td><td style="color:#666">-${(d.outflow_24h??0).toFixed(0)}</td><td style="color:${flowColor(d.net_flow??0)}">${(d.net_flow??0)>0?'+':''}${(d.net_flow??0).toFixed(1)}</td></tr>`;
   }).join('');
-  const wDelta = data.whale_delta ?? {};
-  const gini = data.gini ?? {};
-  const hhi = data.hhi ?? {};
+  const bridges = (data.bridges ?? []).slice(0,5);
+  const bridgeList = bridges.map(b => `<span style="color:#aaa">${b.rank}.${b.name} <b>${(b.volume_24h??0).toFixed(0)}M</b></span>`).join(' · ');
+  const dom = data.dominance ?? {};
+  const anomalies = data.anomalies ?? [];
+  const anomalyTxt = anomalies.length ? anomalies.map(a => `${a.chain} ${a.ratio}x avg`).join(', ') : 'none';
   el.innerHTML = `
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">${bandRows}</table>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#aaa">
-      <span>Whale 7d: <b style="color:${(wDelta['7d_change_pct']??0)>=0?'#26a69a':'#ef5350'}">${(wDelta['7d_change_pct']??0).toFixed(1)}%</b> ${wDelta.signal??''}</span>
-      <span>Gini: <b>${(gini.current??0).toFixed(3)}</b> ${gini.trend??''}</span>
-      <span>HHI: <b>${(hhi.normalized??0).toFixed(1)}</b>/100</span>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:4px;font-size:10px">
+      <tr style="color:#555"><th>Chain</th><th>In($M)</th><th>Out($M)</th><th>Net</th></tr>
+      ${chainRows}
+    </table>
+    <div style="font-size:10px;color:#aaa;margin-bottom:3px">${bridgeList}</div>
+    <div style="display:flex;gap:10px;font-size:10px;color:#aaa;flex-wrap:wrap">
+      <span>Dom: <b>${dom.chain??'?'}</b> ${(dom.inflow_pct??0).toFixed(1)}%</span>
+      <span>Vol: <b>${(data.total_volume_24h??0).toFixed(0)}M</b></span>
+      <span>Anomaly: <b style="color:${anomalies.length?'#ef5350':'#26a69a'}">${anomalyTxt}</b></span>
     </div>
-    <div style="margin-top:4px;color:#666;font-size:10px">${data.description ?? ''}</div>
+    <div style="margin-top:3px;color:#666;font-size:10px">${data.description ?? ''}</div>
   `;
 }
 
 // ── Validator Activity ────────────────────────────────────────────────────────
-async function renderValidatorActivity() {
-  const data  = await apiFetch('/validator-activity');
-  const el    = document.getElementById('validator-activity-content');
-  const badge = document.getElementById('validator-activity-badge');
-  if (!el) return;
-
-  const health = data.health?.label ?? 'healthy';
-  const healthClass = { healthy: 'badge-green', degraded: 'badge-yellow', unhealthy: 'badge-red' };
-
-  if (badge) {
-    badge.textContent   = health.toUpperCase();
-    badge.className     = 'card-badge ' + (healthClass[health] ?? 'badge-gray');
-    badge.style.display = '';
-  }
-
-  const active  = (data.validators?.active ?? 0).toLocaleString();
-  const eff     = (data.attestation?.effectiveness_pct ?? 0).toFixed(1);
-  const effCol  = (data.attestation?.effectiveness_pct ?? 0) >= 95
-    ? 'var(--green)' : (data.attestation?.effectiveness_pct ?? 0) >= 90
-    ? 'var(--yellow)' : 'var(--red)';
-  const apy     = (data.apy?.estimated_pct ?? 0).toFixed(2);
-  const epoch   = (data.attestation?.epoch ?? 0).toLocaleString();
-
-  const entry   = (data.queue?.entry_count ?? 0).toLocaleString();
-  const exit    = (data.queue?.exit_count  ?? 0).toLocaleString();
-  const pressure = data.queue?.pressure ?? 'low';
-  const pressCol = { high: 'var(--red)', moderate: 'var(--yellow)', low: 'var(--green)' };
-
-  const slashed = data.slashing?.count_30d ?? 0;
-  const slashRate = (data.slashing?.rate_per_1k ?? 0).toFixed(4);
-  const slashCol  = slashed > 50 ? 'var(--red)' : slashed > 10 ? 'var(--yellow)' : 'var(--green)';
-
-  const ch30 = (data.validators?.change_30d_pct ?? 0);
-  const ch30Str = (ch30 >= 0 ? '+' : '') + ch30.toFixed(2) + '%';
-  const ch30Col = ch30 >= 0 ? 'var(--green)' : 'var(--red)';
-
-  // 30d sparkline (active validators)
-  const sp = data.history_30d ?? [];
-  let sparkSvg = '';
-  if (sp.length >= 2) {
-    const vals = sp.map(p => p.active);
-    const mn = Math.min(...vals) * 0.999;
-    const mx = Math.max(...vals) * 1.001;
-    const W = 200, H = 24;
-    const px = (i) => (i / (sp.length - 1)) * W;
-    const py = (v) => H - ((v - mn) / (mx - mn || 1)) * H;
-    const path = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-    sparkSvg = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
-      <path d="${path}" stroke="var(--green)" stroke-width="1.2" fill="none" opacity="0.85"/>
-    </svg>`;
-  }
-
-  el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>active: <b style="color:var(--fg)">${active}</b> <span style="color:${ch30Col}">${ch30Str} 30d</span></span>
-      <span>epoch: <b style="color:var(--fg)">${epoch}</b></span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>attest: <b style="color:${effCol}">${eff}%</b></span>
-      <span>APY: <b style="color:var(--green)">${apy}%</b></span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>queue in/out: <b style="color:${pressCol[pressure] ?? 'var(--fg)'}">+${entry} / -${exit}</b> <span>(${pressure})</span></span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
-      slashed 30d: <b style="color:${slashCol}">${slashed}</b> <span style="color:var(--muted)">(${slashRate}/1k)</span>
-    </div>
-    ${sparkSvg}
-    ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
-}
-
 // ── NFT Market Pulse ──────────────────────────────────────────────────────
 async function renderNftMarketPulse() {
   const data  = await apiFetch('/nft-market-pulse');
