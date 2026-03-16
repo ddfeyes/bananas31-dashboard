@@ -2559,6 +2559,8 @@ async function refresh() {
     await Promise.all([safe(renderWhaleFlow)]);
     // Batch 33: options gamma exposure (Wave 23)
     await Promise.all([safe(renderGammaExposure)]);
+    // Batch 34: funding rate arbitrage scanner (Wave 23)
+    await Promise.all([safe(renderFundingArbScanner)]);
   } finally {
     _refreshRunning = false;
   }
@@ -4115,6 +4117,75 @@ async function renderGammaExposure() {
     }
   } catch (err) {
     console.error('Error rendering gamma exposure:', err);
+    if (el) el.innerHTML = 'Error';
+  }
+}
+
+
+// ── Funding Rate Arbitrage Scanner (Wave 23, Issue #119) ──────────────────────
+async function renderFundingArbScanner() {
+  const el    = document.getElementById('funding-arb-scanner-content');
+  const badge = document.getElementById('funding-arb-scanner-badge');
+  if (!el) return;
+
+  try {
+    const res = await fetch('/api/funding-arb-scanner');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const { top_pairs, avg_spread_bps, extreme_count } = data;
+
+    const aprColor = (apr) =>
+      apr >= 50 ? '#27ae60' :
+      apr >= 20 ? '#f39c12' :
+      '#4a9eff';
+
+    const extremeTag = (pair) =>
+      pair.is_extreme
+        ? `<span style="color:#e74c3c;font-size:9px;margin-left:4px;">⚠ EXTREME</span>`
+        : '';
+
+    const fmtExchange = (ex) => ex.charAt(0).toUpperCase() + ex.slice(1);
+
+    const pairRows = top_pairs.map((pair) => `
+      <div style="display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #222;font-size:10px;">
+        <div style="color:#555;font-size:9px;">#${pair.rank}</div>
+        <div>
+          <span style="color:#e0e0e0;font-weight:bold;">${pair.symbol}</span>
+          ${extremeTag(pair)}
+          <div style="color:#666;font-size:9px;">${fmtExchange(pair.long_exchange)} long / ${fmtExchange(pair.short_exchange)} short</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:#4a9eff;font-weight:bold;">${pair.spread_bps.toFixed(1)} bps</div>
+          <div style="color:#555;font-size:9px;">spread</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:${aprColor(pair.estimated_apr_pct)};font-weight:bold;">${pair.estimated_apr_pct.toFixed(1)}%</div>
+          <div style="color:#555;font-size:9px;">APR</div>
+        </div>
+      </div>
+    `).join('');
+
+    el.innerHTML = `
+      ${pairRows}
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:#666;margin-top:4px;">
+        <span>Avg spread: <span style="color:#aaa;">${avg_spread_bps.toFixed(1)} bps</span></span>
+        <span>Extreme: <span style="color:${extreme_count > 0 ? '#e74c3c' : '#555'};">${extreme_count}</span></span>
+      </div>
+    `;
+
+    if (badge) {
+      const topApr = top_pairs.length > 0 ? top_pairs[0].estimated_apr_pct : 0;
+      badge.textContent = `${topApr.toFixed(0)}% APR`;
+      badge.style.background = aprColor(topApr);
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering funding arb scanner:', err);
     if (el) el.innerHTML = 'Error';
   }
 }
