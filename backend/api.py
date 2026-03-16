@@ -5520,6 +5520,21 @@ async def gamma_exposure_endpoint(symbol: Optional[str] = None):
     return JSONResponse(data)
 
 
+@router.get("/funding-arb-scanner")
+@cache_result(ttl_seconds=60)
+async def funding_arb_scanner_endpoint():
+    """
+    Funding Rate Arbitrage Scanner: scan funding rates across Binance/Bybit/OKX (simulated).
+
+    Finds the best cash-and-carry arb pairs by cross-exchange funding rate spread.
+    Returns top 3 pairs with estimated APR, extreme imbalance flags, and avg spread.
+    Data is seeded-mock (deterministic, no live API). Cache TTL: 60s.
+    """
+    from funding_arb_scanner import compute_funding_arb_scanner
+    data = compute_funding_arb_scanner()
+    return JSONResponse(data)
+
+
 @router.get("/whale-flow")
 @cache_result(ttl_seconds=60)
 async def whale_flow_endpoint(symbol: Optional[str] = None):
