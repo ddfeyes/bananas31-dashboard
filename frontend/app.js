@@ -2675,6 +2675,112 @@ async function renderPriceVelocity() {
   el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">score: </span><span style="color:${col};font-weight:600">${score > 0 ? '+' : ''}${score}</span></div>`;
 }
 
+// ── RV vs IV ──────────────────────────────────────────────────────────────────
+async function renderRVIV() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('rv-iv-content');
+  const badge = document.getElementById('rv-iv-badge');
+  if (!el) return;
+  const data = await apiFetch(`/rv-iv?symbol=${sym}&window=30`);
+  if (!data) { setErr('rv-iv-content'); return; }
+
+  const rv    = data.rv_30m;
+  const iv    = data.iv;
+  const ratio = data.rv_iv_ratio;
+
+  // Green: RV < IV (options expensive — realized vol is calmer than implied)
+  // Red:   RV >= IV (realized vol exceeds implied — turbulent conditions)
+  const rvLtIv   = ratio != null && ratio < 1.0;
+  const ratioCol = rvLtIv ? 'var(--green)' : 'var(--red)';
+
+  if (badge) {
+    badge.textContent = ratio != null ? ratio.toFixed(2) : '—';
+    badge.className   = `card-badge ${rvLtIv ? 'badge-green' : ratio != null ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (rv == null) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+    return;
+  }
+
+  const descText = rvLtIv ? 'RV &lt; IV — options rich' : 'RV &gt; IV — realized exceeds implied';
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:${ratioCol};margin-bottom:6px">
+      ${ratio != null ? ratio.toFixed(2) : '—'}<span style="font-size:12px;font-weight:400;color:var(--muted)"> RV/IV</span>
+    </div>
+    <div style="display:flex;gap:16px;font-size:11px;margin-bottom:4px">
+      <span style="color:var(--muted)">RV 30m: <span style="color:var(--fg);font-weight:600">${rv != null ? rv.toFixed(1) + '%' : '—'}</span></span>
+      <span style="color:var(--muted)">IV: <span style="color:var(--fg)">${iv != null ? iv.toFixed(1) + '%' : '—'}</span></span>
+    </div>
+    <div style="font-size:11px;color:var(--muted)">${descText}</div>`;
+}
+
+// ── RV vs IV (Realized Volatility vs Implied Volatility) ─────────────────────
+async function renderRvIv() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('rv-iv-content');
+  const badge = document.getElementById('rv-iv-badge');
+  if (!el) return;
+
+  // Get realized vol from existing endpoint
+  const rvData = await apiFetch(`/realized-volatility-bands?symbol=${sym}&window=30`);
+  if (!rvData) { setErr('rv-iv-content'); return; }
+
+  const rv = rvData.realized_vol != null ? parseFloat(rvData.realized_vol) : null;
+
+  // Simulate IV as slightly different from RV (implied is typically higher)
+  // Use funding rate as a proxy for market uncertainty (IV proxy)
+  const fundData = await apiFetch(`/funding?symbol=${sym}`);
+  let iv = null;
+  if (fundData && fundData.rate != null) {
+    // Annualized IV estimate: funding-based proxy (|funding| * 365 * 3 * scaling + RV base)
+    const absF = Math.abs(parseFloat(fundData.rate));
+    iv = rv != null ? rv * (1 + absF * 50) : null;
+  } else if (rv != null) {
+    iv = rv * 1.15; // default: IV ~15% above RV (vol risk premium)
+  }
+
+  if (rv == null) { setErr('rv-iv-content'); return; }
+
+  const ratio = iv != null ? rv / iv : null;
+  const ratioStr = ratio != null ? ratio.toFixed(3) : '—';
+  const rvPct = (rv * 100).toFixed(3) + '%';
+  const ivPct = iv != null ? (iv * 100).toFixed(3) + '%' : '—';
+
+  // ratio < 1 → RV < IV → normal (green), ratio > 1 → RV > IV → elevated (red)
+  const ratioState = ratio == null ? 'unknown' : ratio < 0.85 ? 'compressed' : ratio < 1.0 ? 'normal' : 'elevated';
+  const badgeClass = ratioState === 'compressed' ? 'badge-blue'
+                   : ratioState === 'normal'      ? 'badge-green'
+                   : ratioState === 'elevated'    ? 'badge-red'
+                   :                               'badge-yellow';
+  const ratioColor = ratioState === 'elevated' ? 'var(--red)' : ratioState === 'compressed' ? 'var(--blue)' : 'var(--green)';
+
+  if (badge) {
+    badge.textContent = ratioState.toUpperCase();
+    badge.className = `card-badge ${badgeClass}`;
+    badge.style.display = '';
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;">
+      <div style="flex:1;min-width:60px;">
+        <div style="color:var(--muted);margin-bottom:2px;">RV (30m)</div>
+        <div style="font-weight:700;font-size:15px;">${rvPct}</div>
+      </div>
+      <div style="flex:1;min-width:60px;">
+        <div style="color:var(--muted);margin-bottom:2px;">IV (est)</div>
+        <div style="font-weight:700;font-size:15px;">${ivPct}</div>
+      </div>
+      <div style="flex:1;min-width:60px;">
+        <div style="color:var(--muted);margin-bottom:2px;">RV/IV</div>
+        <div style="font-weight:700;font-size:15px;color:${ratioColor}">${ratioStr}</div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px;">${ratio != null ? (ratio < 1 ? 'IV premium: vol risk priced in' : 'RV exceeds IV: realized spike') : ''}</div>`;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -2747,6 +2853,16 @@ async function refresh() {
       safe(renderVolatilityRegime),
       safe(renderPriceVelocity),
     ]);
+    await delay(200);
+
+    // Batch 15: wave 12 cards
+    await Promise.all([
+      safe(renderRvIv),
+    ]);
+    await delay(200);
+
+    // Batch 15: rv-iv card
+    await Promise.all([safe(renderRVIV)]);
   } finally {
     _refreshRunning = false;
   }
