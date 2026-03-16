@@ -3015,71 +3015,83 @@ async function refreshCrossChainArb() {
   const data = await apiFetch('/cross-chain-arb');
   if (!data) { setErr('cross-chain-arb-content'); return; }
 
-  const signal = data.signal || 'low';
-  const opps   = data.top_opportunities || [];
-  const assets = data.assets || {};
-  const hmap   = data.arb_frequency_heatmap || {};
+  const signal  = data.signal            || 'low';
+  const opps    = data.top_opportunities || [];
+  const assets  = data.assets            || {};
+  const hmap    = data.arb_frequency_heatmap || {};
+  const bestOpp = data.best_opportunity;
 
   if (badge) {
     const label = signal === 'high_opportunity' ? 'HIGH' : signal === 'moderate' ? 'MOD' : 'LOW';
     const cls   = signal === 'high_opportunity' ? 'badge-green' : signal === 'moderate' ? 'badge-yellow' : 'badge-red';
-    badge.textContent    = label;
-    badge.className      = 'card-badge ' + cls;
-    badge.style.display  = 'inline-block';
+    badge.textContent   = label;
+    badge.className     = 'card-badge ' + cls;
+    badge.style.display = 'inline-block';
   }
 
+  // Price grid: assets × chains
   const CHAINS = ['ETH', 'BSC', 'ARB', 'OP', 'BASE'];
-  let gridHtml = '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-bottom:6px">';
-  gridHtml += '<tr><th style="text-align:left;padding:2px 4px">Asset</th>'
-    + CHAINS.map(c => `<th style="padding:2px 4px">${c}</th>`).join('')
-    + '<th style="padding:2px 4px">Spread</th></tr>';
+  let gridHtml = '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-bottom:6px">'
+    + '<tr><th style="text-align:left;padding:2px 4px;color:var(--muted)">Asset</th>'
+    + CHAINS.map(c => `<th style="padding:2px 4px;color:var(--muted)">${c}</th>`).join('')
+    + '<th style="padding:2px 4px;color:var(--muted)">Spread</th></tr>';
   for (const [asset, aData] of Object.entries(assets)) {
-    const chains   = aData.chains || {};
-    const best_s   = aData.best_spread || {};
-    const pColor   = best_s.is_profitable ? '#26a69a' : '#ef5350';
+    const chains   = aData.chains     || {};
+    const bestSprd = aData.best_spread || {};
+    const profCol  = bestSprd.is_profitable ? 'var(--green)' : 'var(--muted)';
+    const buyChain = bestSprd.buy_chain;
+    const sellChain= bestSprd.sell_chain;
     gridHtml += `<tr><td style="font-weight:bold;padding:2px 4px">${asset}</td>`;
     for (const c of CHAINS) {
-      const p = chains[c] ? chains[c].price : null;
+      const p   = chains[c] ? chains[c].price : null;
+      const col = c === sellChain ? 'var(--green)' : c === buyChain ? 'var(--red)' : '';
       const fmt = p == null ? '—'
         : asset === 'USDC' ? p.toFixed(4)
         : p >= 1000 ? (p / 1000).toFixed(2) + 'k'
         : p.toFixed(2);
-      gridHtml += `<td style="padding:2px 4px">${fmt}</td>`;
+      gridHtml += `<td style="padding:2px 4px${col ? ';color:' + col : ''}">${fmt}</td>`;
     }
-    gridHtml += `<td style="padding:2px 4px;color:${pColor}">${best_s.spread_bps != null ? best_s.spread_bps.toFixed(1) : '—'} bps</td></tr>`;
+    const sp = bestSprd.spread_bps != null ? bestSprd.spread_bps.toFixed(1) + ' bps' : '—';
+    gridHtml += `<td style="padding:2px 4px;color:${profCol};font-weight:600">${sp}</td></tr>`;
   }
   gridHtml += '</table>';
 
+  // Top opportunities
   let oppsHtml = '';
   for (const op of opps.slice(0, 3)) {
-    const pColor = op.is_profitable ? '#26a69a' : '#ef5350';
-    const profitLabel = op.fee_adjusted_profit_bps != null ? op.fee_adjusted_profit_bps.toFixed(1) + ' bps net' : '—';
-    oppsHtml += `<div style="margin:3px 0;padding:3px 6px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:10px">
-      <b>${op.asset}</b>
-      <span style="color:#aaa;margin:0 4px">${op.bridge_route}</span>
-      <span style="color:${pColor}">${profitLabel}</span>
-      <span style="color:#888;margin-left:4px">${op.bridge_time_sec}s</span>
+    const profBps = op.fee_adjusted_profit_bps ?? 0;
+    const profCol = op.is_profitable ? 'var(--green)' : 'var(--red)';
+    const profUsd = op.fee_adjusted_profit_usd != null ? '$' + op.fee_adjusted_profit_usd.toFixed(2) : '—';
+    oppsHtml += `<div style="margin:3px 0;padding:3px 6px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:10px;display:flex;gap:6px;align-items:center">
+      <b style="min-width:32px">${op.asset}</b>
+      <span style="color:var(--muted)">${op.bridge_route}</span>
+      <span style="color:${profCol};margin-left:auto">${profBps.toFixed(1)} bps · ${profUsd}</span>
     </div>`;
   }
 
-  const pairs  = hmap.chain_pairs || [];
-  const counts = hmap.counts || [];
-  const hmapHours = (hmap.hours || []).slice(12);
-  const hmapSlice = counts.slice(12);
-  let hmapHtml = '<div style="margin-top:6px"><div style="font-size:10px;font-weight:bold;margin-bottom:3px">Arb Freq Heatmap (last 12h)</div>'
-    + '<div style="display:flex;gap:2px;flex-wrap:wrap">';
-  for (let h = 0; h < hmapHours.length; h++) {
-    const row    = hmapSlice[h] || [];
-    const total  = row.reduce((a, b) => a + b, 0);
-    const alpha  = Math.min(total / 60, 1) * 0.8 + 0.1;
-    const bg     = `rgba(38,166,154,${alpha.toFixed(2)})`;
-    hmapHtml += `<div style="width:22px;height:22px;background:${bg};border-radius:3px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:8px">${hmapHours[h]}</div>`;
+  // Arb frequency heatmap (24 hours × 5 chain pairs)
+  const hmapCounts = hmap.counts || [];
+  const hmapPairs  = hmap.chain_pairs || [];
+  let hmapHtml = '<div style="margin-top:6px"><div style="font-size:9px;color:var(--muted);margin-bottom:3px">Arb Freq Heatmap · 24h · ' + hmapPairs.slice(0,3).join(' ') + '</div>'
+    + '<div style="display:flex;gap:1px">';
+  for (let h = 0; h < 24; h++) {
+    const row   = hmapCounts[h] || [];
+    const total = row.reduce((a, b) => a + b, 0);
+    const alpha = Math.min(total / 30, 1) * 0.8 + 0.1;
+    const bg    = `rgba(38,166,154,${alpha.toFixed(2)})`;
+    const lbl   = h % 6 === 0 ? String(h) : '';
+    hmapHtml += `<div title="${h}h: ${total}" style="flex:1;height:18px;background:${bg};border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:7px;color:#fff">${lbl}</div>`;
   }
   hmapHtml += '</div></div>';
 
+  const bestRoute = bestOpp ? bestOpp.route : '—';
+  const bestBps   = bestOpp ? bestOpp.fee_adjusted_profit_bps.toFixed(1) + ' bps' : '—';
+  const footer = `<div style="font-size:9px;color:var(--muted);margin-top:4px">best: <b style="color:var(--green)">${bestBps}</b> · ${bestRoute}</div>`;
+
   el.innerHTML = gridHtml
-    + (oppsHtml ? `<div style="margin-bottom:4px"><div style="font-size:10px;font-weight:bold;margin-bottom:2px">Top Opportunities</div>${oppsHtml}</div>` : '')
-    + hmapHtml;
+    + (oppsHtml ? `<div style="margin-bottom:4px"><div style="font-size:10px;font-weight:600;margin-bottom:2px">Top Opportunities</div>${oppsHtml}</div>` : '')
+    + hmapHtml
+    + footer;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
