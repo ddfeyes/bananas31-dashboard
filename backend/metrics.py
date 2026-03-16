@@ -5752,7 +5752,11 @@ def _l2_rank_chains(chains: dict) -> list:
 
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
-=======
+    if previous == 0:
+        return 0.0
+    return float((current - previous) / previous * 100.0)
+
+
 # ============================================================
 # Gas Fee Predictor helpers  (_gf_)
 # ============================================================
@@ -6550,6 +6554,142 @@ async def compute_gas_fee_predictor() -> dict:
 
     Data: Etherscan Gas Oracle (free, no key for basic endpoint) or mock.
     Falls back to realistic simulated data when API is unavailable.
+    """
+    import math
+
+    # ── Attempt live data from Etherscan gas oracle ─────────────────────────
+    base_fee  = 0.0
+    eth_price = 0.0
+    fetch_ok  = False
+
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(
+                "https://api.etherscan.io/api?module=gastracker&action=gasoracle",
+                headers={"Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                result = resp.json().get("result", {})
+                if isinstance(result, dict) and "suggestBaseFee" in result:
+                    base_fee  = float(result.get("suggestBaseFee", 0))
+                    eth_price = float(result.get("UsdPrice", 3000))
+                    fetch_ok  = True
+    except Exception:
+        pass
+
+    # ── Mock / fallback ──────────────────────────────────────────────────────
+    if not fetch_ok or base_fee <= 0:
+        base_fee  = 42.5
+        eth_price = 3_200.0
+
+    # ── Build 7-day hourly history (168 points) ──────────────────────────────
+    random.seed(7)
+    hist_fees = []
+    f = base_fee * 0.85
+    for _ in range(168):
+        f += random.gauss(0, 1.5)
+        f = max(5.0, min(200.0, f))
+        hist_fees.append(round(f, 2))
+    hist_fees[-1] = base_fee   # anchor last point to current
+
+    ma24   = _gf_moving_average(hist_fees, 24)
+    ma168  = _gf_moving_average(hist_fees, 168)
+
+    # ── Trend ────────────────────────────────────────────────────────────────
+    trend_dir   = _gf_base_fee_trend(hist_fees[-24:])
+    slope_ph    = 0.0
+    if len(hist_fees) >= 2:
+        recent = hist_fees[-6:]
+        n = len(recent)
+        xs = list(range(n))
+        mx_ = sum(xs) / n
+        my_ = sum(recent) / n
+        num = sum((x - mx_) * (y - my_) for x, y in zip(xs, recent))
+        den = sum((x - mx_) ** 2 for x in xs) or 1.0
+        slope_ph = round(num / den, 3)
+
+    # ── Priority fee percentiles (simulated recent block data) ───────────────
+    random.seed(13)
+    priority_samples = [max(0.1, random.lognormvariate(0.7, 0.6)) for _ in range(200)]
+    p10 = round(_gf_priority_percentile(priority_samples, 10), 2)
+    p50 = round(_gf_priority_percentile(priority_samples, 50), 2)
+    p90 = round(_gf_priority_percentile(priority_samples, 90), 2)
+
+    # ── Next-block estimate (assume avg 65% utilization + noise) ─────────────
+    util = 0.65 + random.gauss(0, 0.05)
+    util = max(0.0, min(1.0, util))
+    next_block = round(_gf_next_block_estimate(base_fee, util), 2)
+
+    # ── Total fees (base + priority) ─────────────────────────────────────────
+    TRANSFER_GAS = 21_000
+    t_slow = round(base_fee + p10, 2)
+    t_std  = round(base_fee + p50, 2)
+    t_fast = round(base_fee + p90, 2)
+
+    slow_usd = round(_gf_fee_usd(TRANSFER_GAS, t_slow, eth_price), 4)
+    std_usd  = round(_gf_fee_usd(TRANSFER_GAS, t_std,  eth_price), 4)
+    fast_usd = round(_gf_fee_usd(TRANSFER_GAS, t_fast, eth_price), 4)
+
+    # ── Spike detection (z-score vs 24h window) ───────────────────────────────
+    window_24h = hist_fees[-24:]
+    zs    = round(_gf_zscore(base_fee, window_24h), 3)
+    label = _gf_spike_label(zs)
+
+    # percentile rank
+    below = sum(1 for x in window_24h if x < base_fee)
+    pct_rank = round(below / max(len(window_24h), 1) * 100, 1)
+
+    # ── Build hourly history_7d (downsample to 7d daily snapshots) ───────────
+    today = datetime.datetime.utcnow()
+    history_7d = []
+    for i in range(7):
+        day_idx = i * 24
+        fee_val = hist_fees[min(day_idx, len(hist_fees) - 1)]
+        ma_val  = ma24[min(day_idx, len(ma24) - 1)]
+        ts = (today - datetime.timedelta(days=6 - i)).strftime("%Y-%m-%dT%H:00:00")
+        history_7d.append({
+            "timestamp":    ts,
+            "base_fee_gwei": round(fee_val, 2),
+            "ma_gwei":       round(ma_val, 2),
+        })
+
+    # ── Description ──────────────────────────────────────────────────────────
+    label_display = label.capitalize()
+    desc = (
+        f"{label_display}: base fee {base_fee:.1f} Gwei — "
+        f"{trend_dir} trend, z-score {zs:.2f}"
+    )
+
+    return {
+        "current": {
+            "base_fee_gwei":       round(base_fee, 2),
+            "priority_slow_gwei":  p10,
+            "priority_std_gwei":   p50,
+            "priority_fast_gwei":  p90,
+            "next_block_gwei":     next_block,
+            "total_slow_gwei":     t_slow,
+            "total_std_gwei":      t_std,
+            "total_fast_gwei":     t_fast,
+            "total_slow_usd":      slow_usd,
+            "total_std_usd":       std_usd,
+            "total_fast_usd":      fast_usd,
+        },
+        "spike": {
+            "zscore":     zs,
+            "label":      label,
+            "threshold":  2.0,
+            "percentile": pct_rank,
+        },
+        "trend": {
+            "direction":           trend_dir,
+            "slope_gwei_per_hour": slope_ph,
+            "ma_24h_gwei":         round(ma24[-1], 2),
+            "ma_7d_gwei":          round(ma168[-1], 2),
+        },
+        "history_7d": history_7d,
+        "description": desc,
+    }
+
 async def compute_layer2_metrics() -> dict:
     """
     Layer 2 Metrics Aggregator — TVL, bridge flows, tx counts, gas savings,
@@ -6712,142 +6852,7 @@ async def compute_layer2_metrics() -> dict:
             "label":   momentum_label,
             "leader":  leader,
             "laggard": laggard,
-        "description": desc,
-    }
-
-
-    import math
-
-    # ── Attempt live data from Etherscan gas oracle ─────────────────────────
-    base_fee  = 0.0
-    eth_price = 0.0
-    fetch_ok  = False
-
-    try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            resp = await client.get(
-                "https://api.etherscan.io/api?module=gastracker&action=gasoracle",
-                headers={"Accept": "application/json"},
-            )
-            if resp.status_code == 200:
-                result = resp.json().get("result", {})
-                if isinstance(result, dict) and "suggestBaseFee" in result:
-                    base_fee  = float(result.get("suggestBaseFee", 0))
-                    eth_price = float(result.get("UsdPrice", 3000))
-                    fetch_ok  = True
-    except Exception:
-        pass
-
-    # ── Mock / fallback ──────────────────────────────────────────────────────
-    if not fetch_ok or base_fee <= 0:
-        base_fee  = 42.5
-        eth_price = 3_200.0
-
-    # ── Build 7-day hourly history (168 points) ──────────────────────────────
-    random.seed(7)
-    hist_fees = []
-    f = base_fee * 0.85
-    for _ in range(168):
-        f += random.gauss(0, 1.5)
-        f = max(5.0, min(200.0, f))
-        hist_fees.append(round(f, 2))
-    hist_fees[-1] = base_fee   # anchor last point to current
-
-    ma24   = _gf_moving_average(hist_fees, 24)
-    ma168  = _gf_moving_average(hist_fees, 168)
-
-    # ── Trend ────────────────────────────────────────────────────────────────
-    trend_dir   = _gf_base_fee_trend(hist_fees[-24:])
-    slope_ph    = 0.0
-    if len(hist_fees) >= 2:
-        recent = hist_fees[-6:]
-        n = len(recent)
-        xs = list(range(n))
-        mx_ = sum(xs) / n
-        my_ = sum(recent) / n
-        num = sum((x - mx_) * (y - my_) for x, y in zip(xs, recent))
-        den = sum((x - mx_) ** 2 for x in xs) or 1.0
-        slope_ph = round(num / den, 3)
-
-    # ── Priority fee percentiles (simulated recent block data) ───────────────
-    random.seed(13)
-    priority_samples = [max(0.1, random.lognormvariate(0.7, 0.6)) for _ in range(200)]
-    p10 = round(_gf_priority_percentile(priority_samples, 10), 2)
-    p50 = round(_gf_priority_percentile(priority_samples, 50), 2)
-    p90 = round(_gf_priority_percentile(priority_samples, 90), 2)
-
-    # ── Next-block estimate (assume avg 65% utilization + noise) ─────────────
-    util = 0.65 + random.gauss(0, 0.05)
-    util = max(0.0, min(1.0, util))
-    next_block = round(_gf_next_block_estimate(base_fee, util), 2)
-
-    # ── Total fees (base + priority) ─────────────────────────────────────────
-    TRANSFER_GAS = 21_000
-    t_slow = round(base_fee + p10, 2)
-    t_std  = round(base_fee + p50, 2)
-    t_fast = round(base_fee + p90, 2)
-
-    slow_usd = round(_gf_fee_usd(TRANSFER_GAS, t_slow, eth_price), 4)
-    std_usd  = round(_gf_fee_usd(TRANSFER_GAS, t_std,  eth_price), 4)
-    fast_usd = round(_gf_fee_usd(TRANSFER_GAS, t_fast, eth_price), 4)
-
-    # ── Spike detection (z-score vs 24h window) ───────────────────────────────
-    window_24h = hist_fees[-24:]
-    zs    = round(_gf_zscore(base_fee, window_24h), 3)
-    label = _gf_spike_label(zs)
-
-    # percentile rank
-    below = sum(1 for x in window_24h if x < base_fee)
-    pct_rank = round(below / max(len(window_24h), 1) * 100, 1)
-
-    # ── Build hourly history_7d (downsample to 7d daily snapshots) ───────────
-    today = datetime.datetime.utcnow()
-    history_7d = []
-    for i in range(7):
-        day_idx = i * 24
-        fee_val = hist_fees[min(day_idx, len(hist_fees) - 1)]
-        ma_val  = ma24[min(day_idx, len(ma24) - 1)]
-        ts = (today - datetime.timedelta(days=6 - i)).strftime("%Y-%m-%dT%H:00:00")
-        history_7d.append({
-            "timestamp":    ts,
-            "base_fee_gwei": round(fee_val, 2),
-            "ma_gwei":       round(ma_val, 2),
-        })
-
-    # ── Description ──────────────────────────────────────────────────────────
-    label_display = label.capitalize()
-    desc = (
-        f"{label_display}: base fee {base_fee:.1f} Gwei — "
-        f"{trend_dir} trend, z-score {zs:.2f}"
-    )
-
-    return {
-        "current": {
-            "base_fee_gwei":       round(base_fee, 2),
-            "priority_slow_gwei":  p10,
-            "priority_std_gwei":   p50,
-            "priority_fast_gwei":  p90,
-            "next_block_gwei":     next_block,
-            "total_slow_gwei":     t_slow,
-            "total_std_gwei":      t_std,
-            "total_fast_gwei":     t_fast,
-            "total_slow_usd":      slow_usd,
-            "total_std_usd":       std_usd,
-            "total_fast_usd":      fast_usd,
         },
-        "spike": {
-            "zscore":     zs,
-            "label":      label,
-            "threshold":  2.0,
-            "percentile": pct_rank,
-        },
-        "trend": {
-            "direction":           trend_dir,
-            "slope_gwei_per_hour": slope_ph,
-            "ma_24h_gwei":         round(ma24[-1], 2),
-            "ma_7d_gwei":          round(ma168[-1], 2),
-        },
-        "history_7d": history_7d,
         "description": desc,
     }
 
