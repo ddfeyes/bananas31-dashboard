@@ -2502,6 +2502,8 @@ async function refresh() {
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
+    // Batch 27: cross-exchange funding arb
+    await Promise.all([safe(renderCrossExchangeFundingArb)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2747,6 +2749,84 @@ async function renderTokenVelocityNvt() {
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
+// ── Cross-Exchange Funding Arb ────────────────────────────────────────────────
+async function renderCrossExchangeFundingArb() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/cross-exchange-funding-arb?symbol=${sym}`);
+  const el   = document.getElementById('cross-exchange-funding-arb-content');
+  const badge = document.getElementById('cross-exchange-funding-arb-badge');
+  if (!el) return;
+  if (!data) { setErr('cross-exchange-funding-arb-content'); return; }
+
+  const signal = data.arb_signal ?? 'neutral';
+  const sigCol = signal === 'exploit' ? 'var(--red)'
+               : signal === 'watch'   ? '#f59e0b'
+               : 'var(--muted)';
+  const sigIcon = signal === 'exploit' ? '⚡' : signal === 'watch' ? '👀' : '—';
+
+  if (badge) {
+    badge.textContent = `${sigIcon} ${signal.toUpperCase()}`;
+    badge.className = `card-badge ${signal === 'exploit' ? 'badge-red' : signal === 'watch' ? 'badge-yellow' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  const fmtRate = r => {
+    const pct = (r ?? 0) * 100;
+    const col = pct > 0.005 ? 'var(--red)' : pct < -0.005 ? 'var(--green)' : 'var(--muted)';
+    return `<b style="color:${col}">${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%</b>`;
+  };
+
+  const divBps = data.divergence_bps ?? 0;
+  const pctRank = data.percentile_rank ?? 0;
+  const carry = data.carry_cost_daily ?? 0;
+  const stddev = (data.stddev_30d ?? 0) * 10000;
+
+  // Divergence gauge (0–10 bps range typical)
+  const gaugeMax = Math.max(divBps * 2, 2);
+  const gaugePct = Math.min(divBps / gaugeMax * 100, 100).toFixed(1);
+
+  // 24h sparkline of divergence between binance and bybit
+  const hist = (data.history_24h || []).slice(-48);
+  let sparkline = '';
+  if (hist.length >= 2) {
+    const divVals = hist.map(h => Math.abs((h.binance ?? 0) - (h.bybit ?? 0)) * 10000);
+    const dMax = Math.max(...divVals, 0.001);
+    const W = 140, H = 22;
+    const pts = divVals.map((v, i) => {
+      const x = (i / (divVals.length - 1)) * W;
+      const y = H - (v / dMax) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    sparkline = `<div style="font-size:9px;color:var(--muted);margin-bottom:2px">BIN–BYB div (4h)</div>
+    <svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
+      <polyline points="${pts}" fill="none" stroke="${sigCol}" stroke-width="1.5" opacity="0.8"/>
+    </svg>`;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 10px;margin-bottom:4px">
+      <span>BIN: ${fmtRate(data.binance_rate)}</span>
+      <span>BYB: ${fmtRate(data.bybit_rate)}</span>
+      <span>OKX: ${fmtRate(data.okx_rate)}</span>
+      <span>BGT: ${fmtRate(data.bitget_rate)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="font-size:9px;color:var(--muted);width:32px">div</span>
+      <div style="flex:1;height:5px;background:var(--border);border-radius:3px">
+        <div style="width:${gaugePct}%;height:100%;background:${sigCol};border-radius:3px"></div>
+      </div>
+      <span style="font-size:9px;color:${sigCol};min-width:50px;text-align:right">${divBps.toFixed(2)} bps</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 10px;margin-bottom:4px">
+      <span>carry/day: <b style="color:var(--fg)">$${carry.toFixed(3)}</b>/10k</span>
+      <span>p-rank: <b style="color:var(--fg)">${pctRank.toFixed(0)}p</b></span>
+      <span>σ: <b style="color:var(--fg)">${stddev.toFixed(2)} bps</b></span>
+    </div>
+    ${sparkline}
+    ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+}
+
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };

@@ -8537,3 +8537,133 @@ async def compute_cross_chain_bridge_monitor() -> dict:
         "zscore":           float(zscore),
         "description":      desc,
     }
+
+
+# ── Cross-Exchange Funding Rate Arbitrage ─────────────────────────────────────
+
+async def compute_cross_exchange_funding_arb(symbol: str = None) -> Dict:
+    """
+    Cross-exchange funding rate arbitrage monitor.
+
+    Compares simulated funding rates across Binance, Bybit, OKX, and Bitget.
+    Uses a seeded random walk (seed=99) — fully deterministic, no external API calls.
+
+    Returns
+    -------
+    binance_rate, bybit_rate, okx_rate, bitget_rate
+        Current 8-hour funding rates (decimal; 0.0001 == 0.01%).
+    max_divergence
+        Max spread between any two exchanges (decimal).
+    divergence_bps
+        max_divergence expressed in basis points (1 bp = 0.0001).
+    carry_cost_daily
+        Daily carry cost per $10 000 position in USD
+        (avg |rate| × 3 payments/day × $10 000).
+    arb_signal
+        "exploit" — divergence > mean + 1σ of 30-day history.
+        "watch"   — divergence > mean + 0.5σ.
+        "neutral" — otherwise.
+    percentile_rank
+        Where current divergence sits within the simulated 30-day history (0–100).
+    history_24h
+        288 dicts (5-min intervals) each with keys:
+        timestamp, binance, bybit, okx, bitget.
+    stddev_30d
+        Standard deviation of the divergence time series over 30 days.
+    description
+        Human-readable summary of the current signal.
+    """
+    import random as _rand
+    import math as _math
+
+    _rand.seed(99)
+
+    # Typical funding rate base: 0.01 % per 8 h = 0.0001
+    _BASE = 0.0001
+    _EXCHANGES = ("binance", "bybit", "okx", "bitget")
+
+    N_30D = 30 * 24 * 12   # 8 640 points at 5-min resolution
+    N_24H = 24 * 12         # 288 points
+
+    # Build 30-day random-walk history for each exchange
+    rates_30d: Dict[str, list] = {ex: [] for ex in _EXCHANGES}
+    for ex in _EXCHANGES:
+        rate = _BASE
+        for _ in range(N_30D):
+            rate += _rand.gauss(0, 0.000005)
+            rate = max(-0.001, min(0.001, rate))
+            rates_30d[ex].append(rate)
+
+    # Current rates = last simulated point
+    binance_rate = rates_30d["binance"][-1]
+    bybit_rate   = rates_30d["bybit"][-1]
+    okx_rate     = rates_30d["okx"][-1]
+    bitget_rate  = rates_30d["bitget"][-1]
+    current_rates = [binance_rate, bybit_rate, okx_rate, bitget_rate]
+
+    # Divergence series over 30 days
+    divergence_30d = [
+        max(rates_30d[ex][i] for ex in _EXCHANGES)
+        - min(rates_30d[ex][i] for ex in _EXCHANGES)
+        for i in range(N_30D)
+    ]
+
+    max_divergence = max(current_rates) - min(current_rates)
+    divergence_bps = round(max_divergence * 10000, 4)
+
+    # 30-day statistics
+    mean_div = sum(divergence_30d) / len(divergence_30d)
+    variance = sum((x - mean_div) ** 2 for x in divergence_30d) / len(divergence_30d)
+    stddev_30d = _math.sqrt(variance)
+
+    # Percentile rank: fraction of 30d history below current divergence
+    below = sum(1 for d in divergence_30d if d < max_divergence)
+    percentile_rank = round(below / len(divergence_30d) * 100, 1)
+
+    # Signal classification
+    if max_divergence > mean_div + stddev_30d:
+        arb_signal = "exploit"
+    elif max_divergence > mean_div + 0.5 * stddev_30d:
+        arb_signal = "watch"
+    else:
+        arb_signal = "neutral"
+
+    # Carry cost: 3 payments per day (8-hour intervals), per $10 000
+    avg_abs_rate = sum(abs(r) for r in current_rates) / len(current_rates)
+    carry_cost_daily = round(avg_abs_rate * 3 * 10_000, 4)
+
+    # 24-hour history slice (last 288 points of the 30-day simulation)
+    history_24h = []
+    for i in range(N_24H):
+        idx = N_30D - N_24H + i
+        history_24h.append({
+            "timestamp": f"t-{N_24H - i}",
+            "binance":   round(rates_30d["binance"][idx], 8),
+            "bybit":     round(rates_30d["bybit"][idx], 8),
+            "okx":       round(rates_30d["okx"][idx], 8),
+            "bitget":    round(rates_30d["bitget"][idx], 8),
+        })
+
+    highest_ex = _EXCHANGES[current_rates.index(max(current_rates))]
+    lowest_ex  = _EXCHANGES[current_rates.index(min(current_rates))]
+    description = (
+        f"{arb_signal.upper()}: {highest_ex.capitalize()} "
+        f"{max(current_rates) * 100:+.4f}% vs {lowest_ex.capitalize()} "
+        f"{min(current_rates) * 100:+.4f}% "
+        f"({divergence_bps:.2f} bps, p{percentile_rank:.0f})"
+    )
+
+    return {
+        "binance_rate":     round(binance_rate, 8),
+        "bybit_rate":       round(bybit_rate, 8),
+        "okx_rate":         round(okx_rate, 8),
+        "bitget_rate":      round(bitget_rate, 8),
+        "max_divergence":   round(max_divergence, 8),
+        "divergence_bps":   divergence_bps,
+        "carry_cost_daily": carry_cost_daily,
+        "arb_signal":       arb_signal,
+        "percentile_rank":  percentile_rank,
+        "stddev_30d":       round(stddev_30d, 8),
+        "history_24h":      history_24h,
+        "description":      description,
+    }

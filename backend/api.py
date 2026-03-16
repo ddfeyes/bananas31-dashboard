@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_cross_chain_bridge_monitor,
+    compute_cross_exchange_funding_arb,
 )
 
 router = APIRouter(prefix="/api")
@@ -5326,4 +5327,13 @@ async def holder_distribution_endpoint():
 async def cross_chain_bridge_monitor_endpoint():
     """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
     data = await compute_cross_chain_bridge_monitor()
+    return JSONResponse(data)
+
+
+@router.get("/cross-exchange-funding-arb")
+async def cross_exchange_funding_arb_endpoint(
+    symbol: Optional[str] = None,
+):
+    """Cross-exchange funding rate arb: Binance/Bybit/OKX/Bitget divergence, carry cost, arb signal."""
+    data = await compute_cross_exchange_funding_arb(symbol=symbol)
     return JSONResponse(data)
