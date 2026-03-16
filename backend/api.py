@@ -646,6 +646,104 @@ async def realized_volatility_bands_endpoint(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/rv-iv")
+async def rv_iv_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=30, ge=5, le=200),
+):
+    """Realized volatility (30m, annualized) vs simulated implied volatility.
+
+    RV is computed from per-minute log-returns over ``window`` candles and
+    annualized to a percentage.  IV is simulated as a 1.3× markup over RV
+    (typical crypto vol-risk-premium) when no live options feed is available.
+    Returns RV/IV ratio — ratio < 1 means realized vol is calmer than implied.
+    """
+    import math
+    import time
+    from storage import get_recent_trades
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    _empty = {
+        "rv_30m": None,
+        "iv": None,
+        "iv_source": "simulated",
+        "rv_iv_ratio": None,
+        "regime": "insufficient_data",
+        "window": window,
+        "description": "Insufficient data",
+    }
+
+    fetch_seconds = (window + 2) * 60
+    since = time.time() - fetch_seconds
+    trades = await get_recent_trades(limit=50000, since=since, symbol=target)
+
+    if not trades or len(trades) < 3:
+        return {"status": "ok", "symbol": target, **_empty}
+
+    trades.sort(key=lambda t: t["ts"])
+
+    # Aggregate into 1-min candles (keep only close price)
+    candles: dict = {}
+    for t in trades:
+        p = float(t.get("price") or 0)
+        if p <= 0:
+            continue
+        bucket = int(t["ts"] // 60) * 60
+        candles[bucket] = p  # last price = close
+
+    sorted_closes = [v for _, v in sorted(candles.items())]
+
+    if len(sorted_closes) < 3:
+        return {"status": "ok", "symbol": target, **_empty}
+
+    subset = sorted_closes[-(window + 1):]
+    log_returns = []
+    for i in range(1, len(subset)):
+        if subset[i - 1] > 0 and subset[i] > 0:
+            log_returns.append(math.log(subset[i] / subset[i - 1]))
+
+    if len(log_returns) < 2:
+        return {"status": "ok", "symbol": target, **_empty}
+
+    n = len(log_returns)
+    mean_r = sum(log_returns) / n
+    variance = sum((r - mean_r) ** 2 for r in log_returns) / (n - 1)
+    rv_per_candle = math.sqrt(variance)
+
+    # Annualize: 365 * 24 * 60 minutes per year
+    MINUTES_PER_YEAR = 525600.0
+    rv_annualized = rv_per_candle * math.sqrt(MINUTES_PER_YEAR) * 100.0
+
+    rv_30m = round(rv_annualized, 4)
+
+    # Simulate IV as 1.3× RV (crypto vol-risk-premium heuristic)
+    iv = round(rv_30m * 1.3, 4)
+    rv_iv_ratio = round(rv_30m / iv, 4) if iv > 0 else None
+
+    if rv_iv_ratio is None:
+        regime = "insufficient_data"
+    elif rv_iv_ratio < 0.8:
+        regime = "rv_low"
+    elif rv_iv_ratio > 1.2:
+        regime = "rv_high"
+    else:
+        regime = "balanced"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "rv_30m": rv_30m,
+        "iv": iv,
+        "iv_source": "simulated",
+        "rv_iv_ratio": rv_iv_ratio,
+        "regime": regime,
+        "window": window,
+        "description": f"RV={rv_30m:.1f}% IV={iv:.1f}% ratio={rv_iv_ratio:.2f}",
+    }
+
+
 @router.get("/funding-arb")
 async def funding_arb_endpoint(
     symbol: Optional[str] = None,
