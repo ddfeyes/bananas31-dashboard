@@ -2523,6 +2523,8 @@ async function refresh() {
     await Promise.all([safe(renderOrderFlowToxicity)]);
     // Batch 30: liquidation cascade detector
     await Promise.all([safe(renderLiqCascadeDetector)]);
+    // Batch 31: options flow tracker
+    await Promise.all([safe(refreshOptionsFlowTracker)]);
   } finally {
     _refreshRunning = false;
   }
