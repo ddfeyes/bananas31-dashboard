@@ -3110,6 +3110,48 @@ async function renderMomentumDivergence() {
   `;
 }
 
+async function renderMarketMicrostructure() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('spread-analysis-content');
+  const badge = document.getElementById('spread-analysis-badge');
+  if (!el) return;
+  const data = await apiFetch(`/spread-analysis?symbol=${sym}`);
+  if (!data) { setErr('spread-analysis-content'); return; }
+
+  const quality = data.quality || 'unknown';
+  const badgeClass = quality === 'tight'  ? 'badge-green'
+                   : quality === 'normal' ? 'badge-blue'
+                   : quality === 'wide'   ? 'badge-red'
+                   : 'badge-blue';
+  if (badge) {
+    badge.textContent = quality;
+    badge.className = `card-badge ${badgeClass}`;
+    badge.style.display = '';
+  }
+
+  const fmtBps = v => v != null ? `${v.toFixed(2)} bps` : '—';
+  const fmtRatio = v => v != null ? `${(v * 100).toFixed(1)}%` : '—';
+  const rollColor = quality === 'tight' ? 'var(--green)'
+                  : quality === 'wide'  ? 'var(--red)'
+                  : 'var(--fg)';
+
+  el.innerHTML = `
+    <div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;">
+      <span style="color:var(--muted)">Roll spread</span>
+      <span style="color:${rollColor};font-weight:600">${fmtBps(data.roll_spread_bps)}</span>
+      <span style="color:var(--muted)">effective</span>
+      <span>${fmtBps(data.effective_spread_bps)}</span>
+      <span style="color:var(--muted)">quoted</span>
+      <span>${fmtBps(data.quoted_spread_bps)}</span>
+      <span style="color:var(--muted)">eff/quoted</span>
+      <span>${fmtRatio(data.effective_ratio)}</span>
+      <span style="color:var(--muted)">n trades</span>
+      <span>${data.n_trades ?? '—'}</span>
+    </div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -3200,6 +3242,8 @@ async function refresh() {
     await Promise.all([safe(renderOrderFlowToxicity)]);
     // Batch 15: momentum divergence
     await Promise.all([safe(renderMomentumDivergence)]);
+    // Batch 15: spread analysis
+    await Promise.all([safe(renderMarketMicrostructure)]);
   } finally {
     _refreshRunning = false;
   }

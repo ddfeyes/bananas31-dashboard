@@ -5360,3 +5360,368 @@ async def compute_momentum_divergence(
         "bucket_seconds": bucket_seconds,
         "n_events": len(events),
     }
+
+async def compute_spread_analysis(
+    symbol: str = None,
+    window_seconds: int = 300,
+) -> Dict:
+    """
+    Bid-ask spread estimator + effective spread using tick data (Roll model).
+
+    Roll (1984) model:
+      - Compute first-order serial covariance of consecutive trade price changes.
+      - If cov < 0:  roll_spread = 2 * sqrt(-cov)  (price units)
+      - Else:        roll_spread = 0
+
+    Effective spread:
+      - For each trade: 2 * |trade_price - mid_price|
+      - Averaged across all trades in window
+
+    Quoted spread ratio:
+      - effective_spread_bps / quoted_spread_bps
+
+    Quality:
+      tight   < 5 bps roll spread
+      normal  < 20 bps
+      wide    >= 20 bps
+    """
+    import math as _math
+    from storage import get_spread_stats
+
+    now = time.time()
+    since = now - window_seconds
+
+    trades, spread_stats, ob_rows = await asyncio.gather(
+        get_recent_trades(limit=10000, since=since, symbol=symbol),
+        get_spread_stats(symbol or "", window=window_seconds),
+        get_latest_orderbook(symbol=symbol, limit=1),
+    )
+
+    _empty: Dict = {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window_seconds,
+        "roll_spread": None,
+        "roll_spread_bps": None,
+        "effective_spread": None,
+        "effective_spread_bps": None,
+        "quoted_spread_bps": None,
+        "effective_ratio": None,
+        "mid_price": None,
+        "n_trades": 0,
+        "n_changes": 0,
+        "quality": "unknown",
+        "description": "Insufficient data",
+    }
+
+    if not trades:
+        return _empty
+
+    # Sort ascending by ts
+    trades_sorted = sorted(trades, key=lambda t: float(t.get("ts") or 0))
+    prices = [float(t.get("price") or 0) for t in trades_sorted if float(t.get("price") or 0) > 0]
+
+    if len(prices) < 3:
+        return {**_empty, "n_trades": len(prices)}
+
+    # ── mid price ─────────────────────────────────────────────────────────────
+    mid_price = None
+    if ob_rows:
+        mid_price = float(ob_rows[0].get("mid_price") or 0) or None
+    if not mid_price:
+        # Fallback: use bid/ask from spread_stats
+        bid = spread_stats.get("bid")
+        ask = spread_stats.get("ask")
+        if bid and ask:
+            mid_price = (float(bid) + float(ask)) / 2.0
+    if not mid_price:
+        # Last fallback: median of traded prices
+        mid_price = sorted(prices)[len(prices) // 2]
+
+    # ── Roll model ────────────────────────────────────────────────────────────
+    changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
+    n_ch = len(changes)
+
+    pairs = [(changes[i], changes[i - 1]) for i in range(1, n_ch)]
+    if pairs:
+        mean_a = sum(p[0] for p in pairs) / len(pairs)
+        mean_b = sum(p[1] for p in pairs) / len(pairs)
+        cov = sum((a - mean_a) * (b - mean_b) for a, b in pairs) / len(pairs)
+        roll_spread_price = 2.0 * _math.sqrt(-cov) if cov < 0 else 0.0
+    else:
+        roll_spread_price = 0.0
+
+    # ── Effective spread ──────────────────────────────────────────────────────
+    eff_values = [2.0 * abs(p - mid_price) for p in prices]
+    eff_spread_price = sum(eff_values) / len(eff_values)
+
+    # ── bps conversions ───────────────────────────────────────────────────────
+    def _to_bps(spread_p: float) -> float | None:
+        if mid_price and mid_price > 0 and spread_p >= 0:
+            return round(spread_p / mid_price * 10_000, 4)
+        return None
+
+    roll_bps = _to_bps(roll_spread_price)
+    eff_bps = _to_bps(eff_spread_price)
+    quoted_bps = float(spread_stats.get("current_bps") or 0) or None
+
+    # ── Effective ratio ───────────────────────────────────────────────────────
+    eff_ratio: float | None = None
+    if eff_bps is not None and quoted_bps and quoted_bps > 0:
+        eff_ratio = round(eff_bps / quoted_bps, 4)
+
+    # ── Quality label ─────────────────────────────────────────────────────────
+    if roll_bps is None:
+        quality = "unknown"
+    elif roll_bps < 5:
+        quality = "tight"
+    elif roll_bps < 20:
+        quality = "normal"
+    else:
+        quality = "wide"
+
+    # ── Description ───────────────────────────────────────────────────────────
+    if roll_bps is not None and eff_bps is not None:
+        ratio_str = f"{int(eff_ratio * 100)}%" if eff_ratio is not None else "n/a"
+        description = (
+            f"Effective spread {ratio_str} of quoted spread — {quality} market"
+        )
+    else:
+        description = f"Roll spread: {quality}"
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window_seconds,
+        "roll_spread": round(roll_spread_price, 10),
+        "roll_spread_bps": roll_bps,
+        "effective_spread": round(eff_spread_price, 10),
+        "effective_spread_bps": eff_bps,
+        "quoted_spread_bps": round(quoted_bps, 4) if quoted_bps else None,
+        "effective_ratio": eff_ratio,
+        "mid_price": round(mid_price, 10) if mid_price else None,
+        "n_trades": len(prices),
+        "n_changes": n_ch,
+        "quality": quality,
+        "description": description,
+    }
+
+
+# ── Options Skew (synthetic from return distribution moments) ─────────────────
+
+_SKEW_WINDOWS = (
+    ("5m",  300),
+    ("15m", 900),
+    ("1h",  3600),
+    ("4h",  14400),
+)
+_SKEW_RR_SCALE       = 0.1
+_SKEW_FLY_SCALE      = 0.05
+_SKEW_HISTORY_WINDOW = 86400
+_SKEW_THRESHOLD      = 0.0005
+
+
+def _skew_log_returns(prices: List[float]) -> List[float]:
+    import math as _m
+    rets = []
+    for i in range(1, len(prices)):
+        if prices[i - 1] > 0 and prices[i] > 0:
+            rets.append(_m.log(prices[i] / prices[i - 1]))
+        else:
+            rets.append(0.0)
+    return rets
+
+
+def _skew_moments(returns: List[float]) -> dict:
+    import math as _m
+    n = len(returns)
+    if n < 4:
+        return {"mean": 0.0, "variance": 0.0, "std": 0.0,
+                "skewness": 0.0, "excess_kurtosis": 0.0, "n": n}
+    mean = sum(returns) / n
+    devs = [r - mean for r in returns]
+    variance = sum(d ** 2 for d in devs) / (n - 1)
+    std = _m.sqrt(variance) if variance > 0 else 0.0
+    if std == 0:
+        return {"mean": mean, "variance": 0.0, "std": 0.0,
+                "skewness": 0.0, "excess_kurtosis": 0.0, "n": n}
+    skewness = (
+        (n / ((n - 1) * (n - 2)))
+        * sum(d ** 3 for d in devs)
+        / (std ** 3)
+    )
+    excess_kurtosis = (
+        (n * (n + 1) / ((n - 1) * (n - 2) * (n - 3)))
+        * sum(d ** 4 for d in devs)
+        / (std ** 4)
+        - 3 * (n - 1) ** 2 / ((n - 2) * (n - 3))
+    )
+    return {
+        "mean": round(mean, 8),
+        "variance": round(variance, 10),
+        "std": round(std, 8),
+        "skewness": round(skewness, 6),
+        "excess_kurtosis": round(excess_kurtosis, 6),
+        "n": n,
+    }
+
+
+def _skew_rr(skewness: float, std: float) -> float:
+    return round(skewness * std * _SKEW_RR_SCALE, 8)
+
+
+def _skew_fly(excess_kurtosis: float, variance: float) -> float:
+    return round(max(0.0, excess_kurtosis * variance * _SKEW_FLY_SCALE), 8)
+
+
+def _skew_direction(rr: float) -> str:
+    if rr < -_SKEW_THRESHOLD:
+        return "put_heavy"
+    if rr > _SKEW_THRESHOLD:
+        return "call_heavy"
+    return "neutral"
+
+
+def _skew_percentile(value: float, history: List[float]) -> float:
+    if not history:
+        return 50.0
+    n = len(history)
+    below = sum(1 for h in history if h < value)
+    return round(below / n * 100, 2)
+
+
+def _skew_term_slope(rr_values: List[float]) -> str:
+    if len(rr_values) < 2:
+        return "flat"
+    diff = rr_values[-1] - rr_values[0]
+    if diff > 0.0005:
+        return "normal"
+    if diff < -0.0005:
+        return "inverted"
+    return "flat"
+
+
+async def compute_options_skew(
+    symbol: str,
+    history_window: int = _SKEW_HISTORY_WINDOW,
+) -> dict:
+    """
+    Synthetic options skew from return-distribution moments.
+
+    For each window (5m / 15m / 1h / 4h):
+      - ATM IV  ≈ realised vol (annualised log-return std)
+      - RR_25d  ≈ skewness * std * scale   (negative → put-heavy)
+      - Fly_25d ≈ max(0, excess_kurtosis * variance * scale)
+
+    Historical percentile for RR and Fly derived from 24h bucket history.
+    """
+    import math as _m
+    from storage import get_recent_trades
+
+    now = time.time()
+
+    async def _window_moments(label: str, secs: int) -> dict:
+        trades = await get_recent_trades(
+            limit=10000, since=now - secs, symbol=symbol
+        )
+        prices = sorted(
+            [float(t.get("price", 0)) for t in trades if t.get("price", 0) > 0]
+        )
+        if not prices:
+            return {"window": label, "rr": 0.0, "fly": 0.0, "atm_iv": 0.0,
+                    "skewness": 0.0, "excess_kurtosis": 0.0}
+        rets = _skew_log_returns(prices)
+        m = _skew_moments(rets)
+        rr  = _skew_rr(m["skewness"], m["std"])
+        fly = _skew_fly(m["excess_kurtosis"], m["variance"])
+        n_minutes = max(1, secs // 60)
+        ann_factor = _m.sqrt(525600 / max(1, len(rets) / n_minutes))
+        atm_iv = round(m["std"] * ann_factor, 6)
+        return {
+            "window": label, "rr": rr, "fly": fly, "atm_iv": atm_iv,
+            "skewness": m["skewness"], "excess_kurtosis": m["excess_kurtosis"],
+        }
+
+    window_results = await asyncio.gather(
+        *[_window_moments(lbl, secs) for lbl, secs in _SKEW_WINDOWS],
+        return_exceptions=True,
+    )
+    moments: List[dict] = [r for r in window_results if isinstance(r, dict)]
+
+    if not moments:
+        return {
+            "status": "ok", "symbol": symbol,
+            "windows": [w for w, _ in _SKEW_WINDOWS],
+            "rr_25d": {}, "fly_25d": {}, "atm_iv": {},
+            "skewness": {}, "excess_kurtosis": {},
+            "rr_percentile": 50.0, "fly_percentile": 50.0,
+            "skew_direction": "neutral",
+            "term_structure": [], "term_slope": "flat",
+            "description": "No data",
+        }
+
+    rr_25d:        Dict[str, float] = {}
+    fly_25d:       Dict[str, float] = {}
+    atm_iv_d:      Dict[str, float] = {}
+    skewness_d:    Dict[str, float] = {}
+    excess_kurt_d: Dict[str, float] = {}
+    term_structure = []
+
+    for m in moments:
+        lbl = m["window"]
+        rr_25d[lbl]        = m["rr"]
+        fly_25d[lbl]       = m["fly"]
+        atm_iv_d[lbl]      = m["atm_iv"]
+        skewness_d[lbl]    = m["skewness"]
+        excess_kurt_d[lbl] = m["excess_kurtosis"]
+        term_structure.append({"window": lbl, "rr": m["rr"],
+                                "fly": m["fly"], "atm_iv": m["atm_iv"]})
+
+    rr_now  = rr_25d.get("1h",  moments[0]["rr"])
+    fly_now = fly_25d.get("1h", moments[0]["fly"])
+
+    # History for percentile ranking
+    hist_trades = await get_recent_trades(
+        limit=20000, since=now - history_window, symbol=symbol
+    )
+    hist_prices = sorted(
+        [float(t.get("price", 0)) for t in hist_trades if t.get("price", 0) > 0]
+    )
+    rr_history:  List[float] = []
+    fly_history: List[float] = []
+    bucket_size = 3600
+    n_buckets   = max(1, history_window // bucket_size)
+    chunk       = max(2, len(hist_prices) // n_buckets)
+    for i in range(0, len(hist_prices) - chunk + 1, chunk):
+        cp = hist_prices[i : i + chunk]
+        m2 = _skew_moments(_skew_log_returns(cp))
+        rr_history.append(_skew_rr(m2["skewness"], m2["std"]))
+        fly_history.append(_skew_fly(m2["excess_kurtosis"], m2["variance"]))
+
+    rr_pct  = _skew_percentile(rr_now,  rr_history)
+    fly_pct = _skew_percentile(fly_now, fly_history)
+
+    direction = _skew_direction(rr_now)
+    slope     = _skew_term_slope([m["rr"] for m in moments])
+
+    desc = (
+        f"{direction.replace('_', ' ').title()} skew: "
+        f"RR at {rr_pct:.1f}th pct, Fly at {fly_pct:.1f}th pct"
+    )
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "windows": [m["window"] for m in moments],
+        "rr_25d":          rr_25d,
+        "fly_25d":         fly_25d,
+        "atm_iv":          atm_iv_d,
+        "skewness":        skewness_d,
+        "excess_kurtosis": excess_kurt_d,
+        "rr_percentile":   rr_pct,
+        "fly_percentile":  fly_pct,
+        "skew_direction":  direction,
+        "term_structure":  term_structure,
+        "term_slope":      slope,
+        "description":     desc,
+    }
