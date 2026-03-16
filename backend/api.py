@@ -75,6 +75,7 @@ from metrics import (
     compute_order_flow_toxicity,
     compute_volatility_regime_detector,
     compute_smart_money_index,
+    compute_cross_correlation_signal,
 )
 
 router = APIRouter(prefix="/api")
