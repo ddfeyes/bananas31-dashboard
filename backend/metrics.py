@@ -11358,3 +11358,9 @@ async def compute_market_regime_v2(symbol: str = None) -> dict:
     # Cache the result
     _market_regime_v2_cache[sym_key] = {"ts": now, "data": result}
     return result
+
+
+# ── Alias for compatibility ───────────────────────────────────────────────────
+async def compute_market_regime(symbol: str = None) -> dict:
+    """Alias to compute_market_regime_v2 for compatibility with existing callers."""
+    return await compute_market_regime_v2(symbol=symbol)
