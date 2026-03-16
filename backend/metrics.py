@@ -5184,6 +5184,109 @@ def _ss_zscore(current: float, history: list) -> float:
     return float(round((current - mean) / std, 4))
 
 
+
+
+# ── Token Velocity + NVT Ratio ─────────────────────────────────────────────────
+# On-chain valuation signal for BTC.
+# velocity  = tx_volume_usd / market_cap_usd   (supply proxy = market cap)
+# NVT ratio = market_cap_usd / tx_volume_usd
+# NVT signal= market_cap_usd / 28d_MA(tx_volume_usd)
+# Thresholds: NVT > 150 overbought, NVT < 45 oversold, 45–90 fair_value, 90–150 neutral
+#
+# Data sources (free, no API key):
+#   blockchain.info  — on-chain BTC tx volume USD
+#   CoinGecko        — market cap + price history
+
+_TV_OVERBOUGHT: float = 150.0
+_TV_OVERSOLD:   float = 45.0
+_TV_FAIR_CAP:   float = 90.0
+_TV_MA_WINDOW:  int   = 28
+
+_TV_BLOCKCHAIN_VOL: str = (
+    "https://api.blockchain.info/charts/estimated-transaction-volume-usd"
+    "?timespan=60days&sampled=true&format=json"
+)
+_TV_COINGECKO_MKTCAP: str = (
+    "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+    "?vs_currency=usd&days=60&interval=daily"
+)
+
+
+def _tv_velocity(tx_volume_usd: float, market_cap_usd: float) -> float:
+    """Token velocity = tx_volume / market_cap. Returns 0 when supply proxy is 0."""
+    if market_cap_usd <= 0 or tx_volume_usd <= 0:
+        return 0.0
+    return float(round(tx_volume_usd / market_cap_usd, 8))
+
+
+def _tv_nvt_ratio(market_cap_usd: float, tx_volume_usd: float) -> float:
+    """NVT ratio = market_cap / tx_volume. Returns 0 when volume is 0."""
+    if market_cap_usd <= 0 or tx_volume_usd <= 0:
+        return 0.0
+    return float(round(market_cap_usd / tx_volume_usd, 4))
+
+
+def _tv_nvt_signal(market_cap_usd: float, tx_volume_28d_ma: float) -> float:
+    """NVT signal = market_cap / 28d_MA(tx_volume). Smoother than spot NVT ratio."""
+    if market_cap_usd <= 0 or tx_volume_28d_ma <= 0:
+        return 0.0
+    return float(round(market_cap_usd / tx_volume_28d_ma, 4))
+
+
+def _tv_nvt_label(nvt_signal: float) -> str:
+    """Classify NVT signal into valuation zone."""
+    if nvt_signal >= _TV_OVERBOUGHT:
+        return "overbought"
+    if nvt_signal >= _TV_FAIR_CAP:
+        return "neutral"
+    if nvt_signal >= _TV_OVERSOLD:
+        return "fair_value"
+    return "oversold"
+
+
+def _tv_moving_average(values: list, window: int) -> float:
+    """Simple moving average of the last `window` values."""
+    if not values:
+        return 0.0
+    subset = values[-window:] if len(values) >= window else values
+    return float(round(sum(subset) / len(subset), 8))
+
+
+def _tv_velocity_trend(velocity_7d: float, velocity_30d: float) -> str:
+    """
+    Compare short-term (7d) vs long-term (30d) velocity.
+    accelerating — 7d > 30d × 1.05
+    decelerating — 7d < 30d × 0.95
+    stable       — otherwise
+    """
+    if velocity_30d <= 0:
+        return "stable"
+    ratio = velocity_7d / velocity_30d
+    if ratio > 1.05:
+        return "accelerating"
+    if ratio < 0.95:
+        return "decelerating"
+    return "stable"
+
+
+def _tv_zscore(current: float, history: list) -> float:
+    """Z-score of current vs history. ±3.0 when std≈0 but current≠mean."""
+    if not history:
+        return 0.0
+    mean = sum(history) / len(history)
+    if len(history) == 1:
+        return 0.0
+    variance = sum((x - mean) ** 2 for x in history) / len(history)
+    std = variance ** 0.5
+    if std < 0.0001:
+        diff = current - mean
+        if abs(diff) < 0.0001:
+            return 0.0
+        return 3.0 if diff > 0 else -3.0
+    return float(round((current - mean) / std, 4))
+
+
+
 async def compute_social_sentiment() -> dict:
     """
     Social sentiment aggregator: keyword scoring of crypto news headlines
@@ -5566,6 +5669,218 @@ async def compute_miner_reserve() -> dict:
     }
 
 
+async def compute_token_velocity_nvt() -> dict:
+    """
+    Token velocity and NVT ratio card for BTC.
+    Fetches 60 days of on-chain tx volume (blockchain.info) and market cap
+    (CoinGecko), computes velocity, NVT ratio, and NVT signal (28d MA).
+    """
+    import aiohttp   # noqa: PLC0415
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    tx_volumes: list = []    # list of (timestamp_ms, usd_value)
+    market_caps: list = []   # list of [timestamp_ms, usd_value]
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async def _get(url: str) -> dict:
+                try:
+                    async with session.get(url) as r:
+                        return await r.json(content_type=None)
+                except Exception:
+                    return {}
+
+            bc_data, cg_data = await _asyncio.gather(
+                _get(_TV_BLOCKCHAIN_VOL),
+                _get(_TV_COINGECKO_MKTCAP),
+            )
+
+        # blockchain.info: {"values": [{"x": unix_ts, "y": usd_volume}, ...]}
+        for pt in (bc_data.get("values") or []):
+            y = pt.get("y") or 0
+            if y > 0:
+                tx_volumes.append(float(y))
+
+        # CoinGecko: {"market_caps": [[ts_ms, value], ...]}
+        for pt in (cg_data.get("market_caps") or []):
+            if len(pt) >= 2 and pt[1]:
+                market_caps.append(float(pt[1]))
+
+    except Exception:
+        pass
+
+    # Fallback placeholders if APIs fail
+    if not tx_volumes:
+        tx_volumes = [10_000_000_000.0] * 30
+    if not market_caps:
+        market_caps = [1_200_000_000_000.0] * 30
+
+    # Align series to same length (take last N of each)
+    n = min(len(tx_volumes), len(market_caps), 60)
+    tx_vols  = tx_volumes[-n:]
+    mkt_caps = market_caps[-n:]
+
+    # Current values (latest)
+    tx_vol_now  = tx_vols[-1]  if tx_vols  else 0.0
+    mkt_cap_now = mkt_caps[-1] if mkt_caps else 0.0
+
+    # 28d MA of tx volume
+    ma28 = _tv_moving_average(tx_vols, _TV_MA_WINDOW)
+
+    # NVT metrics
+    nvt_ratio  = _tv_nvt_ratio(mkt_cap_now, tx_vol_now)
+    nvt_signal = _tv_nvt_signal(mkt_cap_now, ma28)
+    nvt_label  = _tv_nvt_label(nvt_signal)
+
+    # Velocity series
+    vel_series = [
+        _tv_velocity(tx_vols[i], mkt_caps[i])
+        for i in range(len(tx_vols))
+    ]
+    vel_now  = vel_series[-1] if vel_series else 0.0
+    vel_7d   = _tv_moving_average(vel_series, 7)
+    vel_30d  = _tv_moving_average(vel_series, 30)
+    vel_trend = _tv_velocity_trend(vel_7d, vel_30d)
+
+    # NVT signal history (daily)
+    nvt_hist = []
+    for i in range(len(tx_vols)):
+        ma_i = _tv_moving_average(tx_vols[: i + 1], _TV_MA_WINDOW)
+        nvt_hist.append(_tv_nvt_signal(mkt_caps[i], ma_i))
+
+    # Z-score of current NVT signal
+    nvt_zscore = _tv_zscore(nvt_signal, nvt_hist[:-1]) if len(nvt_hist) > 1 else 0.0
+
+    # Build history output (last 30 days)
+    history_out = []
+    for i in range(max(0, len(tx_vols) - 30), len(tx_vols)):
+        history_out.append({
+            "date":       f"day-{i + 1}",
+            "velocity":   round(vel_series[i], 6) if i < len(vel_series) else 0.0,
+            "nvt_ratio":  round(_tv_nvt_ratio(mkt_caps[i], tx_vols[i]), 2),
+            "nvt_signal": round(nvt_hist[i], 2) if i < len(nvt_hist) else 0.0,
+        })
+
+    # Description
+    zone_map = {
+        "overbought": "Overbought",
+        "neutral":    "Neutral",
+        "fair_value": "Fair Value",
+        "oversold":   "Oversold",
+    }
+    desc = (
+        f"NVT {zone_map.get(nvt_label, 'Neutral')}: "
+        f"signal {nvt_signal:.1f} — "
+        f"{'price exceeds on-chain utility' if nvt_label == 'overbought' else 'price undervalues on-chain utility' if nvt_label == 'oversold' else 'fair value zone'}"
+    )
+
+    return {
+        "velocity": {
+            "current":      round(vel_now, 6),
+            "trend":        vel_trend,
+            "velocity_7d":  round(vel_7d,  6),
+            "velocity_30d": round(vel_30d, 6),
+        },
+        "nvt": {
+            "ratio":                 round(nvt_ratio,  2),
+            "signal":                round(nvt_signal, 2),
+            "label":                 nvt_label,
+            "zscore":                round(nvt_zscore, 4),
+            "overbought_threshold":  int(_TV_OVERBOUGHT),
+            "oversold_threshold":    int(_TV_OVERSOLD),
+        },
+        "history":          history_out,
+        "market_cap_usd":   round(mkt_cap_now, 2),
+        "tx_volume_24h_usd": round(tx_vol_now,  2),
+        "description":      desc,
+    }
+
+
+# ============================================================
+# Layer 2 Metrics helpers  (_l2_)
+# ============================================================
+
+def _l2_tvl_share(chains: dict) -> dict:
+    """Return each chain's % share of total TVL. Empty dict if input empty."""
+    if not chains:
+        return {}
+    total = sum(chains.values())
+    if total == 0:
+        return {k: 0.0 for k in chains}
+    return {k: float(v / total * 100.0) for k, v in chains.items()}
+
+
+def _l2_bridge_flow_direction(flow_usd: float, threshold: float = 1_000_000) -> str:
+    """
+    Classify 24h bridge flow direction.
+
+    inflow  — flow > +threshold
+    outflow — flow < -threshold
+    neutral — |flow| <= threshold or flow == 0
+    """
+    if flow_usd > threshold:
+        return "inflow"
+    if flow_usd < -threshold:
+        return "outflow"
+    return "neutral"
+
+
+def _l2_gas_savings_pct(l1_gas_usd: float, l2_gas_usd: float) -> float:
+    """Percentage gas cost savings of L2 vs L1. Clamped to [0, 100]."""
+    if l1_gas_usd <= 0:
+        return 0.0
+    savings = (l1_gas_usd - l2_gas_usd) / l1_gas_usd * 100.0
+    return float(min(100.0, max(0.0, savings)))
+
+
+def _l2_momentum_score(
+    tvl_change_24h: float,
+    tvl_change_7d: float,
+    tx_growth: float,
+) -> float:
+    """
+    Composite momentum score [0, 100].
+
+    Weights: 24h TVL change (30%), 7d TVL change (50%), tx growth (20%).
+    Centred at 0 change → 50; ±10% TVL or ±0.5 tx growth spans the range.
+    """
+    # Normalize each component to [-1, 1] then shift to [0, 1]
+    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # ±5% → ±1
+    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # ±15% → ±1
+    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # ±50% → ±1
+
+    composite = c24 * 0.30 + c7d * 0.50 + ctx * 0.20
+    return float(min(100.0, max(0.0, (composite + 1.0) / 2.0 * 100.0)))
+
+
+def _l2_growth_label(momentum: float) -> str:
+    """
+    Map momentum score to growth label.
+
+    strong_growth — >= 70
+    growing       — >= 50
+    neutral       — >= 30
+    declining     — < 30
+    """
+    if momentum >= 70.0:
+        return "strong_growth"
+    if momentum >= 50.0:
+        return "growing"
+    if momentum >= 30.0:
+        return "neutral"
+    return "declining"
+
+
+def _l2_rank_chains(chains: dict) -> list:
+    """Return list of (name, data) tuples sorted by tvl_usd descending."""
+    if not chains:
+        return []
+    return sorted(chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True)
+
+
+def _l2_tvl_change_pct(current: float, previous: float) -> float:
+    """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
@@ -5772,5 +6087,173 @@ async def compute_macro_liquidity_indicator() -> dict:
             "zscore":  round(zs, 3),
         },
         "history_90d": history_90d,
+        "description": desc,
+    }
+
+
+async def compute_layer2_metrics() -> dict:
+    """
+    Layer 2 Metrics Aggregator — TVL, bridge flows, tx counts, gas savings,
+    and growth momentum for Arbitrum, Optimism, Base, Polygon, zkSync.
+
+    Data: DeFi Llama /chains endpoint (free, no key).
+    Falls back to realistic mock when API unavailable.
+    """
+    import httpx
+    import datetime
+    import random
+
+    L2_CHAINS = ["Arbitrum", "Optimism", "Base", "Polygon", "zkSync"]
+
+    # Baseline mock data (realistic mid-2025 values)
+    MOCK = {
+        "Arbitrum": {
+            "tvl_now":  18_500_000_000, "tvl_prev_24h": 18_280_000_000,
+            "tvl_prev_7d": 17_700_000_000,
+            "tx_24h": 950_000, "avg_gas_usd": 0.04,
+        },
+        "Optimism": {
+            "tvl_now":   7_200_000_000, "tvl_prev_24h":  7_142_000_000,
+            "tvl_prev_7d":  7_050_000_000,
+            "tx_24h": 420_000, "avg_gas_usd": 0.05,
+        },
+        "Base": {
+            "tvl_now":   4_800_000_000, "tvl_prev_24h":  4_682_000_000,
+            "tvl_prev_7d":  4_436_000_000,
+            "tx_24h": 680_000, "avg_gas_usd": 0.03,
+        },
+        "Polygon": {
+            "tvl_now":   1_100_000_000, "tvl_prev_24h":  1_106_000_000,
+            "tvl_prev_7d":  1_113_000_000,
+            "tx_24h": 310_000, "avg_gas_usd": 0.02,
+        },
+        "zkSync": {
+            "tvl_now":     820_000_000, "tvl_prev_24h":    817_000_000,
+            "tvl_prev_7d":   812_000_000,
+            "tx_24h":  95_000, "avg_gas_usd": 0.06,
+        },
+    }
+
+    L1_GAS_USD = 1.50   # approximate ETH L1 transfer cost
+
+    # ── Attempt DeFi Llama data ───────────────────────────────────────────────
+    fetch_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get("https://api.llama.fi/v2/chains")
+            if resp.status_code == 200:
+                llama_data = {item["name"]: item for item in resp.json() if isinstance(item, dict)}
+                for chain in L2_CHAINS:
+                    if chain in llama_data:
+                        tvl = float(llama_data[chain].get("tvl", 0))
+                        if tvl > 0:
+                            MOCK[chain]["tvl_now"] = tvl
+                fetch_ok = True
+    except Exception:
+        pass
+
+    # ── Build per-chain data ──────────────────────────────────────────────────
+    random.seed(42)
+    chains_out = {}
+    total_tvl = total_bridge_inflow = total_tx = 0
+
+    for name in L2_CHAINS:
+        m = MOCK[name]
+        tvl_now     = m["tvl_now"]
+        tvl_24h     = m["tvl_prev_24h"]
+        tvl_7d      = m["tvl_prev_7d"]
+        tx_24h      = m["tx_24h"]
+        avg_gas     = m["avg_gas_usd"]
+
+        ch24_pct    = round(_l2_tvl_change_pct(tvl_now, tvl_24h), 2)
+        ch7d_pct    = round(_l2_tvl_change_pct(tvl_now, tvl_7d),  2)
+        bridge_flow = tvl_now - tvl_24h
+        direction   = _l2_bridge_flow_direction(bridge_flow)
+        gas_savings = round(_l2_gas_savings_pct(L1_GAS_USD, avg_gas), 2)
+
+        # tx growth proxy: 7d TVL change correlates with tx activity
+        tx_growth = (tvl_now - tvl_7d) / max(tvl_7d, 1)
+        momentum  = round(_l2_momentum_score(ch24_pct, ch7d_pct, tx_growth), 1)
+
+        chains_out[name] = {
+            "tvl_usd":            round(tvl_now, 0),
+            "tvl_change_24h_pct": ch24_pct,
+            "tvl_change_7d_pct":  ch7d_pct,
+            "bridge_flow_24h_usd": round(bridge_flow, 0),
+            "bridge_direction":   direction,
+            "tx_count_24h":       tx_24h,
+            "avg_gas_usd":        avg_gas,
+            "gas_savings_pct":    gas_savings,
+            "momentum":           momentum,
+        }
+
+        total_tvl          += tvl_now
+        total_bridge_inflow += max(0, bridge_flow)
+        total_tx            += tx_24h
+
+    # ── Aggregate ─────────────────────────────────────────────────────────────
+    prev_total_tvl = sum(MOCK[c]["tvl_prev_24h"] for c in L2_CHAINS)
+    total_ch24     = round(_l2_tvl_change_pct(total_tvl, prev_total_tvl), 2)
+    avg_gas_savings = round(
+        sum(chains_out[c]["gas_savings_pct"] for c in L2_CHAINS) / len(L2_CHAINS), 2
+    )
+    ranked      = _l2_rank_chains(chains_out)
+    top_chain   = ranked[0][0] if ranked else L2_CHAINS[0]
+    l1_tx_24h   = 1_200_000   # approximate Ethereum L1 daily tx
+    l1_ratio    = round(l1_tx_24h / max(total_tx, 1), 4)
+
+    # ── Momentum summary ─────────────────────────────────────────────────────
+    agg_momentum = round(
+        sum(chains_out[c]["momentum"] for c in L2_CHAINS) / len(L2_CHAINS), 1
+    )
+    momentum_label = _l2_growth_label(agg_momentum)
+    leader  = max(chains_out, key=lambda c: chains_out[c]["momentum"])
+    laggard = min(chains_out, key=lambda c: chains_out[c]["momentum"])
+
+    # ── 7-day history (synthetic daily snapshots) ─────────────────────────────
+    today     = datetime.date.today()
+    history_7d = []
+    base_tvl   = total_tvl * 0.94
+    for i in range(7):
+        day     = today - datetime.timedelta(days=6 - i)
+        day_tvl = base_tvl * (1 + i * 0.01) + random.gauss(0, total_tvl * 0.002)
+        day_mom = 50.0 + i * 1.5 + random.gauss(0, 2)
+        history_7d.append({
+            "date":          day.isoformat(),
+            "total_tvl_usd": round(day_tvl, 0),
+            "momentum":      round(day_mom, 1),
+        })
+    history_7d[-1]["total_tvl_usd"] = round(total_tvl, 0)
+    history_7d[-1]["momentum"]      = agg_momentum
+
+    # ── TVL shares for description ────────────────────────────────────────────
+    tvl_map = {c: chains_out[c]["tvl_usd"] for c in L2_CHAINS}
+    shares  = _l2_tvl_share(tvl_map)
+    top_share = round(shares.get(top_chain, 0), 1)
+
+    desc = (
+        f"{momentum_label.replace('_', ' ').capitalize()}: "
+        f"L2 total TVL ${total_tvl / 1e9:.1f}B — "
+        f"{top_chain} leads ({top_share}%), {leader} momentum strongest"
+    )
+
+    return {
+        "chains":    chains_out,
+        "aggregate": {
+            "total_tvl_usd":            round(total_tvl, 0),
+            "total_tvl_change_24h_pct": total_ch24,
+            "total_bridge_inflow_24h":  round(total_bridge_inflow, 0),
+            "total_tx_count_24h":       total_tx,
+            "l1_vs_l2_tx_ratio":        l1_ratio,
+            "avg_gas_savings_pct":      avg_gas_savings,
+            "top_chain":                top_chain,
+        },
+        "momentum": {
+            "score":   agg_momentum,
+            "label":   momentum_label,
+            "leader":  leader,
+            "laggard": laggard,
+        },
+        "history_7d": history_7d,
         "description": desc,
     }

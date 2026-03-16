@@ -2833,6 +2833,8 @@ async function refresh() {
     await Promise.all([safe(renderMinerReserve)]);
     // Batch 24: macro liquidity indicator
     await Promise.all([safe(renderMacroLiquidity)]);
+    // Batch 24: token velocity + NVT
+    await Promise.all([safe(renderTokenVelocityNvt)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3067,6 +3069,126 @@ async function renderMacroLiquidity() {
       <span>${fmtT(m2.current_proxy_usd)}</span>
     </div>
     <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
+}
+
+// ── Token Velocity + NVT ──────────────────────────────────────────────────────
+async function renderTokenVelocityNvt() {
+  const el    = document.getElementById('token-velocity-nvt-content');
+  const badge = document.getElementById('token-velocity-nvt-badge');
+  if (!el) return;
+  const data = await apiFetch('/token-velocity-nvt');
+  if (!data) { setErr('token-velocity-nvt-content'); return; }
+
+  const vel    = data.velocity || {};
+  const nvt    = data.nvt      || {};
+  const hist   = data.history  || [];
+  const label  = nvt.label     || 'neutral';
+  const signal = nvt.signal    ?? 0;
+  const ratio  = nvt.ratio     ?? 0;
+  const zscore = nvt.zscore    ?? 0;
+  const obThr  = nvt.overbought_threshold ?? 150;
+  const osThr  = nvt.oversold_threshold   ?? 45;
+
+  const labelCls = label === 'overbought' ? 'badge-red'
+                 : label === 'oversold'   ? 'badge-green'
+                 : label === 'fair_value' ? 'badge-green'
+                 : 'badge-blue';
+  const labelTxt = label.replace('_', ' ').toUpperCase();
+  if (badge) {
+    badge.textContent = labelTxt;
+    badge.className   = `card-badge ${labelCls}`;
+    badge.style.display = '';
+  }
+
+  const gaugeMax  = 200;
+  const gaugePct  = Math.min(signal / gaugeMax * 100, 100).toFixed(1);
+  const gaugeCol  = signal >= obThr ? 'var(--red)'
+                  : signal <= osThr ? 'var(--green)'
+                  : signal <= 90    ? 'var(--green)'
+                  : 'var(--blue)';
+  const obPct  = (obThr / gaugeMax * 100).toFixed(1);
+  const osPct  = (osThr / gaugeMax * 100).toFixed(1);
+
+  const trendCol = vel.trend === 'accelerating' ? 'var(--green)'
+                 : vel.trend === 'decelerating' ? 'var(--red)'
+                 : 'var(--muted)';
+
+  const sparkbars = hist.slice(-14).map(h => {
+    const v   = h.nvt_signal ?? 0;
+    const col = v >= obThr ? 'var(--red)' : v <= osThr ? 'var(--green)' : 'var(--blue)';
+    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
+  }).join('');
+
+  const fmtB = v => {
+    if (v >= 1e12) return (v / 1e12).toFixed(2) + 'T';
+    if (v >= 1e9)  return (v / 1e9).toFixed(1)  + 'B';
+    return v.toFixed(0);
+  };
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="font-size:9px;color:var(--muted);width:60px">NVT signal</span>
+        <div style="flex:1;background:var(--border);height:8px;border-radius:3px;position:relative">
+          <div style="width:${gaugePct}%;background:${gaugeCol};height:100%;border-radius:3px"></div>
+          <div style="position:absolute;top:-2px;left:${obPct}%;width:1px;height:12px;background:var(--red);opacity:0.6"></div>
+          <div style="position:absolute;top:-2px;left:${osPct}%;width:1px;height:12px;background:var(--green);opacity:0.6"></div>
+        </div>
+        <b style="color:${gaugeCol};font-size:10px;min-width:36px;text-align:right">${signal.toFixed(1)}</b>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>NVT ratio: <b style="color:var(--fg)">${ratio.toFixed(1)}</b></span>
+      <span>z: <b style="color:${zscore>1?'var(--green)':zscore<-1?'var(--red)':'var(--muted)'}">${zscore.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>velocity: <b style="color:var(--fg)">${(vel.current||0).toFixed(4)}</b></span>
+      <span>trend: <b style="color:${trendCol}">${vel.trend||'—'}</b></span>
+      <span>7d: <b style="color:var(--fg)">${(vel.velocity_7d||0).toFixed(4)}</b></span>
+      <span>30d: <b style="color:var(--fg)">${(vel.velocity_30d||0).toFixed(4)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      mktcap: <b style="color:var(--fg)">$${fmtB(data.market_cap_usd||0)}</b>
+      &nbsp; tx/24h: <b style="color:var(--fg)">$${fmtB(data.tx_volume_24h_usd||0)}</b>
+    </div>
+    <div style="margin-top:4px">${sparkbars}</div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
+
+// ── Holder Distribution ───────────────────────────────────────────────────
+async function renderHolderDistribution() {
+  const el = document.getElementById('holder-dist-content');
+  if (!el) return;
+  const data = await fetchJSON('/api/holder-distribution-card');
+  if (!data) { el.textContent = 'Unavailable'; return; }
+  const badge = document.getElementById('holder-dist-badge');
+  const risk = data.hhi?.risk ?? 'unknown';
+  const riskColor = { low: '#26a69a', moderate: '#ffa726', high: '#ef5350', extreme: '#b71c1c' }[risk] ?? '#888';
+  if (badge) {
+    badge.textContent = risk.toUpperCase();
+    badge.style.background = riskColor;
+    badge.style.display = 'inline-block';
+  }
+  const bands = data.bands ?? {};
+  const bandNames = ['shrimp','crab','fish','shark','whale'];
+  const bandRows = bandNames.map(b => {
+    const d = bands[b] ?? {};
+    const bar = Math.round((d.pct_supply ?? 0) * 2);
+    return `<tr><td style="color:#aaa;width:55px">${b}</td><td>${(d.pct_supply ?? 0).toFixed(1)}%</td><td style="color:#666">${(d.count ?? 0).toLocaleString()}</td><td><div style="background:${riskColor};height:6px;width:${bar}px;border-radius:3px"></div></td></tr>`;
+  }).join('');
+  const wDelta = data.whale_delta ?? {};
+  const gini = data.gini ?? {};
+  const hhi = data.hhi ?? {};
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">${bandRows}</table>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#aaa">
+      <span>Whale 7d: <b style="color:${(wDelta['7d_change_pct']??0)>=0?'#26a69a':'#ef5350'}">${(wDelta['7d_change_pct']??0).toFixed(1)}%</b> ${wDelta.signal??''}</span>
+      <span>Gini: <b>${(gini.current??0).toFixed(3)}</b> ${gini.trend??''}</span>
+      <span>HHI: <b>${(hhi.normalized??0).toFixed(1)}</b>/100</span>
+    </div>
+    <div style="margin-top:4px;color:#666;font-size:10px">${data.description ?? ''}</div>
   `;
 }
 
