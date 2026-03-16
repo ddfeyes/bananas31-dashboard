@@ -2183,6 +2183,8 @@ async function renderLargeTrades() {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
 // ── Net Taker Delta ───────────────────────────────────────────────────────────
 async function renderNetTakerDelta() {
   const el    = document.getElementById('net-taker-delta-content');
@@ -2524,6 +2526,155 @@ async function renderTopMovers() {
     </table>`;
 }
 
+// ── Momentum Rank ─────────────────────────────────────────────────────────────
+async function renderMomentumRank() {
+  const data = await apiFetch('/momentum-rank');
+  const el   = document.getElementById('momentum-rank-content');
+  const badge = document.getElementById('momentum-rank-badge');
+  if (!el) return;
+  if (!data) { setErr('momentum-rank-content'); return; }
+
+  const ranked = data.ranked || [];
+  if (ranked.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;">No data</div>';
+    return;
+  }
+
+  const top = ranked[0];
+  if (badge) {
+    badge.textContent = top.direction === 'bull' ? 'BULL' : top.direction === 'bear' ? 'BEAR' : 'FLAT';
+    badge.className = `card-badge ${top.direction === 'bull' ? 'badge-green' : top.direction === 'bear' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  function fmtPct(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    const col = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`;
+  }
+
+  const rows = ranked.map(r => `<tr>
+    <td style="padding:2px 6px 2px 0;font-size:11px;font-weight:600">${r.symbol.replace('USDT','')}</td>
+    <td style="padding:2px 6px;font-size:10px;text-align:right">${fmtPct(r.pct_5m)}</td>
+    <td style="padding:2px 6px;font-size:10px;text-align:right">${fmtPct(r.pct_15m)}</td>
+    <td style="padding:2px 0;font-size:10px;text-align:right">${fmtPct(r.pct_1h)}</td>
+  </tr>`).join('');
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse">
+    <thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase">
+      <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">sym</th>
+      <th style="text-align:right;padding:2px 6px 4px;font-weight:400">5m</th>
+      <th style="text-align:right;padding:2px 6px 4px;font-weight:400">15m</th>
+      <th style="text-align:right;padding:2px 0 4px;font-weight:400">1h</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// ── WS Stats (header display) ─────────────────────────────────────────────────
+async function renderWsStats() {
+  // Updates header connection indicator if present
+  const el = document.getElementById('ws-stats-content');
+  if (!el) return;
+  const data = await apiFetch('/ws-stats');
+  if (!data) { setErr('ws-stats-content'); return; }
+  el.innerHTML = `<span style="font-size:11px;color:var(--muted)">${data.connections} conn · ${data.messages_per_sec}/s</span>`;
+}
+
+// ── CVD Divergence ────────────────────────────────────────────────────────────
+async function renderCvdDivergence() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('cvd-divergence-content');
+  const badge = document.getElementById('cvd-divergence-badge');
+  if (!el) return;
+  const data = await apiFetch(`/cvd-divergence?symbol=${sym}`);
+  if (!data) { setErr('cvd-divergence-content'); return; }
+  const sig = (data[activeSymbol] || data).signal || 'none';
+  const sev = (data[activeSymbol] || data).severity || 0;
+  if (badge) {
+    badge.textContent = sev > 0 ? sig.toUpperCase() : 'OK';
+    badge.className = `card-badge ${sev >= 2 ? 'badge-red' : sev === 1 ? 'badge-yellow' : 'badge-green'}`;
+    badge.style.display = '';
+  }
+  const desc = (data[activeSymbol] || data).description || '—';
+  el.innerHTML = `<div style="font-size:11px;color:var(--fg)">${desc}</div>`;
+}
+
+// ── Squeeze Setup W11 ─────────────────────────────────────────────────────────
+async function renderSqueezeSetupW11() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('squeeze-setup-w11-content');
+  const badge = document.getElementById('squeeze-setup-w11-badge');
+  if (!el) return;
+  const data = await apiFetch(`/squeeze-setup?symbol=${sym}`);
+  if (!data) { setErr('squeeze-setup-w11-content'); return; }
+  const score = data.score ?? 0;
+  const signal = data.signal || 'none';
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.className = `card-badge ${score >= 3 ? 'badge-red' : score >= 1 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">score: </span><span style="font-weight:600">${score}</span> &nbsp; ${data.description || ''}</div>`;
+}
+
+// ── Flow Imbalance ────────────────────────────────────────────────────────────
+async function renderFlowImbalance() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('flow-imbalance-content');
+  const badge = document.getElementById('flow-imbalance-badge');
+  if (!el) return;
+  const data = await apiFetch(`/flow-imbalance?symbol=${sym}`);
+  if (!data) { setErr('flow-imbalance-content'); return; }
+  const imb = data.imbalance ?? 0;
+  const dir = imb > 0.1 ? 'BUY' : imb < -0.1 ? 'SELL' : 'FLAT';
+  if (badge) {
+    badge.textContent = dir;
+    badge.className = `card-badge ${dir === 'BUY' ? 'badge-green' : dir === 'SELL' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+  const col = imb > 0 ? 'var(--green)' : imb < 0 ? 'var(--red)' : 'var(--muted)';
+  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">imbalance: </span><span style="color:${col};font-weight:600">${(imb * 100).toFixed(1)}%</span></div>`;
+}
+
+// ── Volatility Regime ─────────────────────────────────────────────────────────
+async function renderVolatilityRegime() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('volatility-regime-content');
+  const badge = document.getElementById('volatility-regime-badge');
+  if (!el) return;
+  const data = await apiFetch(`/volatility-regime?symbol=${sym}`);
+  if (!data) { setErr('volatility-regime-content'); return; }
+  const regime = data.regime || 'unknown';
+  if (badge) {
+    badge.textContent = regime.toUpperCase();
+    badge.className = `card-badge ${regime === 'high' ? 'badge-red' : regime === 'medium' ? 'badge-yellow' : 'badge-green'}`;
+    badge.style.display = '';
+  }
+  const pct = data.percentile != null ? data.percentile.toFixed(1) + '%' : '—';
+  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">percentile: </span><span style="font-weight:600">${pct}</span></div>`;
+}
+
+// ── Price Velocity ────────────────────────────────────────────────────────────
+async function renderPriceVelocity() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('price-velocity-content');
+  const badge = document.getElementById('price-velocity-badge');
+  if (!el) return;
+  const data = await apiFetch(`/price-velocity?symbol=${sym}`);
+  if (!data) { setErr('price-velocity-content'); return; }
+  const symData = data[activeSymbol] || Object.values(data).find(v => v && typeof v === 'object' && 'direction' in v) || data;
+  const dir = symData.direction || 'flat';
+  const score = symData.score ?? 0;
+  if (badge) {
+    badge.textContent = dir;
+    badge.className = `card-badge ${dir === 'up' ? 'badge-green' : dir === 'down' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+  const col = score > 0 ? 'var(--green)' : score < 0 ? 'var(--red)' : 'var(--muted)';
+  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">score: </span><span style="color:${col};font-weight:600">${score > 0 ? '+' : ''}${score}</span></div>`;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -2585,6 +2736,16 @@ async function refresh() {
       safe(renderSqueezeSetup),
       safe(renderVolumeSpikeCard),
       safe(renderTradeCountRate),
+    ]);
+    await delay(200);
+
+    // Batch 14: wave 11 cards
+    await Promise.all([
+      safe(renderCvdDivergence),
+      safe(renderSqueezeSetupW11),
+      safe(renderFlowImbalance),
+      safe(renderVolatilityRegime),
+      safe(renderPriceVelocity),
     ]);
   } finally {
     _refreshRunning = false;
