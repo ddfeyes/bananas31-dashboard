@@ -2436,10 +2436,8 @@ async function refresh() {
     await Promise.all([safe(renderTradeTape), safe(renderVolumeImbalance), safe(renderPhase)]);
 
     // Batch 4: OI analysis
-    await Promise.all([safe(renderOiDivergence), safe(renderMicrostructure), safe(renderWhaleClustering)]);
 
     // Batch 5: price deviation metrics
-    await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice), safe(renderRealizedVolBands)]);
 
     // Batch 6: regime & momentum
     await Promise.all([safe(renderMarketRegime), safe(renderMomentum), safe(renderMomentumRank), safe(renderRegimeTimeline)]);
@@ -2451,10 +2449,8 @@ async function refresh() {
     await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
 
     // Batch 9: tape analysis
-    await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
 
     // Batch 10: movers, heatmap, net taker
-    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
 
     // Batch 11: new signal cards
     await Promise.all([safe(renderCvdMomentum), safe(renderDeltaDivergence), safe(renderFundingExtreme)]);
