@@ -80,6 +80,8 @@ from metrics import (
     compute_session_volume_profile,
     compute_order_flow_toxicity,
     compute_momentum_divergence,
+    compute_spread_analysis,
+    compute_options_skew,
 )
 
 router = APIRouter(prefix="/api")
@@ -5412,5 +5414,30 @@ async def momentum_divergence_endpoint(
         symbol=target,
         window_seconds=window,
         bucket_seconds=bucket,
+    )
+    return JSONResponse(data)
+
+
+@router.get("/spread-analysis")
+async def spread_analysis_endpoint(
+    symbol: Optional[str] = Query(None),
+    window: int = Query(300, ge=60, le=3600),
+):
+    """Bid-ask spread estimator: Roll model + effective spread from tick data."""
+    target = symbol or get_symbols()[0]
+    data = await compute_spread_analysis(symbol=target, window_seconds=window)
+    return JSONResponse(data)
+
+
+@router.get("/options-skew")
+async def options_skew_endpoint(
+    symbol: Optional[str] = Query(None),
+    history_window: int = Query(86400, ge=3600, le=604800),
+):
+    """Synthetic options skew: 25d RR & butterfly from return distribution moments."""
+    target = symbol or get_symbols()[0]
+    data = await compute_options_skew(
+        symbol=target,
+        history_window=history_window,
     )
     return JSONResponse(data)
