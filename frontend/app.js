@@ -1903,6 +1903,7 @@ async function renderLargeTrades() {
     return d.toTimeString().slice(0,8);
   }
   function fmtPrice(p) {
+    if (p == null) return '—';
     return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
   }
 
