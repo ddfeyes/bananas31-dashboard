@@ -46,6 +46,7 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
+    compute_market_regime_v2,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
@@ -921,7 +922,7 @@ async def market_regime_endpoint(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_market_regime(symbol=target)
+    data = await compute_market_regime_v2(symbol=target)
     return {"status": "ok", **data}
 
 
@@ -5485,4 +5486,17 @@ async def perp_spot_basis_endpoint():
     signal per asset, avg_basis_bps, and overall market_signal. Cache TTL: 30s.
     """
     data = await compute_perp_spot_basis()
+    return JSONResponse(data)
+
+
+@router.get("/market-regime")
+@cache_result(ttl_seconds=30)
+async def market_regime_endpoint(symbol: Optional[str] = None):
+    """
+    Market Regime Classifier: categorize market state based on volatility, momentum, correlation.
+
+    Returns regime (trending_bull, trending_bear, choppy, ranging, crisis), confidence score [0,1],
+    volatility, momentum, correlation, and regime history (last 5 changes). Cache TTL: 30s.
+    """
+    data = await compute_market_regime_v2(symbol=symbol)
     return JSONResponse(data)
