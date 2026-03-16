@@ -1869,50 +1869,726 @@ async function renderObWalls() {
     </table>`;
 }
 
+// ── Liquidation Heatmap ───────────────────────────────────────────────────────
+async function renderLiqHeatmap() {
+  const data = await apiFetch('/liquidation-heatmap?window_s=3600&buckets=20');
+  const el    = document.getElementById('liq-heatmap-content');
+  const badge = document.getElementById('liq-heatmap-badge');
+  if (!el) return;
+
+  if (!data) { setErr('liq-heatmap-content'); return; }
+
+  const syms = Object.keys(data.symbols || {});
+  if (syms.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No liquidation data</div>';
+    return;
+  }
+
+  // Compute cross-symbol max for consistent colour scale
+  let globalMax = 0;
+  for (const s of syms) {
+    const entry = data.symbols[s];
+    for (const b of (entry.buckets || [])) globalMax = Math.max(globalMax, b.total_usd);
+  }
+
+  function liqColor(totalUsd, longUsd, shortUsd) {
+    if (totalUsd <= 0 || globalMax <= 0) return 'var(--bg3)';
+    const intensity = Math.log1p(totalUsd) / Math.log1p(globalMax);
+    const alpha = Math.max(0.08, intensity);
+    // long liquidations = price was dropping (forced longs out) → red
+    // short liquidations = price was rising (forced shorts out) → green
+    if (longUsd >= shortUsd) return `rgba(255,77,79,${alpha.toFixed(2)})`;
+    return `rgba(0,224,130,${alpha.toFixed(2)})`;
+  }
+
+  function fmtUsd(v) {
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  // Badge: total liquidated across all symbols
+  const grandTotal = syms.reduce((s, k) => s + (data.symbols[k].total_usd || 0), 0);
+  if (badge) {
+    badge.textContent = fmtUsd(grandTotal);
+    badge.className = 'card-badge ' + (grandTotal > 50000 ? 'badge-red' : grandTotal > 5000 ? 'badge-yellow' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  let html = '';
+  for (const sym of syms) {
+    const entry = data.symbols[sym];
+    const buckets = entry.buckets || [];
+    const label = sym.replace('USDT', '');
+    const symTotal = entry.total_usd || 0;
+    const nLiqs = entry.n_liquidations || 0;
+
+    html += `<div style="margin-bottom:10px">`;
+    html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px">`;
+    html += `<span style="font-weight:600;color:var(--fg)">${label}</span>`;
+    html += `<span>${nLiqs} liqs · ${fmtUsd(symTotal)}</span></div>`;
+
+    if (buckets.length === 0) {
+      html += `<div style="font-size:10px;color:var(--muted);padding:4px 0">No liquidations in window</div>`;
+    } else {
+      html += `<div style="display:flex;flex-direction:column;gap:1px">`;
+      // Render bucket strip: reversed so high price is on the right
+      const reversed = [...buckets].reverse();
+      html += `<div style="display:flex;gap:1px;height:28px;align-items:stretch">`;
+      for (const b of reversed) {
+        const col = liqColor(b.total_usd, b.long_usd, b.short_usd);
+        const tip = b.total_usd > 0
+          ? `${fmtUsd(b.total_usd)} (L:${fmtUsd(b.long_usd)} S:${fmtUsd(b.short_usd)})`
+          : '';
+        html += `<div title="${tip}" style="flex:1;background:${col};border-radius:1px;min-width:2px"></div>`;
+      }
+      html += `</div>`;
+      // Price axis: low price left, high price right
+      if (entry.price_min != null) {
+        const dec = entry.price_min < 0.01 ? 6 : entry.price_min < 1 ? 4 : 2;
+        html += `<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">`;
+        html += `<span>${entry.price_min.toFixed(dec)}</span><span>${entry.price_max.toFixed(dec)}</span></div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Legend
+  html += `<div style="display:flex;gap:12px;font-size:9px;color:var(--muted);margin-top:4px">`;
+  html += `<span><span style="color:var(--red)">■</span> longs liq'd</span>`;
+  html += `<span><span style="color:var(--green)">■</span> shorts liq'd</span>`;
+  html += `<span style="margin-left:auto">darker = larger</span>`;
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
+// ── CVD Momentum ─────────────────────────────────────────────────────────────
+async function renderCvdMomentum() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/cvd-momentum?symbol=${sym}`);
+  const el   = document.getElementById('cvd-momentum-content');
+  const badge = document.getElementById('cvd-momentum-badge');
+  if (!el) return;
+  if (!data) { setErr('cvd-momentum-content'); return; }
+
+  const dir   = data.direction || 'neutral';
+  const bCls  = dir === 'bullish' ? 'badge-green' : dir === 'bearish' ? 'badge-red' : 'badge-blue';
+  const bLbl  = dir.toUpperCase();
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  const rate   = data.cvd_rate;
+  const intens = Math.max(0, Math.min(100, Math.round((data.intensity ?? 0) * 100)));
+  const intCol = intens > 70 ? 'var(--red)' : intens > 40 ? 'var(--yellow)' : 'var(--green)';
+  const accel  = data.accelerating ? '▲ accel' : '▼ decel';
+  const accelCol = data.accelerating ? 'var(--green)' : 'var(--muted)';
+
+  function fmtRate(r) {
+    if (r == null) return '—';
+    const abs = Math.abs(r);
+    const s   = r < 0 ? '-' : '+';
+    if (abs >= 1e6) return `${s}$${(abs/1e6).toFixed(2)}M/s`;
+    if (abs >= 1e3) return `${s}$${(abs/1e3).toFixed(1)}k/s`;
+    return `${s}$${abs.toFixed(2)}/s`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Rate <span style="color:var(--fg);font-weight:700">${fmtRate(rate)}</span></span>
+      <span style="color:${accelCol};font-weight:600">${accel}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:10px;color:var(--muted);min-width:60px">Intensity</span>
+      <div style="flex:1;background:var(--bg3);border-radius:3px;height:8px">
+        <div style="background:${intCol};width:${intens}%;height:100%;border-radius:3px;transition:width .3s"></div>
+      </div>
+      <span style="font-size:10px;color:${intCol};min-width:32px;text-align:right">${intens}%</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+      Total CVD: <span style="color:var(--fg)">${data.cvd_total_usd != null ? '$' + data.cvd_total_usd.toLocaleString(undefined,{maximumFractionDigits:0}) : '—'}</span>
+      · window: <span style="color:var(--fg)">${data.window_seconds}s</span>
+    </div>`;
+}
+
+// ── Delta Divergence ──────────────────────────────────────────────────────────
+async function renderDeltaDivergence() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/delta-divergence?symbol=${sym}`);
+  const el   = document.getElementById('delta-divergence-content');
+  const badge = document.getElementById('delta-divergence-badge');
+  if (!el) return;
+  if (!data) { setErr('delta-divergence-content'); return; }
+
+  const sev  = data.severity ?? 0;
+  const div  = data.divergence || 'none';
+  const bCls = sev === 0 ? 'badge-green' : sev === 1 ? 'badge-yellow' : 'badge-red';
+  const bLbl = sev === 0 ? 'OK' : div.toUpperCase();
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtPct(v) {
+    if (v == null) return '—';
+    const sign = v > 0 ? '+' : '';
+    const col  = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${sign}${v.toFixed(2)}%</span>`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Price Δ ${fmtPct(data.price_change_pct)}</span>
+      <span style="color:var(--muted)">CVD norm <span style="color:var(--fg);font-weight:600">${data.cvd_norm != null ? data.cvd_norm.toFixed(3) : '—'}</span></span>
+    </div>
+    <div style="font-size:11px;color:var(--fg);line-height:1.4">${data.description || '—'}</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">window: ${data.window_seconds}s</div>`;
+}
+
+// ── Funding Extreme ───────────────────────────────────────────────────────────
+async function renderFundingExtreme() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/funding-extreme?symbol=${sym}`);
+  const el   = document.getElementById('funding-extreme-content');
+  const badge = document.getElementById('funding-extreme-badge');
+  if (!el) return;
+  if (!data) { setErr('funding-extreme-content'); return; }
+
+  const isExt = !!data.extreme;
+  const bLbl  = isExt ? 'EXTREME' : 'normal';
+  const bCls  = isExt ? 'badge-red' : 'badge-blue';
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtRatePct(v) {
+    if (v == null) return '—';
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${v.toFixed(4)}%`;
+  }
+
+  const rates = data.rates || {};
+  const rateRows = Object.entries(rates).map(([exch, r]) =>
+    `<span style="color:var(--muted)">${exch} <span style="color:var(--fg);font-weight:600">${fmtRatePct(r != null ? r * 100 : null)}</span></span>`
+  ).join('');
+
+  const dirLbl = data.direction ? data.direction.toUpperCase() + ' paying' : '';
+  const dirCol = data.direction === 'long' ? 'var(--red)' : data.direction === 'short' ? 'var(--green)' : 'var(--muted)';
+
+  el.innerHTML = `
+    <div style="font-size:16px;font-weight:700;color:${isExt ? 'var(--red)' : 'var(--fg)'};margin-bottom:6px">
+      ${fmtRatePct(data.avg_rate_pct)}
+      ${dirLbl ? `<span style="font-size:11px;font-weight:400;color:${dirCol};margin-left:8px">${dirLbl}</span>` : ''}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:6px">${rateRows}</div>
+    <div style="font-size:11px;color:var(--muted)">${data.description || '—'}</div>`;
+}
+
+// ── Liq Cascade ───────────────────────────────────────────────────────────────
+async function renderLiqCascade() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/liq-cascade?symbol=${sym}`);
+  const el   = document.getElementById('liq-cascade-content');
+  const badge = document.getElementById('liq-cascade-badge');
+  if (!el) return;
+  if (!data) { setErr('liq-cascade-content'); return; }
+
+  const isCascade = !!data.cascade;
+  const bLbl = isCascade ? 'CASCADE' : 'quiet';
+  const bCls = isCascade ? 'badge-red' : 'badge-blue';
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtUsd(v) {
+    if (!v) return '$0';
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  const total = data.total_usd || 0;
+  const buyP  = total > 0 ? Math.min(100, Math.round(data.buy_usd  / total * 100)) : 0;
+  const selP  = total > 0 ? Math.min(100, Math.round(data.sell_usd / total * 100)) : 0;
+
+  el.innerHTML = `
+    <div style="font-size:${isCascade ? '18px' : '14px'};font-weight:700;color:${isCascade ? 'var(--red)' : 'var(--fg)'};margin-bottom:8px">
+      ${fmtUsd(total)}
+    </div>
+    <div style="display:flex;gap:8px;font-size:11px;margin-bottom:6px">
+      <span style="color:var(--green)">↑ Buy ${fmtUsd(data.buy_usd)}</span>
+      <span style="color:var(--muted)">·</span>
+      <span style="color:var(--red)">↓ Sell ${fmtUsd(data.sell_usd)}</span>
+    </div>
+    <div style="display:flex;gap:2px;height:8px;border-radius:4px;overflow:hidden;background:var(--bg3)">
+      <div style="width:${buyP}%;background:var(--green);transition:width .3s"></div>
+      <div style="width:${selP}%;background:var(--red);transition:width .3s"></div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px">${data.description || '—'}</div>`;
+}
+
+// ── Large Trades ──────────────────────────────────────────────────────────────
+async function renderLargeTrades() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/large-trades?symbol=${sym}&limit=8`);
+  const el   = document.getElementById('large-trades-content');
+  const badge = document.getElementById('large-trades-badge');
+  if (!el) return;
+  if (!data) { setErr('large-trades-content'); return; }
+
+  const trades = data.trades || [];
+  const count  = data.count || 0;
+  if (badge) {
+    badge.textContent = count + ' whales';
+    badge.className = `card-badge ${count > 0 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (trades.length === 0) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:8px 0">No large trades in window</div>`;
+    return;
+  }
+
+  function fmtUsd(v) {
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+  function fmtTs(ts) {
+    const d = new Date(ts * 1000);
+    return d.toTimeString().slice(0,8);
+  }
+  function fmtPrice(p) {
+    return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  }
+
+  const buyUsd  = data.total_buy_usd  || 0;
+  const sellUsd = data.total_sell_usd || 0;
+
+  const rows = trades.map(t => {
+    const sideCol = t.side === 'buy' ? 'var(--green)' : 'var(--red)';
+    const sideLbl = t.side.toUpperCase();
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:3px 6px 3px 0"><span style="color:${sideCol};font-weight:700;font-size:10px">${sideLbl}</span></td>
+      <td style="padding:3px 6px;font-family:monospace;font-size:11px">${fmtPrice(t.price)}</td>
+      <td style="padding:3px 6px;text-align:right;font-size:11px;color:var(--yellow);font-weight:600">${fmtUsd(t.usd_value)}</td>
+      <td style="padding:3px 0;text-align:right;font-size:10px;color:var(--muted)">${fmtTs(t.ts)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Buy <span style="color:var(--green);font-weight:700">${fmtUsd(buyUsd)}</span></span>
+      <span style="color:var(--muted)">Sell <span style="color:var(--red);font-weight:700">${fmtUsd(sellUsd)}</span></span>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">side</th>
+        <th style="text-align:left;padding:2px 6px 4px;font-weight:400">price</th>
+        <th style="text-align:right;padding:2px 6px 4px;font-weight:400">value</th>
+        <th style="text-align:right;padding:2px 0 4px;font-weight:400">time</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+// ── Net Taker Delta ───────────────────────────────────────────────────────────
+async function renderNetTakerDelta() {
+  const el    = document.getElementById('net-taker-delta-content');
+  const badge = document.getElementById('net-taker-delta-badge');
+  if (!el) return;
+
+  // Fetch for all symbols in parallel
+  const symbols = getSymbols();
+  const results = await Promise.all(
+    symbols.map(sym =>
+      apiFetch(`/net-taker-delta?symbol=${encodeURIComponent(sym)}&window=3600`)
+        .then(d => d ? { symbol: sym, total_net: d.total_net, total_buy: d.total_buy, total_sell: d.total_sell } : null)
+        .catch(() => null)
+    )
+  );
+
+  const rows = results.filter(Boolean);
+  if (!rows.length) { setErr('net-taker-delta-content'); return; }
+
+  // Sort by total_net descending for ranking
+  rows.sort((a, b) => b.total_net - a.total_net);
+  rows.forEach((r, i) => { r.rank = i + 1; });
+
+  // Badge reflects top symbol's direction
+  const top = rows[0];
+  if (badge) {
+    let label = 'neutral', cls = 'badge-blue';
+    if (top.total_net > 0)      { label = 'buying';  cls = 'badge-green'; }
+    else if (top.total_net < 0) { label = 'selling'; cls = 'badge-red'; }
+    badge.textContent = label;
+    badge.className   = `card-badge ${cls}`;
+    badge.style.display = '';
+  }
+
+  function fmtVol(v) {
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000)     return `${(v / 1_000).toFixed(1)}k`;
+    return v.toFixed(2);
+  }
+
+  const rowsHtml = rows.map(r => {
+    const total = r.total_buy + r.total_sell;
+    const buyPct = total > 0 ? Math.round(r.total_buy / total * 100) : 50;
+    const netPos = r.total_net >= 0;
+    const netColor = netPos ? 'var(--green)' : 'var(--red)';
+    const netSign  = netPos ? '+' : '';
+    return `<tr>
+      <td style="color:var(--muted);font-size:10px;">#${r.rank}</td>
+      <td style="font-size:11px;">${r.symbol.replace('USDT','')}</td>
+      <td style="font-size:11px;color:${netColor};text-align:right;">${netSign}${fmtVol(r.total_net)}</td>
+      <td style="width:60px;padding-left:6px;">
+        <div style="background:var(--red);height:6px;border-radius:3px;position:relative;">
+          <div style="background:var(--green);width:${buyPct}%;height:100%;border-radius:3px 0 0 3px;"></div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr>
+      <th style="color:var(--muted);text-align:left;font-size:10px;padding-bottom:4px;">#</th>
+      <th style="color:var(--muted);text-align:left;font-size:10px;">Symbol</th>
+      <th style="color:var(--muted);text-align:right;font-size:10px;">Net Δ</th>
+      <th style="color:var(--muted);font-size:10px;padding-left:6px;">Buy/Sell</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+
+// ── Alerts ────────────────────────────────────────────────────────────────────
+async function renderAlerts() {
+  const el    = document.getElementById('alerts-content');
+  const badge = document.getElementById('alerts-badge');
+  if (!el) return;
+  const data = await apiFetch('/alerts?limit=20');
+  if (!data) { setErr('alerts-content'); return; }
+
+  const count = data.count || 0;
+  if (badge) {
+    badge.textContent = count > 0 ? String(count) : '0';
+    badge.className = `card-badge ${count > 0 ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (!count || !data.data || !data.data.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No active alerts</div>';
+    return;
+  }
+
+  const rows = data.data.slice(0, 10).map(a => {
+    const sev = a.severity || 'info';
+    const sevCls = sev === 'critical' ? 'badge-red' : sev === 'warning' ? 'badge-yellow' : 'badge-blue';
+    return `<div style="margin-bottom:4px;font-size:11px;">
+      <span class="card-badge ${sevCls}" style="font-size:9px;margin-right:4px;">${sev}</span>
+      <span style="color:var(--muted);margin-right:4px;">${(a.symbol||'').replace('USDT','')}</span>
+      <span>${a.message || a.type || ''}</span>
+    </div>`;
+  }).join('');
+  el.innerHTML = rows;
+}
+
+// ── OI Delta ──────────────────────────────────────────────────────────────────
+async function renderOiDelta() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('oi-delta-content');
+  const badge = document.getElementById('oi-delta-badge');
+  if (!el) return;
+  const data = await apiFetch(`/oi-delta?symbol=${sym}&interval=300&window=3600`);
+  if (!data) { setErr('oi-delta-content'); return; }
+
+  const candles = data.candles || [];
+  const totalChange = candles.reduce((sum, c) => sum + (c.oi_change || 0), 0);
+
+  const dir = totalChange > 0 ? 'up' : totalChange < 0 ? 'down' : 'flat';
+  const dirCls = totalChange > 0 ? 'badge-green' : totalChange < 0 ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = dir;
+    badge.className = `card-badge ${dirCls}`;
+    badge.style.display = '';
+  }
+
+  if (!candles.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No OI data</div>';
+    return;
+  }
+
+  function fmtOi(v) {
+    const abs = Math.abs(v);
+    if (abs >= 1e6) return (v >= 0 ? '+' : '') + (v / 1e6).toFixed(2) + 'M';
+    if (abs >= 1e3) return (v >= 0 ? '+' : '') + (v / 1e3).toFixed(1) + 'k';
+    return (v >= 0 ? '+' : '') + v.toFixed(0);
+  }
+
+  const totalCol = totalChange >= 0 ? 'var(--green)' : 'var(--red)';
+  const recent = candles.slice(-5);
+  const sparkRows = recent.map(c => {
+    const col = c.oi_change >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<span style="color:${col};font-size:10px;margin-right:6px;">${fmtOi(c.oi_change)}</span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:${totalCol};margin-bottom:6px">${fmtOi(totalChange)}</div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">last ${recent.length} candles:</div>
+    <div style="flex-wrap:wrap">${sparkRows}</div>`;
+}
+
+// ── Squeeze Setup ─────────────────────────────────────────────────────────────
+async function renderSqueezeSetup() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('squeeze-setup-content');
+  const badge = document.getElementById('squeeze-setup-badge');
+  if (!el) return;
+  const data = await apiFetch(`/squeeze-setup?symbol=${sym}`);
+  if (!data) { setErr('squeeze-setup-content'); return; }
+
+  const isSqueeze = !!data.squeeze_signal;
+  const bLbl = isSqueeze ? 'SQUEEZE' : 'off';
+  const bCls = isSqueeze ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = bLbl;
+    badge.className = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  function fmtRate(v) {
+    if (v == null) return '—';
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${(v * 100).toFixed(4)}%`;
+  }
+
+  const oiSurge = data.oi_surge_with_crash;
+  const fundNorm = data.funding_normalizing;
+  const signals = [
+    `<span style="color:${oiSurge ? 'var(--green)' : 'var(--muted)'}">OI surge+crash: ${oiSurge ? 'yes' : 'no'}</span>`,
+    `<span style="color:${fundNorm ? 'var(--green)' : 'var(--muted)'}">Funding normalizing: ${fundNorm ? 'yes' : 'no'}</span>`,
+  ].join('<span style="color:var(--muted);margin:0 6px">·</span>');
+
+  el.innerHTML = `
+    <div style="font-size:${isSqueeze ? '16px' : '13px'};font-weight:700;color:${isSqueeze ? 'var(--red)' : 'var(--muted)'};margin-bottom:6px">
+      ${isSqueeze ? 'SQUEEZE SETUP' : 'No squeeze signal'}
+    </div>
+    <div style="font-size:11px;margin-bottom:6px">${signals}</div>
+    ${data.funding_start != null ? `<div style="font-size:10px;color:var(--muted)">Funding: ${fmtRate(data.funding_start)} → ${fmtRate(data.funding_end)}</div>` : ''}
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description || ''}</div>`;
+}
+
+// ── Volume Spike ──────────────────────────────────────────────────────────────
+async function renderVolumeSpikeCard() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('volume-spike-content');
+  const badge = document.getElementById('volume-spike-badge');
+  if (!el) return;
+  const data = await apiFetch(`/volume-spike?symbol=${sym}`);
+  if (!data) { setErr('volume-spike-content'); return; }
+
+  const isSpike = !!data.spike;
+  const bLbl = isSpike ? 'SPIKE' : 'normal';
+  const bCls = isSpike ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = bLbl;
+    badge.className = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  function fmtUsdK(v) {
+    if (!v) return '$0';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  const ratio = (data.ratio || 0).toFixed(2);
+  const dominant = (data.dominant || '—').toUpperCase();
+  const domCls = dominant === 'BUY' ? 'var(--green)' : dominant === 'SELL' ? 'var(--red)' : 'var(--muted)';
+  const domPct = (data.dominant_pct || 0).toFixed(1);
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:${isSpike ? 'var(--red)' : 'var(--fg)'};margin-bottom:6px">
+      ${ratio}× <span style="font-size:12px;font-weight:400;color:var(--muted)">vs baseline</span>
+    </div>
+    <div style="display:flex;gap:12px;font-size:11px;margin-bottom:4px">
+      <span style="color:var(--muted)">Recent: <span style="color:var(--fg);font-weight:600">${fmtUsdK(data.recent_usd)}</span></span>
+      <span style="color:var(--muted)">Baseline: <span style="color:var(--fg)">${fmtUsdK(data.baseline_usd_per_period)}</span></span>
+    </div>
+    <div style="font-size:11px">
+      Dominant: <span style="color:${domCls};font-weight:700">${dominant}</span>
+      <span style="color:var(--muted);margin-left:4px">${domPct}%</span>
+    </div>`;
+}
+
+// ── Trade Count Rate ──────────────────────────────────────────────────────────
+async function renderTradeCountRate() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('trade-count-rate-content');
+  const badge = document.getElementById('trade-count-rate-badge');
+  if (!el) return;
+  const data = await apiFetch(`/trade-count-rate?symbol=${sym}&interval=60&window=1800`);
+  if (!data) { setErr('trade-count-rate-content'); return; }
+
+  const buckets = data.buckets || [];
+  const currentTpm = buckets.length ? buckets[buckets.length - 1].trades_per_min : 0;
+
+  // compute trend from first half vs second half
+  let trend = 'flat';
+  if (buckets.length >= 2) {
+    const mid = Math.floor(buckets.length / 2);
+    const firstHalf  = buckets.slice(0, mid);
+    const secondHalf = buckets.slice(mid);
+    const avgFirst  = firstHalf.reduce((s, b) => s + b.trades_per_min, 0) / firstHalf.length;
+    const avgSecond = secondHalf.reduce((s, b) => s + b.trades_per_min, 0) / secondHalf.length;
+    if (avgFirst > 0) {
+      const pctChange = (avgSecond - avgFirst) / avgFirst;
+      if (pctChange > 0.10)       trend = 'rising';
+      else if (pctChange < -0.10) trend = 'falling';
+    }
+  }
+
+  const trendArrow = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
+  const trendCol   = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : 'var(--muted)';
+
+  if (badge) {
+    badge.textContent = trend;
+    badge.className = `card-badge ${trend === 'rising' ? 'badge-green' : trend === 'falling' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (!buckets.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No trade rate data</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:var(--fg);margin-bottom:6px">
+      ${currentTpm.toFixed(1)} <span style="font-size:12px;font-weight:400;color:var(--muted)">trades/min</span>
+      <span style="font-size:16px;color:${trendCol};margin-left:6px">${trendArrow}</span>
+    </div>
+    <div style="font-size:11px;color:var(--muted)">${buckets.length} buckets · ${trend} trend</div>`;
+}
+
+// ── Top Movers ────────────────────────────────────────────────────────────────
+async function renderTopMovers() {
+  const data = await apiFetch('/top-movers');
+  const el = document.getElementById('top-movers-content');
+  const badge = document.getElementById('top-movers-badge');
+  if (!el) return;
+
+  if (!data) {
+    setErr('top-movers-content');
+    return;
+  }
+
+  const movers = data.movers || [];
+
+  if (movers.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No data</div>';
+    return;
+  }
+
+  function fmtPct(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    const sign = v >= 0 ? '+' : '';
+    const col = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${sign}${v.toFixed(2)}%</span>`;
+  }
+  function fmtPrice(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    // Use enough decimals for sub-penny assets
+    const dec = v < 0.01 ? 6 : v < 1 ? 4 : 2;
+    return v.toFixed(dec);
+  }
+
+  const top = movers[0];
+  if (badge && top) {
+    const ch = top.change_1h;
+    badge.textContent = top.symbol.replace('USDT', '');
+    badge.className = 'card-badge ' + (ch == null ? 'badge-blue' : ch > 0 ? 'badge-green' : 'badge-red');
+    badge.style.display = 'inline-block';
+  }
+
+  const rows = movers.map(m => `<tr>
+    <td style="font-weight:600;padding:3px 6px 3px 0;font-size:11px">${m.symbol.replace('USDT','')}</td>
+    <td style="font-family:monospace;padding:3px 6px 3px 0;font-size:11px;color:var(--muted)">${fmtPrice(m.price)}</td>
+    <td style="text-align:right;padding:3px 6px 3px 0;font-size:11px">${fmtPct(m.change_1h)}</td>
+    <td style="text-align:right;padding:3px 6px 3px 0;font-size:11px">${fmtPct(m.change_4h)}</td>
+    <td style="text-align:right;padding:3px 0;font-size:11px">${fmtPct(m.change_24h)}</td>
+  </tr>`).join('');
+
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">symbol</th>
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">price</th>
+        <th style="text-align:right;padding:2px 6px 4px 0;font-weight:400">1h</th>
+        <th style="text-align:right;padding:2px 6px 4px 0;font-weight:400">4h</th>
+        <th style="text-align:right;padding:2px 0 4px 0;font-weight:400">24h</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
   const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
 
-  // Batch 1: core charts
-  await Promise.all([
-    safe(renderPriceChart),
-    safe(renderOiChart),
-    safe(renderCvdChart),
-    safe(renderFunding),
-    safe(renderFundingMomentum),
-    safe(renderSpread),
-  ]);
-  // Batch 2: trade data
-  await Promise.all([
-    safe(renderTradeTape),
-    safe(renderVolumeImbalance),
-    safe(renderPhase),
-    safe(renderOiDivergence),
-    safe(renderMicrostructure),
-  ]);
-  // Batch 3: advanced
-  await Promise.all([
-    safe(renderWhaleClustering),
-    safe(renderVwapDeviation),
-    safe(renderOiWeightedPrice),
-    safe(renderRealizedVolBands),
-    safe(renderMarketRegime),
-    safe(renderMomentum),
-    safe(renderRegimeTimeline),
-  ]);
-  // Batch 4: secondary
-  await Promise.all([
-    safe(renderCorrelations),
-    safe(renderCorrHeatmap),
-    safe(renderVolumeProfile),
-    safe(renderAggressorRatio),
-    safe(renderVpin),
-    safe(renderAdaptiveVolumeProfile),
-    safe(renderTapeSpeed),
-    safe(renderAggressorStreak),
-    safe(renderObWalls),
-  ]);
+  try {
+    // Batch 1: core price charts
+    await Promise.all([safe(renderPriceChart), safe(renderOiChart), safe(renderCvdChart)]);
+    await delay(200);
+
+    // Batch 2: header stats
+    await Promise.all([safe(renderFunding), safe(renderFundingMomentum), safe(renderSpread), safe(renderWsStats)]);
+    await delay(200);
+
+    // Batch 3: trade tape + imbalance
+    await Promise.all([safe(renderTradeTape), safe(renderVolumeImbalance), safe(renderPhase)]);
+    await delay(200);
+
+    // Batch 4: OI analysis
+    await Promise.all([safe(renderOiDivergence), safe(renderMicrostructure), safe(renderWhaleClustering)]);
+    await delay(200);
+
+    // Batch 5: price deviation metrics
+    await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice), safe(renderRealizedVolBands)]);
+    await delay(200);
+
+    // Batch 6: regime & momentum
+    await Promise.all([safe(renderMarketRegime), safe(renderMomentum), safe(renderMomentumRank), safe(renderRegimeTimeline)]);
+    await delay(200);
+
+    // Batch 7: correlations
+    await Promise.all([safe(renderCorrelations), safe(renderCorrHeatmap), safe(renderVolumeProfile)]);
+    await delay(200);
+
+    // Batch 8: aggressor metrics
+    await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
+    await delay(200);
+
+    // Batch 9: tape analysis
+    await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
+    await delay(200);
+
+    // Batch 10: movers, heatmap, net taker
+    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
+    await delay(200);
+
+    // Batch 11: new signal cards
+    await Promise.all([safe(renderCvdMomentum), safe(renderDeltaDivergence), safe(renderFundingExtreme)]);
+    await delay(200);
+
+    // Batch 12: cascade & large trades
+    await Promise.all([safe(renderLiqCascade), safe(renderLargeTrades)]);
+    await delay(200);
+
+    // Batch 13: alerts, oi-delta, squeeze, volume spike, trade count rate
+    await Promise.all([
+      safe(renderAlerts),
+      safe(renderOiDelta),
+      safe(renderSqueezeSetup),
+      safe(renderVolumeSpikeCard),
+      safe(renderTradeCountRate),
+    ]);
+  } finally {
+    _refreshRunning = false;
+  }
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
