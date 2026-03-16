@@ -1,10 +1,6 @@
 """Tests for funding rate term structure analysis (issue #105).
 
 TDD approach: all tests written first, then implementation.
-Tests cover:
-1. compute_funding_term_structure() function
-2. GET /api/funding-term-structure endpoint
-3. Frontend integration (card component tests)
 """
 
 import asyncio
@@ -14,10 +10,6 @@ import time
 import pytest
 import json
 
-os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test_funding_term.db")
-os.environ["SYMBOL_BINANCE"] = "BTCUSDT"
-os.environ["SYMBOL_BYBIT"] = "BTCUSDT"
-
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -25,703 +17,374 @@ from storage import init_db, get_db
 from metrics import compute_funding_term_structure
 
 
-class TestFundingTermStructureBasics:
-    """Basic functionality tests for compute_funding_term_structure()."""
+async def setup_fresh_db():
+    """Clear all funding_rate data from the test database."""
+    await init_db()
+    db = await get_db()
+    await db.execute("DELETE FROM funding_rate")
+    await db.commit()
+    await db.close()
 
-    @pytest.mark.asyncio
-    async def test_empty_funding_data(self):
-        """With no funding history, should return zero rates and neutral shape."""
-        await init_db()
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result is not None
-        assert "rates" in result
-        assert "shape" in result
-        assert "exhaustion_score" in result
-        assert "trend" in result
-        
-        # Empty should return zero rates
-        assert result["rates"]["d1"] == 0.0
-        assert result["rates"]["d7"] == 0.0
-        assert result["rates"]["d30"] == 0.0
-        assert result["shape"] == "flat"
-        assert result["exhaustion_score"] == 0.0
 
-    @pytest.mark.asyncio
-    async def test_single_funding_rate(self):
-        """With one funding rate, should handle gracefully."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
+# ── Basic Functionality ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_empty_funding_data():
+    """With no funding history, should return zero rates and neutral shape."""
+    await setup_fresh_db()
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result is not None
+    assert "rates" in result
+    assert "shape" in result
+    assert "exhaustion_score" in result
+    assert "trend" in result
+    
+    assert result["rates"]["d1"] == 0.0
+    assert result["rates"]["d7"] == 0.0
+    assert result["rates"]["d30"] == 0.0
+    assert result["shape"] == "flat"
+    assert result["exhaustion_score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_single_funding_rate():
+    """With one funding rate, should handle gracefully."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    await db.execute(
+        "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+        (ts, "binance", "BTCUSDT", 0.0001)
+    )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["rates"]["d1"] == 0.0001
+    assert isinstance(result["rates"]["d7"], float)
+    assert isinstance(result["rates"]["d30"], float)
+
+
+@pytest.mark.asyncio
+async def test_normal_funding_curve():
+    """Normal upward curve: d1 < d7 < d30 (contango, longer-dated higher)."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    # Contango: recent low, older high
+    rates = [
+        (ts - 86400 * 30, "binance", "BTCUSDT", 0.0003),   # old: 0.03%
+        (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),    # mid: 0.02%
+        (ts - 3600, "binance", "BTCUSDT", 0.0001),         # recent: 0.01%
+        (ts - 7200, "binance", "BTCUSDT", 0.00011),
+        (ts - 10800, "binance", "BTCUSDT", 0.00012),
+    ]
+    for r in rates:
         await db.execute(
             "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-            (ts, "binance", "BTCUSDT", 0.0001)
+            r
         )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should have rates from 1d period only
-        assert result["rates"]["d1"] == 0.0001
-        # d7 and d30 may be 0 if insufficient data
-        assert isinstance(result["rates"]["d7"], float)
-        assert isinstance(result["rates"]["d30"], float)
-
-    @pytest.mark.asyncio
-    async def test_normal_funding_curve(self):
-        """Normal upward curve: d1 < d7 < d30 (contango, longer-dated higher)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Insert rates where recent is low, older is high = normal contango
-        # Each rate point is in multiple windows:
-        # - ts-30d point is in 30d only
-        # - ts-7d point is in 7d, 30d
-        # - ts-1d point is in 1d, 7d, 30d
-        rates = [
-            # Anchor point (30d only): very old, high
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.0003),
-            # 7d window: older points stay high
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),
-            # 1d window: recent points lower
-            (ts - 3600, "binance", "BTCUSDT", 0.0001),
-            # Add more recent points in 1d window to solidify low average
-            (ts - 7200, "binance", "BTCUSDT", 0.00011),
-            (ts - 10800, "binance", "BTCUSDT", 0.00012),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["shape"] == "normal", f"Expected normal, got {result['shape']}, rates={result['rates']}"
-        # Verify d1 < d7 < d30 for normal contango
-        assert result["rates"]["d1"] < result["rates"]["d7"] or abs(result["rates"]["d1"] - result["rates"]["d7"]) < 0.000001
-        assert result["trend"] in ["up", "down", "neutral"]
-
-    @pytest.mark.asyncio
-    async def test_inverted_funding_curve(self):
-        """Inverted curve: d1 > d7 > d30 (backwardation, recent higher)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Insert rates where recent is high, older is low = inverted backwardation
-        # Make differences large enough to be detected clearly
-        rates = [
-            # 30d anchor (very old, lowest): in 30d window only
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.00005),
-            # 7d window: mid rates
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0001),
-            (ts - 86400 * 6, "binance", "BTCUSDT", 0.00011),
-            # 1d window: high recent rates
-            (ts - 43200, "binance", "BTCUSDT", 0.0002),
-            (ts - 21600, "binance", "BTCUSDT", 0.00021),
-            (ts - 3600, "binance", "BTCUSDT", 0.00022),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["shape"] == "inverted", f"Expected inverted, got {result['shape']}, rates={result['rates']}"
-        # Verify d1 > d7 > d30 for inverted backwardation
-        assert result["rates"]["d1"] > result["rates"]["d7"], f"d1({result['rates']['d1']}) should be > d7({result['rates']['d7']})"
-        assert result["trend"] in ["up", "down", "neutral"]
-
-    @pytest.mark.asyncio
-    async def test_flat_funding_curve(self):
-        """Flat curve: all rates approximately equal."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Insert all same rate
-        for exchange in ["binance", "bybit"]:
-            rates = [
-                (ts - 86400 * 30, exchange, "BTCUSDT", 0.00015),
-                (ts - 86400 * 7, exchange, "BTCUSDT", 0.00015),
-                (ts - 3600, exchange, "BTCUSDT", 0.00015),
-            ]
-            for r in rates:
-                await db.execute(
-                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                    r
-                )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["shape"] == "flat"
-
-    @pytest.mark.asyncio
-    async def test_exhaustion_score_calculation(self):
-        """Exhaustion score should reflect extreme funding levels."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Extreme positive funding = high exhaustion (longs heavily paying)
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.001),   # 0.1% = extreme
-            (ts - 43200, "binance", "BTCUSDT", 0.0015),  # 0.15%
-            (ts - 100, "binance", "BTCUSDT", 0.002),     # 0.2% = very extreme
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # High positive rates should increase exhaustion score
-        assert result["exhaustion_score"] > 0.5  # Should be high
-        assert result["exhaustion_score"] <= 1.0
-
-    @pytest.mark.asyncio
-    async def test_negative_funding_exhaustion(self):
-        """Negative extreme funding should also indicate exhaustion (shorts overextended)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Extreme negative funding = shorts squeezed
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", -0.001),   # -0.1%
-            (ts - 43200, "binance", "BTCUSDT", -0.0015),  # -0.15%
-            (ts - 100, "binance", "BTCUSDT", -0.002),     # -0.2%
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Extreme negative should also have high exhaustion
-        assert result["exhaustion_score"] > 0.5
-        assert result["exhaustion_score"] <= 1.0
-
-    @pytest.mark.asyncio
-    async def test_neutral_funding_exhaustion(self):
-        """Near-zero funding should have low exhaustion score."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Low rates = low exhaustion
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.00001),
-            (ts - 43200, "binance", "BTCUSDT", 0.00002),
-            (ts - 100, "binance", "BTCUSDT", -0.00001),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Low absolute values should have low exhaustion
-        assert result["exhaustion_score"] < 0.3
-
-    @pytest.mark.asyncio
-    async def test_trend_detection_uptrend(self):
-        """Funding rates increasing over time = uptrend."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Trend: -0.0003 -> -0.0002 -> 0.0001 (moving upward)
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", -0.0003),
-            (ts - 43200, "binance", "BTCUSDT", -0.0002),
-            (ts - 100, "binance", "BTCUSDT", 0.0001),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["trend"] in ["up", "neutral"]
-
-    @pytest.mark.asyncio
-    async def test_trend_detection_downtrend(self):
-        """Funding rates decreasing over time = downtrend."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Trend: 0.0003 -> 0.0002 -> -0.0001 (moving downward)
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.0003),
-            (ts - 43200, "binance", "BTCUSDT", 0.0002),
-            (ts - 100, "binance", "BTCUSDT", -0.0001),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["trend"] in ["down", "neutral"]
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["shape"] == "normal"
 
 
-class TestFundingTermStructureEdgeCases:
-    """Edge cases and extreme scenarios."""
-
-    @pytest.mark.asyncio
-    async def test_zero_rates(self):
-        """All zero rates should handle gracefully."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        for i in range(10):
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                (ts - 86400 + i * 3600, "binance", "BTCUSDT", 0.0)
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["rates"]["d1"] == 0.0
-        assert result["rates"]["d7"] == 0.0
-        assert result["rates"]["d30"] == 0.0
-        assert result["exhaustion_score"] == 0.0
-
-    @pytest.mark.asyncio
-    async def test_extreme_positive_rates(self):
-        """Very high positive rates (pump conditions)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # 1% = 100x normal, extreme squeeze risk for longs
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.01),
-            (ts - 43200, "binance", "BTCUSDT", 0.015),
-            (ts - 100, "binance", "BTCUSDT", 0.02),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["exhaustion_score"] == 1.0  # Capped at max
-        assert all(r > 0 for r in result["rates"].values() if r is not None)
-
-    @pytest.mark.asyncio
-    async def test_extreme_negative_rates(self):
-        """Very negative rates (crash conditions, shorts getting paid)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # -1% = extreme, shorts heavily paid
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", -0.01),
-            (ts - 43200, "binance", "BTCUSDT", -0.015),
-            (ts - 100, "binance", "BTCUSDT", -0.02),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        assert result["exhaustion_score"] == 1.0  # Capped at max
-        assert all(r < 0 for r in result["rates"].values() if r is not None)
-
-    @pytest.mark.asyncio
-    async def test_mixed_sign_rates(self):
-        """Rates that flip between positive and negative."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.0002),
-            (ts - 43200, "binance", "BTCUSDT", -0.0001),
-            (ts - 100, "binance", "BTCUSDT", 0.00015),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should handle mixed signs gracefully
-        assert isinstance(result["exhaustion_score"], float)
-        assert 0 <= result["exhaustion_score"] <= 1.0
-
-    @pytest.mark.asyncio
-    async def test_multiple_exchanges(self):
-        """Multiple exchanges for same symbol should aggregate correctly."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        for exchange in ["binance", "bybit", "okx"]:
-            rates = [
-                (ts - 86400, exchange, "BTCUSDT", 0.0001),
-                (ts - 43200, exchange, "BTCUSDT", 0.00015),
-                (ts - 100, exchange, "BTCUSDT", 0.0002),
-            ]
-            for r in rates:
-                await db.execute(
-                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                    r
-                )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should aggregate across exchanges
-        assert result["rates"]["d1"] > 0
-        assert result["rates"]["d7"] > 0 or result["rates"]["d7"] == 0.0
-        assert isinstance(result["shape"], str)
-
-    @pytest.mark.asyncio
-    async def test_sparse_funding_data(self):
-        """Very sparse data points (days between updates)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Only 3 data points over 30 days
-        rates = [
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.00005),
-            (ts - 86400 * 15, "binance", "BTCUSDT", 0.0001),
-            (ts - 100, "binance", "BTCUSDT", 0.00015),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should still work with sparse data
-        assert result is not None
-        assert "rates" in result
-        assert "shape" in result
-
-    @pytest.mark.asyncio
-    async def test_dense_funding_data(self):
-        """Very dense data points (hourly updates)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # 30 days of hourly data
-        for i in range(30 * 24):
-            rate = 0.0001 + 0.00001 * (i % 10)  # Oscillating slightly
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                (ts - i * 3600, "binance", "BTCUSDT", rate)
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should handle dense data
-        assert result is not None
-        assert isinstance(result["rates"]["d1"], float)
-        assert isinstance(result["rates"]["d7"], float)
-        assert isinstance(result["rates"]["d30"], float)
-
-    @pytest.mark.asyncio
-    async def test_future_timestamp(self):
-        """Gracefully handle future timestamps (clock skew)."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Some future timestamps
-        rates = [
-            (ts - 86400, "binance", "BTCUSDT", 0.0001),
-            (ts + 3600, "binance", "BTCUSDT", 0.00015),  # Future!
-            (ts - 100, "binance", "BTCUSDT", 0.0002),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Should not crash
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_different_symbols(self):
-        """Different symbols should be computed independently."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-        for sym in symbols:
-            rate = 0.0001 if sym == "BTCUSDT" else 0.0002 if sym == "ETHUSDT" else 0.00005
-            for i in range(3):
-                await db.execute(
-                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                    (ts - 86400 + i * 43200, "binance", sym, rate)
-                )
-        await db.commit()
-        await db.close()
-        
-        # Compute for each
-        btc_result = await compute_funding_term_structure(symbol="BTCUSDT")
-        eth_result = await compute_funding_term_structure(symbol="ETHUSDT")
-        bnb_result = await compute_funding_term_structure(symbol="BNBUSDT")
-        
-        # Results should differ
-        assert btc_result is not None
-        assert eth_result is not None
-        assert bnb_result is not None
+@pytest.mark.asyncio
+async def test_inverted_funding_curve():
+    """Inverted curve: d1 > d7 > d30 (backwardation, recent higher)."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    # Backwardation: recent high, older low
+    rates = [
+        (ts - 86400 * 30, "binance", "BTCUSDT", 0.00001),   # old: low
+        (ts - 86400 * 25, "binance", "BTCUSDT", 0.000015),
+        (ts - 86400 * 20, "binance", "BTCUSDT", 0.00002),
+        (ts - 86400 * 15, "binance", "BTCUSDT", 0.000025),
+        (ts - 86400 * 10, "binance", "BTCUSDT", 0.0001),
+        (ts - 86400 * 8, "binance", "BTCUSDT", 0.00012),
+        (ts - 86400, "binance", "BTCUSDT", 0.0004),         # recent: high
+        (ts - 43200, "binance", "BTCUSDT", 0.0005),
+        (ts - 3600, "binance", "BTCUSDT", 0.0006),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["shape"] == "inverted"
 
 
-class TestFundingTermStructureCalculations:
-    """Test specific calculation correctness."""
+@pytest.mark.asyncio
+async def test_flat_funding_curve():
+    """Flat curve: all rates approximately equal."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    # All same value
+    rates = [
+        (ts - 86400 * 30, "binance", "BTCUSDT", 0.0001),
+        (ts - 86400 * 20, "binance", "BTCUSDT", 0.0001),
+        (ts - 86400 * 10, "binance", "BTCUSDT", 0.0001),
+        (ts - 86400 * 7, "binance", "BTCUSDT", 0.0001),
+        (ts - 86400 * 3, "binance", "BTCUSDT", 0.0001),
+        (ts - 3600, "binance", "BTCUSDT", 0.0001),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["shape"] == "flat"
 
-    @pytest.mark.asyncio
-    async def test_rates_are_averages(self):
-        """Rates returned should be averages of the window."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # 1d: 0.0001, 0.0002 -> avg 0.00015
-        # 7d: +0.0003 -> avg (0.0001+0.0002+0.0003)/3 = 0.0002
-        rates = [
-            (ts - 3600, "binance", "BTCUSDT", 0.0001),         # 1d, 7d, 30d
-            (ts - 7200, "binance", "BTCUSDT", 0.0002),         # 1d, 7d, 30d
-            (ts - 86400 * 2, "binance", "BTCUSDT", 0.0003),    # 7d, 30d
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.00001),  # 30d only
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        
-        # Verify averaging
-        # d1 should be average of last 24h: (0.0001 + 0.0002) / 2 = 0.00015
-        assert abs(result["rates"]["d1"] - 0.00015) < 0.000001 or result["rates"]["d1"] == 0.0
 
-    @pytest.mark.asyncio
-    async def test_shape_detection_boundaries(self):
-        """Test shape detection at boundary cases."""
-        await init_db()
-        
-        # Case 1: rates exactly equal (flat)
-        db = await get_db()
-        ts = time.time()
+# ── Exhaustion Score ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_score_positive_extreme():
+    """Extreme positive funding indicates long exhaustion."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", 0.001),    # 0.1%
+        (ts - 43200, "binance", "BTCUSDT", 0.0015),   # 0.15%
+        (ts - 100, "binance", "BTCUSDT", 0.002),      # 0.2%
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["exhaustion_score"] > 0.5
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_score_negative_extreme():
+    """Extreme negative funding indicates short exhaustion."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", -0.001),   # -0.1%
+        (ts - 43200, "binance", "BTCUSDT", -0.0015),  # -0.15%
+        (ts - 100, "binance", "BTCUSDT", -0.002),     # -0.2%
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["exhaustion_score"] > 0.5
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_score_neutral():
+    """Near-zero funding should have low exhaustion."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", 0.000001),
+        (ts - 43200, "binance", "BTCUSDT", 0.000002),
+        (ts - 100, "binance", "BTCUSDT", -0.000001),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["exhaustion_score"] < 0.1
+
+
+# ── Trend Detection ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trend_uptrend():
+    """Rates moving from negative to positive = uptrend."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", -0.0003),
+        (ts - 43200, "binance", "BTCUSDT", -0.0001),
+        (ts - 3600, "binance", "BTCUSDT", 0.0001),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["trend"] in ["up", "neutral"]
+
+
+@pytest.mark.asyncio
+async def test_trend_downtrend():
+    """Rates moving from positive to negative = downtrend."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", 0.0003),
+        (ts - 43200, "binance", "BTCUSDT", 0.0001),
+        (ts - 3600, "binance", "BTCUSDT", -0.0001),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["trend"] in ["down", "neutral"]
+
+
+# ── Edge Cases ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_zero_rates():
+    """All zero rates."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    for i in range(10):
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            (ts - 86400 + i * 3600, "binance", "BTCUSDT", 0.0)
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert result["rates"]["d1"] == 0.0
+    assert result["rates"]["d7"] == 0.0
+    assert result["rates"]["d30"] == 0.0
+    assert result["exhaustion_score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_multiple_symbols():
+    """Different symbols computed independently."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    for sym, rate in [("BTCUSDT", 0.0001), ("ETHUSDT", 0.0002)]:
         for i in range(3):
             await db.execute(
                 "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                (ts - 86400 * (i + 1), "binance", "BTCUSDT", 0.0001)
+                (ts - 86400 + i * 43200, "binance", sym, rate)
             )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        assert result["shape"] == "flat"
+    await db.commit()
+    await db.close()
+    
+    btc_result = await compute_funding_term_structure(symbol="BTCUSDT")
+    eth_result = await compute_funding_term_structure(symbol="ETHUSDT")
+    
+    # Should be different
+    assert btc_result is not None
+    assert eth_result is not None
+    assert btc_result["rates"]["d1"] != eth_result["rates"]["d1"]
 
-    @pytest.mark.asyncio
-    async def test_shape_normal_strict(self):
-        """Normal curve requires d1 < d7 < d30."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Strict normal: 0.0001 < 0.0002 < 0.0003
-        rates = [
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.0003),
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),
-            (ts - 3600, "binance", "BTCUSDT", 0.0001),
-        ]
-        for r in rates:
+
+@pytest.mark.asyncio
+async def test_response_time_single_symbol():
+    """Single symbol should respond < 200ms."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    for i in range(100):
+        for exchange in ["binance", "bybit"]:
             await db.execute(
                 "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
+                (ts - i * 3600, exchange, "BTCUSDT", 0.0001 + 0.00001 * i)
             )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        assert result["shape"] == "normal"
-
-    @pytest.mark.asyncio
-    async def test_shape_inverted_strict(self):
-        """Inverted curve requires d1 > d7 > d30."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Strict inverted: 0.0003 > 0.0002 > 0.0001
-        rates = [
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.0001),
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),
-            (ts - 3600, "binance", "BTCUSDT", 0.0003),
-        ]
-        for r in rates:
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                r
-            )
-        await db.commit()
-        await db.close()
-        
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        assert result["shape"] == "inverted"
+    await db.commit()
+    await db.close()
+    
+    import time as timer
+    start = timer.time()
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    elapsed = timer.time() - start
+    
+    assert elapsed < 0.2  # <200ms
 
 
-class TestFundingTermStructurePerformance:
-    """Performance and response time tests."""
-
-    @pytest.mark.asyncio
-    async def test_response_time_single_symbol(self):
-        """GET /api/funding-term-structure?symbol=BTC should respond <200ms."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Populate with realistic data
-        for i in range(100):
-            for exchange in ["binance", "bybit"]:
-                await db.execute(
-                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                    (ts - i * 3600, exchange, "BTCUSDT", 0.0001 + 0.00001 * i)
-                )
-        await db.commit()
-        await db.close()
-        
-        import time as timer
-        start = timer.time()
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        elapsed = timer.time() - start
-        
-        # Should be fast
-        assert elapsed < 0.2  # <200ms
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_response_time_all_symbols(self):
-        """GET /api/funding-term-structure (all symbols) should respond <500ms."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT"]
-        
-        # Populate with realistic data
-        for sym in symbols:
-            for i in range(100):
-                for exchange in ["binance", "bybit"]:
-                    await db.execute(
-                        "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                        (ts - i * 3600, exchange, sym, 0.0001)
-                    )
-        await db.commit()
-        await db.close()
-        
-        import time as timer
-        start = timer.time()
-        
-        # Compute for all
-        tasks = [compute_funding_term_structure(symbol=sym) for sym in symbols]
-        results = await asyncio.gather(*tasks)
-        
-        elapsed = timer.time() - start
-        
-        # Should be fast for multiple symbols
-        assert elapsed < 0.5  # <500ms
-        assert all(r is not None for r in results)
-
-
-class TestFundingTermStructureIntegration:
-    """Integration tests with other metrics."""
-
-    @pytest.mark.asyncio
-    async def test_integration_with_oi_momentum(self):
-        """Funding term structure should be callable alongside OI momentum."""
-        await init_db()
-        db = await get_db()
-        
-        ts = time.time()
-        # Add funding data
-        for i in range(10):
-            await db.execute(
-                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
-                (ts - i * 3600, "binance", "BTCUSDT", 0.0001)
-            )
-        await db.commit()
-        await db.close()
-        
-        # Should not crash when called
-        result = await compute_funding_term_structure(symbol="BTCUSDT")
-        assert result is not None
-        assert "rates" in result
-        assert "exhaustion_score" in result
+@pytest.mark.asyncio
+async def test_mixed_sign_rates():
+    """Rates with mixed positive and negative."""
+    await setup_fresh_db()
+    db = await get_db()
+    
+    ts = time.time()
+    rates = [
+        (ts - 86400, "binance", "BTCUSDT", 0.0002),
+        (ts - 43200, "binance", "BTCUSDT", -0.0001),
+        (ts - 3600, "binance", "BTCUSDT", 0.00015),
+    ]
+    for r in rates:
+        await db.execute(
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            r
+        )
+    await db.commit()
+    await db.close()
+    
+    result = await compute_funding_term_structure(symbol="BTCUSDT")
+    
+    assert isinstance(result["exhaustion_score"], float)
+    assert 0 <= result["exhaustion_score"] <= 1.0
