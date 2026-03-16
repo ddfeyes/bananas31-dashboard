@@ -604,7 +604,7 @@ async def compute_volume_profile_adaptive(
     value_area_pct: float = 0.70,
 ) -> dict:
     """
-    Adaptive Volume Profile for the current trading session (midnight UTC → now).
+    Adaptive Volume Profile for the current trading session (midnight UTC -> now).
 
     Differences from compute_volume_profile:
     - Window is always current session (since midnight UTC), not a fixed seconds window.
@@ -1092,7 +1092,7 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     score = 0
     weights = {}
 
-    # Phase: ±30
+    # Phase: +/-30
     phase = phase_data.get("phase", "Unknown")
     phase_conf = phase_data.get("confidence", 0.5)
     phase_map = {
@@ -1109,7 +1109,7 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     score += phase_score
     weights["phase"] = round(phase_score, 1)
 
-    # CVD momentum 1min: ±20
+    # CVD momentum 1min: +/-20
     cvd_dir = (
         1
         if cvd_mom.get("direction") == "bullish"
@@ -1121,7 +1121,7 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     score += cvd_score
     weights["cvd_1m"] = round(cvd_score, 1)
 
-    # CVD momentum 5min: ±15
+    # CVD momentum 5min: +/-15
     cvd5_dir = (
         1
         if cvd_mom5.get("direction") == "bullish"
@@ -1131,18 +1131,18 @@ async def compute_market_regime(symbol: str = None) -> Dict:
     score += cvd5_score
     weights["cvd_5m"] = round(cvd5_score, 1)
 
-    # Volume imbalance: ±15
+    # Volume imbalance: +/-15
     imb = vol_imb.get("imbalance", 0)  # -1 to 1
     imb_score = imb * 15
     score += imb_score
     weights["vol_imb"] = round(imb_score, 1)
 
-    # OI momentum: ±10 (OI rising = more conviction)
+    # OI momentum: +/-10 (OI rising = more conviction)
     oi_pct = 0
     for ex_data in oi_mom.get("exchanges", {}).values():
         oi_pct += ex_data.get("pct_change", 0)
     oi_pct = max(-5, min(5, oi_pct))
-    oi_score = oi_pct * 2  # ±10
+    oi_score = oi_pct * 2  # +/-10
     score += oi_score
     weights["oi"] = round(oi_score, 1)
 
@@ -1205,7 +1205,7 @@ async def detect_cross_symbol_oi_spike(
 ) -> Dict:
     """
     Inter-symbol correlation alert: detect when multiple symbols spike OI simultaneously.
-    If >= min_correlated symbols show OI spike within the same window → fire alert.
+    If >= min_correlated symbols show OI spike within the same window -> fire alert.
     """
     since = time.time() - window_seconds
 
@@ -1438,7 +1438,7 @@ async def compute_vwap_deviation(
     }
 
 
-# CoinGecko symbol → coin id mapping (extend as needed)
+# CoinGecko symbol -> coin id mapping (extend as needed)
 _COINGECKO_IDS = {
     "BANANAS31USDT": "banana",  # likely id; fallback graceful
     "COSUSDT": "contentos",
@@ -1548,9 +1548,9 @@ async def predict_liquidation_cascade(
     """
     Pre-cascade warning: OI rising fast AND price approaching key S/R level.
     Logic:
-    1. OI change > oi_threshold_pct in last oi_window seconds → high leverage buildup
-    2. Price within sr_proximity_pct% of a key support/resistance level → approaching trigger
-    3. If both conditions met → cascade risk HIGH
+    1. OI change > oi_threshold_pct in last oi_window seconds -> high leverage buildup
+    2. Price within sr_proximity_pct% of a key support/resistance level -> approaching trigger
+    3. If both conditions met -> cascade risk HIGH
     Also considers: current liquidation activity + funding direction
     """
     import asyncio as _asyncio
@@ -2030,8 +2030,8 @@ async def compute_vpin(
     in each bucket compute |buy_vol - sell_vol| / bucket_vol.
     VPIN = average of these ratios over last N buckets.
 
-    High VPIN (>0.5) → high toxicity / informed trading → adverse selection risk.
-    Low VPIN (<0.2) → mostly noise trading.
+    High VPIN (>0.5) -> high toxicity / informed trading -> adverse selection risk.
+    Low VPIN (<0.2) -> mostly noise trading.
     """
     from storage import get_trades_for_cvd
     import time
@@ -2164,10 +2164,10 @@ async def compute_realized_vs_implied_vol(
     Realized vs implied volatility comparison.
 
     Realized vol: annualized std dev of log returns over window, computed from 1-min candles.
-    Implied vol (proxy): ATR(14) normalized by price × sqrt(annualization factor).
+    Implied vol (proxy): ATR(14) normalized by price * sqrt(annualization factor).
 
-    Convergence signal: when realized vol > implied vol proxy → market moving faster than expected.
-    Divergence signal: when realized vol << implied vol proxy → market calmer than expected.
+    Convergence signal: when realized vol > implied vol proxy -> market moving faster than expected.
+    Divergence signal: when realized vol << implied vol proxy -> market calmer than expected.
     """
     import math
     import time
@@ -2245,7 +2245,7 @@ async def compute_realized_vs_implied_vol(
     realized_vol = std_dev * math.sqrt(candles_per_year)
     realized_vol_pct = realized_vol * 100
 
-    # ATR-implied vol proxy: ATR(14) / price → normalize to per-candle, then annualize
+    # ATR-implied vol proxy: ATR(14) / price -> normalize to per-candle, then annualize
     highs = [c["high"] for _, c in sorted_candles]
     lows = [c["low"] for _, c in sorted_candles]
 
@@ -2290,7 +2290,7 @@ async def compute_realized_vs_implied_vol(
         else:
             signal = "converged"
             emoji = "⚖️"
-            desc = f"{emoji} Realized {realized_vol_pct:.1f}% ≈ Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — converged"
+            desc = f"{emoji} Realized {realized_vol_pct:.1f}% ~ Implied {implied_vol_pct:.1f}% (ratio {vol_ratio:.2f}x) — converged"
 
     return {
         "realized_vol_pct": round(realized_vol_pct, 2),
@@ -2512,8 +2512,8 @@ async def compute_aggressor_ratio_series(
     Returns time series of buy% over 30m in 1m buckets.
 
     Signal:
-    - >70% buyers → strong buy aggression
-    - <30% buyers → strong sell aggression
+    - >70% buyers -> strong buy aggression
+    - <30% buyers -> strong sell aggression
     """
     import time
     from storage import get_recent_trades
@@ -2724,7 +2724,7 @@ async def compute_kalman_price(
     else:
         signal = "low_noise"
         emoji = "🟢"
-        desc = f"{emoji} Low noise: raw ≈ smooth (Δ {deviation_pct:+.4f}%)"
+        desc = f"{emoji} Low noise: raw ~ smooth (Δ {deviation_pct:+.4f}%)"
 
     return {
         "smoothed_price": round(current_smooth, 8),
@@ -2752,8 +2752,8 @@ async def compute_ob_pressure_gradient(
     For each OB snapshot: imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol)
     Gradient = imbalance[t] - imbalance[t-1]
 
-    Positive gradient → increasing bid pressure
-    Negative gradient → increasing ask pressure (selling)
+    Positive gradient -> increasing bid pressure
+    Negative gradient -> increasing ask pressure (selling)
     """
     import json
     from storage import get_orderbook_history
@@ -3256,7 +3256,7 @@ def detect_squeeze_setup(
         f_end_str = f"{funding_end * 100:.3f}%" if funding_end is not None else "N/A"
         description = (
             f"⚡ Short Squeeze Setup — OI +{oi_pct:.1f}% during price crash {p_pct:.1f}%, "
-            f"funding normalizing {f_start_str} → {f_end_str}"
+            f"funding normalizing {f_start_str} -> {f_end_str}"
         )
     elif oi_surge:
         description = (
@@ -3378,9 +3378,9 @@ def compute_tick_imbalance_bars(
     """Detect tick imbalance bars: consecutive same-side ticks exceeding threshold.
 
     Tick direction per trade (vs previous trade price):
-      price > prev_price  →  +1  (uptick)
-      price < prev_price  →  -1  (downtick)
-      price == prev_price →  prev_direction  (tick rule; 0 for first trade)
+      price > prev_price  ->  +1  (uptick)
+      price < prev_price  ->  -1  (downtick)
+      price == prev_price ->  prev_direction  (tick rule; 0 for first trade)
 
     A bar closes when |cumulative imbalance| >= threshold.
     After closing, imbalance resets to 0 for the next bar.
@@ -3636,7 +3636,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
 
     bin_size = float(bin_size)
 
-    # Build price grid: levels at mid_grid ± k * bin_size for k = 1..num_levels
+    # Build price grid: levels at mid_grid +/- k * bin_size for k = 1..num_levels
     import math
 
     mid_grid = math.floor(mid_price / bin_size) * bin_size
@@ -3656,7 +3656,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
             p, q = float(p), float(q)
             diff = mid_grid - p
             if diff <= 0:
-                continue  # bid above or at mid grid → skip
+                continue  # bid above or at mid grid -> skip
             # Round to nearest level (k = 1-indexed)
             k = int(round(diff / bin_size))
             if 1 <= k <= num_levels:
@@ -3666,12 +3666,12 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
             p, q = float(p), float(q)
             diff = p - mid_grid
             if diff <= 0:
-                continue  # ask below or at mid grid → skip
+                continue  # ask below or at mid grid -> skip
             k = int(round(diff / bin_size))
             if 1 <= k <= num_levels:
                 ask_vol_acc[k - 1] += q
 
-    # Normalise by snapshot count → mean volume per level
+    # Normalise by snapshot count -> mean volume per level
     bid_vols = [v / n_snaps for v in bid_vol_acc]
     ask_vols = [v / n_snaps for v in ask_vol_acc]
 
@@ -3690,7 +3690,7 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
     else:
         wall_threshold = 0.0
 
-    # Build levels list (bid side descending → combine and sort asc)
+    # Build levels list (bid side descending -> combine and sort asc)
     levels = []
     for i in range(num_levels):
         levels.append(
@@ -3764,7 +3764,7 @@ def compute_market_microstructure_score(
 
     Default weights: spread=0.35, depth=0.30, trade_rate=0.20, noise=0.15
 
-    Grade bands: A≥80, B≥60, C≥40, D≥20, F<20
+    Grade bands: A>=80, B>=60, C>=40, D>=20, F<20
     """
     import math
 
@@ -3993,14 +3993,14 @@ def compute_inter_exchange_oi_divergence(
     Args:
         oi_by_exchange: {"binance": [{"ts": float, "oi_value": float}, ...], ...}
             Each list sorted ascending by ts; exchanges with <2 snapshots are skipped.
-        min_divergence_pct: alert threshold — max deviation from mean must be ≥ this
+        min_divergence_pct: alert threshold — max deviation from mean must be >= this
             to trigger a divergence event (default: 3.0%).
 
     Returns dict with keys:
         divergence, divergence_pct, mean_pct_change, diverging_exchange,
         opposing, severity, alert, exchange_count, exchanges, description,
         min_divergence_pct
-    Severity bands: none → low → medium → high (opposing always → high).
+    Severity bands: none -> low -> medium -> high (opposing always -> high).
     """
     _empty = {
         "divergence": False,
@@ -4044,7 +4044,7 @@ def compute_inter_exchange_oi_divergence(
             ex: {**s, "deviation": 0.0} for ex, s in ex_stats.items()
         }
         result["description"] = (
-            f"Insufficient exchanges with data (need ≥2, got {len(ex_stats)})"
+            f"Insufficient exchanges with data (need >=2, got {len(ex_stats)})"
         )
         return result
 
@@ -4283,7 +4283,7 @@ def compute_tape_speed(
         trade_timestamps: Unix timestamps of trades (any order; filtered to window)
         window_seconds:   look-back window for watermarks and avg
         bucket_seconds:   width of each historical TPM bucket
-        hot_multiplier:   current_tpm > mult*avg → heating_up; < avg/mult → cooling_down
+        hot_multiplier:   current_tpm > mult*avg -> heating_up; < avg/mult -> cooling_down
         reference_ts:     treat as "now" (defaults to time.time(); injectable for tests)
 
     Returns:
@@ -4483,7 +4483,7 @@ async def compute_oi_weighted_price(symbol: str = None, limit: int = 50) -> Dict
     Returns deviation of current price from OI-weighted avg and a bias label:
       - long_heavy:  price > OI-weight by >1% (longs overextended)
       - short_heavy: price < OI-weight by >1% (shorts overextended)
-      - neutral:     within ±1%
+      - neutral:     within +/-1%
     """
     oi_rows = await get_oi_history(limit=limit, since=time.time() - 86400, symbol=symbol)
 
@@ -4574,7 +4574,7 @@ async def compute_realized_volatility_bands(
 
     Center = SMA of close prices over ``window`` 1-min candles.
     Realized vol = per-candle std dev of log-returns over the same window.
-    Upper / lower = center ± 2 × (realized_vol × center) — in price units.
+    Upper / lower = center +/- 2 * (realized_vol * center) — in price units.
     band_percentile = where current price sits within [lower, upper] (0–100).
     """
     import math
@@ -4625,7 +4625,7 @@ async def compute_realized_volatility_bands(
     if n_candles < 3:
         return {**_empty, "n_candles": n_candles, "description": "Too few candles"}
 
-    # Use last window+1 candles → window log-returns
+    # Use last window+1 candles -> window log-returns
     subset = sorted_candles[-(window + 1):]
     closes = [c["close"] for c in subset]
 
@@ -5168,7 +5168,7 @@ def _ss_buzz_level(proxy: float) -> str:
 
 
 def _ss_zscore(current: float, history: list) -> float:
-    """Z-score of current vs history. ±3.0 when std≈0 but current≠mean."""
+    """Z-score of current vs history. +/-3.0 when std~0 but current≠mean."""
     if not history:
         return 0.0
     mean = sum(history) / len(history)
@@ -5255,8 +5255,8 @@ def _tv_moving_average(values: list, window: int) -> float:
 def _tv_velocity_trend(velocity_7d: float, velocity_30d: float) -> str:
     """
     Compare short-term (7d) vs long-term (30d) velocity.
-    accelerating — 7d > 30d × 1.05
-    decelerating — 7d < 30d × 0.95
+    accelerating — 7d > 30d * 1.05
+    decelerating — 7d < 30d * 0.95
     stable       — otherwise
     """
     if velocity_30d <= 0:
@@ -5270,7 +5270,7 @@ def _tv_velocity_trend(velocity_7d: float, velocity_30d: float) -> str:
 
 
 def _tv_zscore(current: float, history: list) -> float:
-    """Z-score of current vs history. ±3.0 when std≈0 but current≠mean."""
+    """Z-score of current vs history. +/-3.0 when std~0 but current≠mean."""
     if not history:
         return 0.0
     mean = sum(history) / len(history)
@@ -5359,7 +5359,7 @@ async def compute_social_sentiment() -> dict:
         else:
             neut_count += 1
 
-    # Aggregate keyword sentiment → 0-100
+    # Aggregate keyword sentiment -> 0-100
     avg_raw = (sum(raw_scores) / len(raw_scores)) if raw_scores else 0.0
     kw_score = _ss_normalize_score(avg_raw, -1.0, 1.0)
 
@@ -5439,9 +5439,9 @@ _MR_BLOCKCHAIN_INFO: str = "https://api.blockchain.info/charts"
 
 
 def _mr_sell_pressure_index(daily_outflow: float, reserve: float) -> float:
-    """Sell Pressure Index = daily outflow / reserve × 100, clamped 0–100.
+    """Sell Pressure Index = daily outflow / reserve * 100, clamped 0–100.
 
-    Higher SPI → miners selling more relative to their reserve → more sell pressure.
+    Higher SPI -> miners selling more relative to their reserve -> more sell pressure.
     """
     if reserve <= 0:
         return 100.0 if daily_outflow > 0 else 0.0
@@ -5487,7 +5487,7 @@ def _mr_signal(reserve_trend: str, spi: float) -> str:
 def _mr_outflow_zscore(current_outflow: float, history: list) -> float:
     """Z-score of current outflow vs historical outflow values.
 
-    When std ≈ 0 but current ≠ mean, returns ±3 to preserve sign information.
+    When std ~ 0 but current ≠ mean, returns +/-3 to preserve sign information.
     """
     if len(history) < 2:
         return 0.0
@@ -5536,10 +5536,10 @@ async def compute_miner_reserve() -> dict:
     reserve / sell-pressure metrics as a macro sell-pressure signal.
 
     Proxy model:
-      - Daily miner revenue   ≈ maximum daily sell pressure (if all is sold)
-      - Rolling 30d reserve   ≈ accumulated revenue miners could sell
-      - SPI = daily / reserve × 100 → how fast reserve is being depleted
-      - Hash-rate trend       → miner profitability / network growth
+      - Daily miner revenue   ~ maximum daily sell pressure (if all is sold)
+      - Rolling 30d reserve   ~ accumulated revenue miners could sell
+      - SPI = daily / reserve * 100 -> how fast reserve is being depleted
+      - Hash-rate trend       -> miner profitability / network growth
     """
     import aiohttp
     import datetime
@@ -5843,12 +5843,12 @@ def _l2_momentum_score(
     Composite momentum score [0, 100].
 
     Weights: 24h TVL change (30%), 7d TVL change (50%), tx growth (20%).
-    Centred at 0 change → 50; ±10% TVL or ±0.5 tx growth spans the range.
+    Centred at 0 change -> 50; +/-10% TVL or +/-0.5 tx growth spans the range.
     """
     # Normalize each component to [-1, 1] then shift to [0, 1]
-    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # ±5% → ±1
-    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # ±15% → ±1
-    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # ±50% → ±1
+    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # +/-5% -> +/-1
+    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # +/-15% -> +/-1
+    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # +/-50% -> +/-1
 
     composite = c24 * 0.30 + c7d * 0.50 + ctx * 0.20
     return float(min(100.0, max(0.0, (composite + 1.0) / 2.0 * 100.0)))
@@ -5917,10 +5917,10 @@ def _ml_regime_score(
 
     Higher = more risk-on (bullish macro liquidity).
     Components:
-      M2 growing       → bullish (normalised over ±10%)
-      Fed expanding    → bullish (normalised over ±5%)
-      USD weakening    → bullish (inverted, normalised over ±5%)
-      BTC rising       → bullish (normalised over ±20%)
+      M2 growing       -> bullish (normalised over +/-10%)
+      Fed expanding    -> bullish (normalised over +/-5%)
+      USD weakening    -> bullish (inverted, normalised over +/-5%)
+      BTC rising       -> bullish (normalised over +/-20%)
     Equal weights (25% each).
     """
     def _clamp(v: float) -> float:
@@ -5936,7 +5936,7 @@ def _ml_regime_score(
 
 
 def _ml_regime_label(score: float) -> str:
-    """Regime label from score: risk_on (≥60), neutral (40–60), risk_off (<40)."""
+    """Regime label from score: risk_on (>=60), neutral (40–60), risk_off (<40)."""
     if score >= 60.0:
         return "risk_on"
     if score >= 40.0:
@@ -6259,10 +6259,291 @@ async def compute_layer2_metrics() -> dict:
     }
 
 
+# ── Network Health Score ───────────────────────────────────────────────────────
+# Composite 0-100 gauge combining four on-chain signals for Bitcoin network
+# health: hash rate trend, mempool congestion, active addresses, fee pressure.
+#
+# Weights: each component = 25%.
+# Labels: 90-100 excellent | 70-89 healthy | 50-69 neutral | 30-49 stressed | 0-29 critical
+#
+# Data: blockchain.info public charts API (free, no API key required).
+
+_NH_WEIGHTS: dict = {
+    "hash_rate":        0.25,
+    "mempool":          0.25,
+    "active_addresses": 0.25,
+    "fee_pressure":     0.25,
+}
+
+# Mempool ceiling: ~100k pending txs = fully congested
+_NH_MEMPOOL_MAX: int = 100_000
+
+# Blockchain.info chart endpoints
+_NH_BC_HASH:     str = "https://api.blockchain.info/charts/hash-rate?timespan=60days&sampled=true&format=json"
+_NH_BC_MEMPOOL:  str = "https://api.blockchain.info/charts/mempool-count?timespan=7days&sampled=true&format=json"
+_NH_BC_ADDRS:    str = "https://api.blockchain.info/charts/n-unique-addresses?timespan=60days&sampled=true&format=json"
+_NH_BC_FEES:     str = "https://api.blockchain.info/charts/median-confirmation-time?timespan=60days&sampled=true&format=json"
+
+
+def _nh_normalize(value: float, min_val: float, max_val: float) -> float:
+    """Map value from [min_val, max_val] -> [0, 100], clamped. Returns 50 when range=0."""
+    if max_val == min_val:
+        return 50.0
+    norm = (value - min_val) / (max_val - min_val) * 100.0
+    return float(round(max(0.0, min(100.0, norm)), 4))
+
+
+def _nh_hash_rate_score(hash_7d: float, hash_30d_ma: float) -> float:
+    """
+    Hash rate score 0-100.
+    Compares 7d hash rate to 30d MA.  Equal -> 50.  No baseline -> 50.
+    Ratio range mapped: [0.5, 1.5] -> [0, 100].
+    """
+    if hash_30d_ma <= 0:
+        return 50.0
+    ratio = hash_7d / hash_30d_ma   # 1.0 = neutral
+    return _nh_normalize(ratio, 0.5, 1.5)
+
+
+def _nh_mempool_score(tx_count: int, max_count: int) -> float:
+    """
+    Mempool score 0-100 (inverted: low congestion = high score).
+    0 txs -> 100.  max_count txs -> 0.
+    """
+    if max_count <= 0:
+        return 50.0
+    congestion = min(float(tx_count) / float(max_count), 1.0)
+    return float(round((1.0 - congestion) * 100.0, 4))
+
+
+def _nh_address_score(current: float, ma_30d: float) -> float:
+    """
+    Active address score 0-100.
+    Compares current active addresses to 30d MA.  Equal -> 50.  No baseline -> 50.
+    Ratio range [0.5, 1.5] -> [0, 100].
+    """
+    if ma_30d <= 0:
+        return 50.0
+    ratio = float(current) / float(ma_30d)
+    return _nh_normalize(ratio, 0.5, 1.5)
+
+
+def _nh_fee_score(current_fee: float, avg_fee: float) -> float:
+    """
+    Fee pressure score 0-100 (inverted: low fees = high score).
+    fee = avg -> 50.  No baseline -> 50.
+    Ratio range [0, 3] mapped to score [100, 0].
+    """
+    if avg_fee <= 0:
+        return 50.0
+    ratio = current_fee / avg_fee   # 1.0 = average
+    # Invert: ratio 0 -> score 100, ratio 1 -> score 50, ratio 2+ -> score 0
+    return _nh_normalize(2.0 - ratio, 0.0, 2.0)
+
+
+def _nh_composite(scores: dict, weights: dict) -> float:
+    """Weighted average of component scores. Missing weight keys are ignored."""
+    total_w = 0.0
+    total_s = 0.0
+    for key, score in scores.items():
+        w = weights.get(key, 0.0)
+        total_s += score * w
+        total_w += w
+    if total_w <= 0:
+        return 0.0
+    return float(round(total_s / total_w, 4))
+
+
+def _nh_health_label(score: float) -> str:
+    """5-level label from 0-100 composite score."""
+    if score >= 90:
+        return "excellent"
+    if score >= 70:
+        return "healthy"
+    if score >= 50:
+        return "neutral"
+    if score >= 30:
+        return "stressed"
+    return "critical"
+
+
+def _nh_trend(scores: list) -> str:
+    """Compare recent half vs prior half average. Returns improving/declining/stable."""
+    n = len(scores)
+    if n < 2:
+        return "stable"
+    mid    = n // 2
+    prior  = sum(scores[:mid]) / mid
+    recent = sum(scores[mid:]) / (n - mid)
+    delta  = recent - prior
+    if delta > 1.0:
+        return "improving"
+    if delta < -1.0:
+        return "declining"
+    return "stable"
+
+
+async def compute_network_health_score() -> dict:
+    """
+    Composite network health score (0-100) combining hash rate trend,
+    mempool congestion, active addresses, and fee pressure.
+    Data from blockchain.info public charts API.
+    """
+    import aiohttp  # noqa: PLC0415
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    hash_vals:   list = []
+    mempool_vals: list = []
+    addr_vals:   list = []
+    fee_vals:    list = []
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async def _get(url: str) -> dict:
+                try:
+                    async with session.get(url) as r:
+                        return await r.json(content_type=None)
+                except Exception:
+                    return {}
+
+            h_data, m_data, a_data, f_data = await _asyncio.gather(
+                _get(_NH_BC_HASH),
+                _get(_NH_BC_MEMPOOL),
+                _get(_NH_BC_ADDRS),
+                _get(_NH_BC_FEES),
+            )
+
+        def _extract(data: dict) -> list:
+            pts = data.get("values") or []
+            return [float(p["y"]) for p in pts if p.get("y") is not None and p["y"] > 0]
+
+        hash_vals    = _extract(h_data)
+        mempool_vals = _extract(m_data)
+        addr_vals    = _extract(a_data)
+        fee_vals     = _extract(f_data)
+
+    except Exception:
+        pass
+
+    # Fallback when API unavailable
+    if not hash_vals:
+        hash_vals   = [600.0] * 30
+    if not mempool_vals:
+        mempool_vals = [15_000.0] * 7
+    if not addr_vals:
+        addr_vals   = [850_000.0] * 30
+    if not fee_vals:
+        fee_vals    = [10.0] * 30
+
+    # Hash rate: 7d avg vs 30d MA
+    hash_7d    = sum(hash_vals[-7:])  / len(hash_vals[-7:])
+    hash_30d   = sum(hash_vals[-30:]) / len(hash_vals[-30:])
+    hr_score   = _nh_hash_rate_score(hash_7d, hash_30d)
+    hr_trend   = _nh_trend(hash_vals[-14:])
+
+    # Mempool: latest snapshot
+    mp_current = mempool_vals[-1] if mempool_vals else 0.0
+    mp_score   = _nh_mempool_score(int(mp_current), _NH_MEMPOOL_MAX)
+    mp_cong    = ("high" if mp_current > 60_000 else
+                  "moderate" if mp_current > 25_000 else "low")
+
+    # Active addresses: current vs 30d MA
+    addr_current = addr_vals[-1] if addr_vals else 0.0
+    addr_30d     = sum(addr_vals[-30:]) / len(addr_vals[-30:])
+    addr_score   = _nh_address_score(addr_current, addr_30d)
+    addr_trend   = _nh_trend(addr_vals[-14:])
+
+    # Fee pressure: current vs 30d median
+    sorted_fees  = sorted(fee_vals[-30:])
+    fee_30d_med  = sorted_fees[len(sorted_fees) // 2] if sorted_fees else 10.0
+    fee_current  = fee_vals[-1] if fee_vals else 10.0
+    fee_score_v  = _nh_fee_score(fee_current, fee_30d_med)
+    fee_level    = ("high" if fee_current > fee_30d_med * 2.0 else
+                    "moderate" if fee_current > fee_30d_med * 1.2 else "low")
+
+    # Composite
+    component_scores = {
+        "hash_rate":        hr_score,
+        "mempool":          mp_score,
+        "active_addresses": addr_score,
+        "fee_pressure":     fee_score_v,
+    }
+    composite = _nh_composite(component_scores, _NH_WEIGHTS)
+    label     = _nh_health_label(composite)
+
+    # Build daily history (last 30 days using hash rate as proxy for composite timing)
+    n_hist = min(len(hash_vals), len(addr_vals), len(fee_vals), 30)
+    history_out = []
+    for i in range(n_hist):
+        idx = -(n_hist - i)
+        h7_i  = hash_vals[idx]
+        h30_i = sum(hash_vals[max(0, idx - 30): idx]) / max(1, min(30, abs(idx)))
+        a_i   = addr_vals[idx] if i < len(addr_vals) else addr_current
+        a30_i = addr_30d
+        f_i   = fee_vals[idx] if i < len(fee_vals) else fee_current
+        m_i   = mempool_vals[-1]
+        day_scores = {
+            "hash_rate":        _nh_hash_rate_score(h7_i, h30_i),
+            "mempool":          _nh_mempool_score(int(m_i), _NH_MEMPOOL_MAX),
+            "active_addresses": _nh_address_score(a_i, a30_i),
+            "fee_pressure":     _nh_fee_score(f_i, fee_30d_med),
+        }
+        day_comp = _nh_composite(day_scores, _NH_WEIGHTS)
+        history_out.append({
+            "date":  f"day-{i + 1}",
+            "score": round(day_comp, 2),
+            "label": _nh_health_label(day_comp),
+        })
+
+    hist_scores = [h["score"] for h in history_out]
+    overall_trend = _nh_trend(hist_scores)
+
+    desc = (
+        f"{label.capitalize()}: composite network score {composite:.0f}/100 — "
+        f"hash rate {'rising' if hr_trend == 'improving' else 'falling' if hr_trend == 'declining' else 'stable'}"
+    )
+
+    return {
+        "score":  round(composite, 2),
+        "label":  label,
+        "trend":  overall_trend,
+        "components": {
+            "hash_rate": {
+                "score":      round(hr_score, 2),
+                "weight":     _NH_WEIGHTS["hash_rate"],
+                "current_eh": round(hash_7d, 2),
+                "ma_30d_eh":  round(hash_30d, 2),
+                "trend":      hr_trend,
+            },
+            "mempool": {
+                "score":      round(mp_score, 2),
+                "weight":     _NH_WEIGHTS["mempool"],
+                "tx_count":   int(mp_current),
+                "congestion": mp_cong,
+            },
+            "active_addresses": {
+                "score":   round(addr_score, 2),
+                "weight":  _NH_WEIGHTS["active_addresses"],
+                "current": int(addr_current),
+                "ma_30d":  int(addr_30d),
+                "trend":   addr_trend,
+            },
+            "fee_pressure": {
+                "score":         round(fee_score_v, 2),
+                "weight":        _NH_WEIGHTS["fee_pressure"],
+                "sat_per_vbyte": round(fee_current, 2),
+                "level":         fee_level,
+            },
+        },
+        "history":     history_out,
+        "description": desc,
+    }
+
 # ── Derivatives Heatmap ────────────────────────────────────────────────────────
 # OI heatmap by strike and expiry for BTC/ETH options.
 # Max pain: strike that minimises total payout to option buyers at expiry.
-# GEX: Gamma Exposure = gamma × OI × contract_size × spot² / 100
+# GEX: Gamma Exposure = gamma * OI * contract_size * spot**2 / 100
 # Data: Deribit public API (free, no auth).
 
 _DH_DERIBIT_SUMMARY: str = (
@@ -6276,7 +6557,7 @@ _DH_CONTRACT_SIZE: dict = {"BTC": 1.0, "ETH": 1.0}  # 1 coin per contract
 _DH_MAX_EXPIRIES: int = 4   # nearest expiries to include in heatmap
 _DH_OB_THR: float = 150.0  # overbought NVT threshold (reused label here)
 
-# Month abbreviation → number for expiry parsing
+# Month abbreviation -> number for expiry parsing
 _DH_MONTH_MAP: dict = {
     "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
     "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
@@ -6302,7 +6583,7 @@ def _dh_parse_instrument(name: str) -> dict | None:
         strike = float(strike_str)
     except ValueError:
         return None
-    # Parse expiry: "27DEC24" → "2024-12-27"
+    # Parse expiry: "27DEC24" -> "2024-12-27"
     try:
         day   = exp_str[:2]
         month = exp_str[2:5].upper()
@@ -6328,7 +6609,7 @@ def _dh_total_payout(
 ) -> float:
     """
     Total payout to option holders if asset expires at target_strike.
-    = Σ calls: max(0, target - K) × OI  +  Σ puts: max(0, K - target) × OI
+    = sum(calls: max(0, target - K) * OI)  +  sum(puts: max(0, K - target) * OI)
     """
     payout = 0.0
     for k, oi in calls.items():
@@ -6364,8 +6645,8 @@ def _dh_gex_at_strike(
 ) -> float:
     """
     Gamma Exposure at a strike.
-    GEX = gamma × OI × contract_size × spot² / 1000
-    Positive GEX → dealers long gamma (vol suppression).
+    GEX = gamma * OI * contract_size * spot**2 / 1000
+    Positive GEX -> dealers long gamma (vol suppression).
     """
     if spot <= 0 or oi <= 0 or gamma == 0:
         return 0.0
@@ -6569,5 +6850,154 @@ async def compute_derivatives_heatmap(asset: str = "BTC") -> dict:
             "put_call_ratio":   round(pcr, 4),
             "oi_concentration": round(concentration, 4),
         },
+        "description": desc,
+    }
+
+
+    hash_vals:   list = []
+    mempool_vals: list = []
+    addr_vals:   list = []
+    fee_vals:    list = []
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async def _get(url: str) -> dict:
+                try:
+                    async with session.get(url) as r:
+                        return await r.json(content_type=None)
+                except Exception:
+                    return {}
+
+            h_data, m_data, a_data, f_data = await _asyncio.gather(
+                _get(_NH_BC_HASH),
+                _get(_NH_BC_MEMPOOL),
+                _get(_NH_BC_ADDRS),
+                _get(_NH_BC_FEES),
+            )
+
+        def _extract(data: dict) -> list:
+            pts = data.get("values") or []
+            return [float(p["y"]) for p in pts if p.get("y") is not None and p["y"] > 0]
+
+        hash_vals    = _extract(h_data)
+        mempool_vals = _extract(m_data)
+        addr_vals    = _extract(a_data)
+        fee_vals     = _extract(f_data)
+
+    except Exception:
+        pass
+
+    # Fallback when API unavailable
+    if not hash_vals:
+        hash_vals   = [600.0] * 30
+    if not mempool_vals:
+        mempool_vals = [15_000.0] * 7
+    if not addr_vals:
+        addr_vals   = [850_000.0] * 30
+    if not fee_vals:
+        fee_vals    = [10.0] * 30
+
+    # Hash rate: 7d avg vs 30d MA
+    hash_7d    = sum(hash_vals[-7:])  / len(hash_vals[-7:])
+    hash_30d   = sum(hash_vals[-30:]) / len(hash_vals[-30:])
+    hr_score   = _nh_hash_rate_score(hash_7d, hash_30d)
+    hr_trend   = _nh_trend(hash_vals[-14:])
+
+    # Mempool: latest snapshot
+    mp_current = mempool_vals[-1] if mempool_vals else 0.0
+    mp_score   = _nh_mempool_score(int(mp_current), _NH_MEMPOOL_MAX)
+    mp_cong    = ("high" if mp_current > 60_000 else
+                  "moderate" if mp_current > 25_000 else "low")
+
+    # Active addresses: current vs 30d MA
+    addr_current = addr_vals[-1] if addr_vals else 0.0
+    addr_30d     = sum(addr_vals[-30:]) / len(addr_vals[-30:])
+    addr_score   = _nh_address_score(addr_current, addr_30d)
+    addr_trend   = _nh_trend(addr_vals[-14:])
+
+    # Fee pressure: current vs 30d median
+    sorted_fees  = sorted(fee_vals[-30:])
+    fee_30d_med  = sorted_fees[len(sorted_fees) // 2] if sorted_fees else 10.0
+    fee_current  = fee_vals[-1] if fee_vals else 10.0
+    fee_score_v  = _nh_fee_score(fee_current, fee_30d_med)
+    fee_level    = ("high" if fee_current > fee_30d_med * 2.0 else
+                    "moderate" if fee_current > fee_30d_med * 1.2 else "low")
+
+    # Composite
+    component_scores = {
+        "hash_rate":        hr_score,
+        "mempool":          mp_score,
+        "active_addresses": addr_score,
+        "fee_pressure":     fee_score_v,
+    }
+    composite = _nh_composite(component_scores, _NH_WEIGHTS)
+    label     = _nh_health_label(composite)
+
+    # Build daily history (last 30 days using hash rate as proxy for composite timing)
+    n_hist = min(len(hash_vals), len(addr_vals), len(fee_vals), 30)
+    history_out = []
+    for i in range(n_hist):
+        idx = -(n_hist - i)
+        h7_i  = hash_vals[idx]
+        h30_i = sum(hash_vals[max(0, idx - 30): idx]) / max(1, min(30, abs(idx)))
+        a_i   = addr_vals[idx] if i < len(addr_vals) else addr_current
+        a30_i = addr_30d
+        f_i   = fee_vals[idx] if i < len(fee_vals) else fee_current
+        m_i   = mempool_vals[-1]
+        day_scores = {
+            "hash_rate":        _nh_hash_rate_score(h7_i, h30_i),
+            "mempool":          _nh_mempool_score(int(m_i), _NH_MEMPOOL_MAX),
+            "active_addresses": _nh_address_score(a_i, a30_i),
+            "fee_pressure":     _nh_fee_score(f_i, fee_30d_med),
+        }
+        day_comp = _nh_composite(day_scores, _NH_WEIGHTS)
+        history_out.append({
+            "date":  f"day-{i + 1}",
+            "score": round(day_comp, 2),
+            "label": _nh_health_label(day_comp),
+        })
+
+    hist_scores = [h["score"] for h in history_out]
+    overall_trend = _nh_trend(hist_scores)
+
+    desc = (
+        f"{label.capitalize()}: composite network score {composite:.0f}/100 — "
+        f"hash rate {'rising' if hr_trend == 'improving' else 'falling' if hr_trend == 'declining' else 'stable'}"
+    )
+
+    return {
+        "score":  round(composite, 2),
+        "label":  label,
+        "trend":  overall_trend,
+        "components": {
+            "hash_rate": {
+                "score":      round(hr_score, 2),
+                "weight":     _NH_WEIGHTS["hash_rate"],
+                "current_eh": round(hash_7d, 2),
+                "ma_30d_eh":  round(hash_30d, 2),
+                "trend":      hr_trend,
+            },
+            "mempool": {
+                "score":      round(mp_score, 2),
+                "weight":     _NH_WEIGHTS["mempool"],
+                "tx_count":   int(mp_current),
+                "congestion": mp_cong,
+            },
+            "active_addresses": {
+                "score":   round(addr_score, 2),
+                "weight":  _NH_WEIGHTS["active_addresses"],
+                "current": int(addr_current),
+                "ma_30d":  int(addr_30d),
+                "trend":   addr_trend,
+            },
+            "fee_pressure": {
+                "score":         round(fee_score_v, 2),
+                "weight":        _NH_WEIGHTS["fee_pressure"],
+                "sat_per_vbyte": round(fee_current, 2),
+                "level":         fee_level,
+            },
+        },
+        "history":     history_out,
         "description": desc,
     }

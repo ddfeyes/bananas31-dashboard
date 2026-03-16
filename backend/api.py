@@ -60,20 +60,7 @@ from metrics import (
     compute_aggressor_ratio_series,
     compute_kalman_price,
     compute_ob_pressure_gradient,
-    compute_smart_money_divergence,
-    compute_ob_recovery_speed,
-    compute_tod_volatility,
-    compute_net_taker_delta,
     detect_squeeze_setup,
-    compute_tick_imbalance_bars,
-    compute_volume_bars,
-    compute_price_ladder,
-    compute_market_microstructure_score,
-    compute_session_stats,
-    compute_inter_exchange_oi_divergence,
-    compute_whale_clustering,
-    compute_tape_speed,
-    compute_aggressor_imbalance_streak,
     compute_oi_weighted_price,
     compute_realized_volatility_bands,
     detect_ob_walls,
@@ -84,6 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_derivatives_heatmap,
+    compute_network_health_score,
 )
 
 router = APIRouter(prefix="/api")
@@ -5316,3 +5304,10 @@ async def derivatives_heatmap_endpoint(
     """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
     data = await compute_derivatives_heatmap(asset=asset)
     return JSONResponse(data)
+@router.get("/network-health-score")
+async def network_health_score_endpoint():
+    """Composite network health gauge: hash rate, mempool, active addresses, fee pressure."""
+    data = await compute_network_health_score()
+    return JSONResponse(data)
+
+
