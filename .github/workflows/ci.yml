@@ -41,6 +41,11 @@ jobs:
           cd backend
           python -m pytest tests/ -v --tb=short
 
+      - name: Check frontend JS syntax
+        run: |
+          node --check frontend/app.js
+          echo "Frontend JS syntax OK"
+
       - name: Lint with ruff
         continue-on-error: true
         run: |
