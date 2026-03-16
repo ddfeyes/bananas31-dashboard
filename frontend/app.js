@@ -2092,6 +2092,227 @@ async function renderLiqHeatmap() {
   el.innerHTML = html;
 }
 
+// ── CVD Momentum ─────────────────────────────────────────────────────────────
+async function renderCvdMomentum() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/cvd-momentum?symbol=${sym}`);
+  const el   = document.getElementById('cvd-momentum-content');
+  const badge = document.getElementById('cvd-momentum-badge');
+  if (!el) return;
+  if (!data) { setErr('cvd-momentum-content'); return; }
+
+  const dir   = data.direction || 'neutral';
+  const bCls  = dir === 'bullish' ? 'badge-green' : dir === 'bearish' ? 'badge-red' : 'badge-blue';
+  const bLbl  = dir.toUpperCase();
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  const rate   = data.cvd_rate;
+  const intens = Math.max(0, Math.min(100, Math.round((data.intensity ?? 0) * 100)));
+  const intCol = intens > 70 ? 'var(--red)' : intens > 40 ? 'var(--yellow)' : 'var(--green)';
+  const accel  = data.accelerating ? '▲ accel' : '▼ decel';
+  const accelCol = data.accelerating ? 'var(--green)' : 'var(--muted)';
+
+  function fmtRate(r) {
+    if (r == null) return '—';
+    const abs = Math.abs(r);
+    const s   = r < 0 ? '-' : '+';
+    if (abs >= 1e6) return `${s}$${(abs/1e6).toFixed(2)}M/s`;
+    if (abs >= 1e3) return `${s}$${(abs/1e3).toFixed(1)}k/s`;
+    return `${s}$${abs.toFixed(2)}/s`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Rate <span style="color:var(--fg);font-weight:700">${fmtRate(rate)}</span></span>
+      <span style="color:${accelCol};font-weight:600">${accel}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:10px;color:var(--muted);min-width:60px">Intensity</span>
+      <div style="flex:1;background:var(--bg3);border-radius:3px;height:8px">
+        <div style="background:${intCol};width:${intens}%;height:100%;border-radius:3px;transition:width .3s"></div>
+      </div>
+      <span style="font-size:10px;color:${intCol};min-width:32px;text-align:right">${intens}%</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+      Total CVD: <span style="color:var(--fg)">${data.cvd_total_usd != null ? '$' + data.cvd_total_usd.toLocaleString(undefined,{maximumFractionDigits:0}) : '—'}</span>
+      · window: <span style="color:var(--fg)">${data.window_seconds}s</span>
+    </div>`;
+}
+
+// ── Delta Divergence ──────────────────────────────────────────────────────────
+async function renderDeltaDivergence() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/delta-divergence?symbol=${sym}`);
+  const el   = document.getElementById('delta-divergence-content');
+  const badge = document.getElementById('delta-divergence-badge');
+  if (!el) return;
+  if (!data) { setErr('delta-divergence-content'); return; }
+
+  const sev  = data.severity ?? 0;
+  const div  = data.divergence || 'none';
+  const bCls = sev === 0 ? 'badge-green' : sev === 1 ? 'badge-yellow' : 'badge-red';
+  const bLbl = sev === 0 ? 'OK' : div.toUpperCase();
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtPct(v) {
+    if (v == null) return '—';
+    const sign = v > 0 ? '+' : '';
+    const col  = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${sign}${v.toFixed(2)}%</span>`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Price Δ ${fmtPct(data.price_change_pct)}</span>
+      <span style="color:var(--muted)">CVD norm <span style="color:var(--fg);font-weight:600">${data.cvd_norm != null ? data.cvd_norm.toFixed(3) : '—'}</span></span>
+    </div>
+    <div style="font-size:11px;color:var(--fg);line-height:1.4">${data.description || '—'}</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">window: ${data.window_seconds}s</div>`;
+}
+
+// ── Funding Extreme ───────────────────────────────────────────────────────────
+async function renderFundingExtreme() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/funding-extreme?symbol=${sym}`);
+  const el   = document.getElementById('funding-extreme-content');
+  const badge = document.getElementById('funding-extreme-badge');
+  if (!el) return;
+  if (!data) { setErr('funding-extreme-content'); return; }
+
+  const isExt = !!data.extreme;
+  const bLbl  = isExt ? 'EXTREME' : 'normal';
+  const bCls  = isExt ? 'badge-red' : 'badge-blue';
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtRatePct(v) {
+    if (v == null) return '—';
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${v.toFixed(4)}%`;
+  }
+
+  const rates = data.rates || {};
+  const rateRows = Object.entries(rates).map(([exch, r]) =>
+    `<span style="color:var(--muted)">${exch} <span style="color:var(--fg);font-weight:600">${fmtRatePct(r != null ? r * 100 : null)}</span></span>`
+  ).join('');
+
+  const dirLbl = data.direction ? data.direction.toUpperCase() + ' paying' : '';
+  const dirCol = data.direction === 'long' ? 'var(--red)' : data.direction === 'short' ? 'var(--green)' : 'var(--muted)';
+
+  el.innerHTML = `
+    <div style="font-size:16px;font-weight:700;color:${isExt ? 'var(--red)' : 'var(--fg)'};margin-bottom:6px">
+      ${fmtRatePct(data.avg_rate_pct)}
+      ${dirLbl ? `<span style="font-size:11px;font-weight:400;color:${dirCol};margin-left:8px">${dirLbl}</span>` : ''}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:6px">${rateRows}</div>
+    <div style="font-size:11px;color:var(--muted)">${data.description || '—'}</div>`;
+}
+
+// ── Liq Cascade ───────────────────────────────────────────────────────────────
+async function renderLiqCascade() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/liq-cascade?symbol=${sym}`);
+  const el   = document.getElementById('liq-cascade-content');
+  const badge = document.getElementById('liq-cascade-badge');
+  if (!el) return;
+  if (!data) { setErr('liq-cascade-content'); return; }
+
+  const isCascade = !!data.cascade;
+  const bLbl = isCascade ? 'CASCADE' : 'quiet';
+  const bCls = isCascade ? 'badge-red' : 'badge-blue';
+  if (badge) { badge.textContent = bLbl; badge.className = `card-badge ${bCls}`; badge.style.display = ''; }
+
+  function fmtUsd(v) {
+    if (!v) return '$0';
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  const total = data.total_usd || 0;
+  const buyP  = total > 0 ? Math.min(100, Math.round(data.buy_usd  / total * 100)) : 0;
+  const selP  = total > 0 ? Math.min(100, Math.round(data.sell_usd / total * 100)) : 0;
+
+  el.innerHTML = `
+    <div style="font-size:${isCascade ? '18px' : '14px'};font-weight:700;color:${isCascade ? 'var(--red)' : 'var(--fg)'};margin-bottom:8px">
+      ${fmtUsd(total)}
+    </div>
+    <div style="display:flex;gap:8px;font-size:11px;margin-bottom:6px">
+      <span style="color:var(--green)">↑ Buy ${fmtUsd(data.buy_usd)}</span>
+      <span style="color:var(--muted)">·</span>
+      <span style="color:var(--red)">↓ Sell ${fmtUsd(data.sell_usd)}</span>
+    </div>
+    <div style="display:flex;gap:2px;height:8px;border-radius:4px;overflow:hidden;background:var(--bg3)">
+      <div style="width:${buyP}%;background:var(--green);transition:width .3s"></div>
+      <div style="width:${selP}%;background:var(--red);transition:width .3s"></div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px">${data.description || '—'}</div>`;
+}
+
+// ── Large Trades ──────────────────────────────────────────────────────────────
+async function renderLargeTrades() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/large-trades?symbol=${sym}&limit=8`);
+  const el   = document.getElementById('large-trades-content');
+  const badge = document.getElementById('large-trades-badge');
+  if (!el) return;
+  if (!data) { setErr('large-trades-content'); return; }
+
+  const trades = data.trades || [];
+  const count  = data.count || 0;
+  if (badge) {
+    badge.textContent = count + ' whales';
+    badge.className = `card-badge ${count > 0 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (trades.length === 0) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:8px 0">No large trades in window</div>`;
+    return;
+  }
+
+  function fmtUsd(v) {
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+  function fmtTs(ts) {
+    const d = new Date(ts * 1000);
+    return d.toTimeString().slice(0,8);
+  }
+  function fmtPrice(p) {
+    return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  }
+
+  const buyUsd  = data.total_buy_usd  || 0;
+  const sellUsd = data.total_sell_usd || 0;
+
+  const rows = trades.map(t => {
+    const sideCol = t.side === 'buy' ? 'var(--green)' : 'var(--red)';
+    const sideLbl = t.side.toUpperCase();
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:3px 6px 3px 0"><span style="color:${sideCol};font-weight:700;font-size:10px">${sideLbl}</span></td>
+      <td style="padding:3px 6px;font-family:monospace;font-size:11px">${fmtPrice(t.price)}</td>
+      <td style="padding:3px 6px;text-align:right;font-size:11px;color:var(--yellow);font-weight:600">${fmtUsd(t.usd_value)}</td>
+      <td style="padding:3px 0;text-align:right;font-size:10px;color:var(--muted)">${fmtTs(t.ts)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;font-size:11px;margin-bottom:8px">
+      <span style="color:var(--muted)">Buy <span style="color:var(--green);font-weight:700">${fmtUsd(buyUsd)}</span></span>
+      <span style="color:var(--muted)">Sell <span style="color:var(--red);font-weight:700">${fmtUsd(sellUsd)}</span></span>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">side</th>
+        <th style="text-align:left;padding:2px 6px 4px;font-weight:400">price</th>
+        <th style="text-align:right;padding:2px 6px 4px;font-weight:400">value</th>
+        <th style="text-align:right;padding:2px 0 4px;font-weight:400">time</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2200,6 +2421,11 @@ async function refresh() {
     safe(renderObWalls),
     safe(renderTopMovers),
     safe(renderLiqHeatmap),
+    safe(renderCvdMomentum),
+    safe(renderDeltaDivergence),
+    safe(renderFundingExtreme),
+    safe(renderLiqCascade),
+    safe(renderLargeTrades),
   ]);
 }
 
