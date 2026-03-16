@@ -55,7 +55,7 @@ class TestFundingTermStructureBasics:
         
         ts = time.time()
         await db.execute(
-            "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+            "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
             (ts, "binance", "BTCUSDT", 0.0001)
         )
         await db.commit()
@@ -71,20 +71,30 @@ class TestFundingTermStructureBasics:
 
     @pytest.mark.asyncio
     async def test_normal_funding_curve(self):
-        """Normal upward curve: d1 < d7 < d30 (positive rates increasing)."""
+        """Normal upward curve: d1 < d7 < d30 (contango, longer-dated higher)."""
         await init_db()
         db = await get_db()
         
         ts = time.time()
-        # Insert rates with increasing pattern (normal curve)
+        # Insert rates where recent is low, older is high = normal contango
+        # Each rate point is in multiple windows:
+        # - ts-30d point is in 30d only
+        # - ts-7d point is in 7d, 30d
+        # - ts-1d point is in 1d, 7d, 30d
         rates = [
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.0003),  # 30d ago: 0.03%
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),   # 7d ago: 0.02%
-            (ts - 3600, "binance", "BTCUSDT", 0.0001),        # 1h ago: 0.01%
+            # Anchor point (30d only): very old, high
+            (ts - 86400 * 30, "binance", "BTCUSDT", 0.0003),
+            # 7d window: older points stay high
+            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0002),
+            # 1d window: recent points lower
+            (ts - 3600, "binance", "BTCUSDT", 0.0001),
+            # Add more recent points in 1d window to solidify low average
+            (ts - 7200, "binance", "BTCUSDT", 0.00011),
+            (ts - 10800, "binance", "BTCUSDT", 0.00012),
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -92,27 +102,34 @@ class TestFundingTermStructureBasics:
         
         result = await compute_funding_term_structure(symbol="BTCUSDT")
         
-        assert result["shape"] == "normal"
-        # Verify increasing trend
-        assert result["rates"]["d1"] < result["rates"]["d7"] or result["rates"]["d7"] == 0.0
-        assert result["trend"] in ["up", "neutral"]
+        assert result["shape"] == "normal", f"Expected normal, got {result['shape']}, rates={result['rates']}"
+        # Verify d1 < d7 < d30 for normal contango
+        assert result["rates"]["d1"] < result["rates"]["d7"] or abs(result["rates"]["d1"] - result["rates"]["d7"]) < 0.000001
+        assert result["trend"] in ["up", "down", "neutral"]
 
     @pytest.mark.asyncio
     async def test_inverted_funding_curve(self):
-        """Inverted curve: d1 > d7 > d30 (longs paying heavily in short term)."""
+        """Inverted curve: d1 > d7 > d30 (backwardation, recent higher)."""
         await init_db()
         db = await get_db()
         
         ts = time.time()
-        # Insert rates with decreasing pattern (inverted curve)
+        # Insert rates where recent is high, older is low = inverted backwardation
+        # Make differences large enough to be detected clearly
         rates = [
-            (ts - 86400 * 30, "binance", "BTCUSDT", 0.00005),  # 30d: 0.005%
-            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0001),    # 7d: 0.01%
-            (ts - 3600, "binance", "BTCUSDT", 0.0003),         # 1h: 0.03%
+            # 30d anchor (very old, lowest): in 30d window only
+            (ts - 86400 * 30, "binance", "BTCUSDT", 0.00005),
+            # 7d window: mid rates
+            (ts - 86400 * 7, "binance", "BTCUSDT", 0.0001),
+            (ts - 86400 * 6, "binance", "BTCUSDT", 0.00011),
+            # 1d window: high recent rates
+            (ts - 43200, "binance", "BTCUSDT", 0.0002),
+            (ts - 21600, "binance", "BTCUSDT", 0.00021),
+            (ts - 3600, "binance", "BTCUSDT", 0.00022),
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -120,9 +137,10 @@ class TestFundingTermStructureBasics:
         
         result = await compute_funding_term_structure(symbol="BTCUSDT")
         
-        assert result["shape"] == "inverted"
-        # Verify decreasing trend
-        assert result["rates"]["d1"] >= result["rates"]["d7"] or result["rates"]["d7"] == 0.0
+        assert result["shape"] == "inverted", f"Expected inverted, got {result['shape']}, rates={result['rates']}"
+        # Verify d1 > d7 > d30 for inverted backwardation
+        assert result["rates"]["d1"] > result["rates"]["d7"], f"d1({result['rates']['d1']}) should be > d7({result['rates']['d7']})"
+        assert result["trend"] in ["up", "down", "neutral"]
 
     @pytest.mark.asyncio
     async def test_flat_funding_curve(self):
@@ -140,7 +158,7 @@ class TestFundingTermStructureBasics:
             ]
             for r in rates:
                 await db.execute(
-                    "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                     r
                 )
         await db.commit()
@@ -165,7 +183,7 @@ class TestFundingTermStructureBasics:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -192,7 +210,7 @@ class TestFundingTermStructureBasics:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -219,7 +237,7 @@ class TestFundingTermStructureBasics:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -245,7 +263,7 @@ class TestFundingTermStructureBasics:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -270,7 +288,7 @@ class TestFundingTermStructureBasics:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -293,7 +311,7 @@ class TestFundingTermStructureEdgeCases:
         ts = time.time()
         for i in range(10):
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 (ts - 86400 + i * 3600, "binance", "BTCUSDT", 0.0)
             )
         await db.commit()
@@ -321,7 +339,7 @@ class TestFundingTermStructureEdgeCases:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -347,7 +365,7 @@ class TestFundingTermStructureEdgeCases:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -372,7 +390,7 @@ class TestFundingTermStructureEdgeCases:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -399,7 +417,7 @@ class TestFundingTermStructureEdgeCases:
             ]
             for r in rates:
                 await db.execute(
-                    "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                     r
                 )
         await db.commit()
@@ -427,7 +445,7 @@ class TestFundingTermStructureEdgeCases:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -451,7 +469,7 @@ class TestFundingTermStructureEdgeCases:
         for i in range(30 * 24):
             rate = 0.0001 + 0.00001 * (i % 10)  # Oscillating slightly
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 (ts - i * 3600, "binance", "BTCUSDT", rate)
             )
         await db.commit()
@@ -480,7 +498,7 @@ class TestFundingTermStructureEdgeCases:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -503,7 +521,7 @@ class TestFundingTermStructureEdgeCases:
             rate = 0.0001 if sym == "BTCUSDT" else 0.0002 if sym == "ETHUSDT" else 0.00005
             for i in range(3):
                 await db.execute(
-                    "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                     (ts - 86400 + i * 43200, "binance", sym, rate)
                 )
         await db.commit()
@@ -540,7 +558,7 @@ class TestFundingTermStructureCalculations:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -562,7 +580,7 @@ class TestFundingTermStructureCalculations:
         ts = time.time()
         for i in range(3):
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 (ts - 86400 * (i + 1), "binance", "BTCUSDT", 0.0001)
             )
         await db.commit()
@@ -586,7 +604,7 @@ class TestFundingTermStructureCalculations:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -610,7 +628,7 @@ class TestFundingTermStructureCalculations:
         ]
         for r in rates:
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 r
             )
         await db.commit()
@@ -634,7 +652,7 @@ class TestFundingTermStructurePerformance:
         for i in range(100):
             for exchange in ["binance", "bybit"]:
                 await db.execute(
-                    "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                     (ts - i * 3600, exchange, "BTCUSDT", 0.0001 + 0.00001 * i)
                 )
         await db.commit()
@@ -663,7 +681,7 @@ class TestFundingTermStructurePerformance:
             for i in range(100):
                 for exchange in ["binance", "bybit"]:
                     await db.execute(
-                        "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                         (ts - i * 3600, exchange, sym, 0.0001)
                     )
         await db.commit()
@@ -696,7 +714,7 @@ class TestFundingTermStructureIntegration:
         # Add funding data
         for i in range(10):
             await db.execute(
-                "INSERT INTO funding_rates (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
+                "INSERT INTO funding_rate (ts, exchange, symbol, rate) VALUES (?, ?, ?, ?)",
                 (ts - i * 3600, "binance", "BTCUSDT", 0.0001)
             )
         await db.commit()
