@@ -1894,6 +1894,7 @@ async function renderLargeTrades() {
   }
 
   function fmtUsd(v) {
+    if (v == null || isNaN(v)) return '—';
     if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
     if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
     return '$' + v.toFixed(0);
