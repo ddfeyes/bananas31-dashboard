@@ -71,7 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
-    compute_options_flow_tracker,
+    compute_dex_vs_cex_flow,
 )
 
 router = APIRouter(prefix="/api")
@@ -5322,8 +5322,8 @@ async def holder_distribution_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/options-flow-tracker")
-async def options_flow_tracker_endpoint():
-    """Options flow: large trades >$100k notional (Deribit/Lyra), call/put skew by expiry, unusual flow alerts, strike heatmap."""
-    data = await compute_options_flow_tracker()
+@router.get("/dex-vs-cex-flow")
+async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None, window_hours: int = 24):
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot, Z-score, price discovery."""
+    data = await compute_dex_vs_cex_flow(symbol=symbol, window_hours=window_hours)
     return JSONResponse(data)

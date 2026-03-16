@@ -7389,8 +7389,7 @@ async def compute_nft_market_pulse() -> dict:
 
 
 # BTC Dominance Tracker helpers  (_bd_)
-# =====================================================
-def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
+# ==============================================def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
     if total_market_cap <= 0:
         return 0.0
@@ -8356,311 +8355,144 @@ async def compute_holder_distribution_card() -> dict:
     }
 
 
-# ── Options Flow Tracker ──────────────────────────────────────────────────────
+# ── DEX vs CEX Volume Divergence ─────────────────────────────────────────────
 
-def _oft_skew_label(call_ratio: float) -> str:
-    """Classify call/put skew direction from call ratio (0-1)."""
-    if call_ratio >= 0.60:
-        return "bullish"
-    if call_ratio <= 0.40:
-        return "bearish"
-    return "neutral"
+def _dex_cex_seed(offset: int = 0) -> "random.Random":
+    import random
+    import time
+    return random.Random(int(time.time() / 300) + offset)
 
 
-def _oft_is_unusual(vol_oi_ratio: float, threshold: float = 0.20) -> bool:
-    """Return True if volume/OI ratio indicates unusual activity."""
-    return vol_oi_ratio > threshold
+def _dex_cex_dominance_history(n: int = 30) -> list:
+    """Return n historical DEX-dominance-ratio values (simulated)."""
+    import random
+    import time
+    base = int(time.time() / 300) - n
+    history = []
+    for i in range(n):
+        rng = random.Random(base + i)
+        h_dex = rng.uniform(12e6, 45e6)
+        h_cex = rng.uniform(40e6, 130e6)
+        history.append(h_dex / (h_dex + h_cex))
+    return history
 
 
-def _oft_strike_bucket(strike: float, atm: float) -> str:
-    """Bucket a strike relative to ATM price."""
-    if atm <= 0:
-        return "ATM"
-    pct = (strike - atm) / atm
-    if pct < -0.10:
-        return "DITM"
-    if pct < -0.03:
-        return "ITM"
-    if pct <= 0.03:
-        return "ATM"
-    if pct <= 0.10:
-        return "OTM"
-    return "DOTM"
-
-
-def _oft_expiry_weight(days_to_expiry: int) -> float:
-    """Gamma-weighted importance: near-term expiries carry higher weight."""
-    import math as _math
-    if days_to_expiry <= 0:
+def _dex_cex_zscore(current: float, history: list) -> float:
+    import math
+    n = len(history)
+    if n == 0:
         return 0.0
-    return round(1.0 / _math.sqrt(max(days_to_expiry, 1)), 4)
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    std = math.sqrt(variance)
+    if std < 1e-10:
+        return 0.0
+    return round((current - mean) / std, 3)
 
 
-def _oft_call_put_ratio(call_notional: float, put_notional: float) -> float:
-    """Call / (call + put) ratio, 0.5 when balanced."""
-    total = call_notional + put_notional
-    if total <= 0:
-        return 0.5
-    return round(call_notional / total, 4)
+def _dex_cex_trend(history: list) -> tuple:
+    """Return (trend_label, trend_delta) from last 14 periods split 7/7."""
+    if len(history) < 14:
+        return "stable", 0.0
+    recent = history[-7:]
+    prior = history[-14:-7]
+    delta = sum(recent) / 7 - sum(prior) / 7
+    if delta > 0.005:
+        label = "rising"
+    elif delta < -0.005:
+        label = "falling"
+    else:
+        label = "stable"
+    return label, round(delta, 4)
 
 
-def _oft_iv_skew_label(iv_skew: float) -> str:
-    """Label the 25-delta IV skew (call IV - put IV)."""
-    if iv_skew > 2.0:
-        return "call_premium"
-    if iv_skew < -2.0:
-        return "put_premium"
-    return "flat"
+def _dex_price_discovery(zscore: float) -> tuple:
+    """Return (price_discovery_label, discovery_signal) from divergence Z-score."""
+    if zscore > 2.0:
+        return "dex_leading", "strong_buy"
+    if zscore > 1.0:
+        return "dex_elevated", "watch"
+    if zscore < -2.0:
+        return "cex_dominant", "strong_sell"
+    if zscore < -1.0:
+        return "cex_elevated", "watch"
+    return "balanced", "neutral"
 
 
-def _oft_flow_severity(notional_usd: float) -> str:
-    """Classify flow severity by notional size."""
-    if notional_usd >= 1_000_000:
-        return "high"
-    if notional_usd >= 300_000:
-        return "medium"
-    return "low"
+async def compute_dex_vs_cex_flow(
+    symbol: Optional[str] = None,
+    window_hours: int = 24,
+) -> dict:
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot.
 
-
-def _oft_aggregate_by_strike(trades: list) -> dict:
-    """Aggregate call/put OI and notional by strike."""
-    strikes: dict = {}
-    for t in trades:
-        s = t["strike"]
-        if s not in strikes:
-            strikes[s] = {"call_notional": 0.0, "put_notional": 0.0, "call_oi": 0.0, "put_oi": 0.0}
-        if t["type"] == "call":
-            strikes[s]["call_notional"] += t["notional_usd"]
-            strikes[s]["call_oi"] += t["qty"]
-        else:
-            strikes[s]["put_notional"] += t["notional_usd"]
-            strikes[s]["put_oi"] += t["qty"]
-    return strikes
-
-
-def _oft_net_gamma(call_oi: float, call_delta: float, put_oi: float, put_delta: float) -> float:
-    """Dealer net gamma proxy: call OI * call_delta - put OI * |put_delta|."""
-    return round(call_oi * call_delta - put_oi * abs(put_delta), 2)
-
-
-
-# ── Options Flow Tracker ───────────────────────────────────────────────────────
-
-import random as _random
-
-# Simulated instruments pool
-_OFT_EXPIRIES = ["28MAR26", "25APR26", "27JUN26", "26SEP26", "25DEC26"]
-_OFT_STRIKES_BTC = [60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000]
-_OFT_EXCHANGES = ["deribit", "lyra"]
-_OFT_SEED = 20260316  # deterministic
-
-
-def _oft_make_instrument(strike: int, expiry: str, opt_type: str) -> str:
-    return f"BTC-{expiry}-{strike}-{opt_type[0].upper()}"
-
-
-def _oft_skew_signal(call_vol: float, put_vol: float) -> str:
-    """Classify call/put skew as bullish/bearish/neutral."""
-    if put_vol == 0:
-        return "bullish"
-    ratio = call_vol / put_vol
-    if ratio > 1.25:
-        return "bullish"
-    if ratio < 0.8:
-        return "bearish"
-    return "neutral"
-
-
-def _oft_skew_ratio(call_vol: float, put_vol: float) -> float:
-    """Call-to-put volume ratio, capped at 10."""
-    if put_vol == 0:
-        return 10.0
-    return round(min(call_vol / put_vol, 10.0), 3)
-
-
-def _oft_unusual_threshold(notional: float, mean_notional: float) -> bool:
-    """True if trade is 3x above mean notional for this expiry."""
-    return notional > mean_notional * 3.0
-
-
-def _oft_net_flow(call_vol: float, put_vol: float) -> float:
-    """Net options flow: positive = net call buying."""
-    return round(call_vol - put_vol, 2)
-
-
-def _oft_dominant_expiry(skew_by_expiry: dict) -> str:
-    """Expiry with highest combined volume."""
-    if not skew_by_expiry:
-        return ""
-    return max(
-        skew_by_expiry,
-        key=lambda e: skew_by_expiry[e]["call_volume_usd"] + skew_by_expiry[e]["put_volume_usd"],
-    )
-
-
-def _oft_skew_percentile(ratio: float) -> float:
-    """Map call/put ratio to 0-100 percentile (simulated)."""
-    # 0.5 ratio → 20th pct, 1.0 → 50th, 2.0 → 80th
-    import math as _math
-    raw = 50.0 + 30.0 * _math.log(max(ratio, 0.01)) / _math.log(4)
-    return round(max(0.0, min(100.0, raw)), 1)
-
-
-def _oft_simulate_large_trades(seed: int = _OFT_SEED) -> list:
-    """Generate deterministic simulated large options trades (>$100k notional)."""
-    rng = _random.Random(seed)
-    now = 1742080000.0  # fixed reference timestamp (2026-03-16)
-    trades = []
-    for i in range(40):
-        expiry = rng.choice(_OFT_EXPIRIES)
-        strike = rng.choice(_OFT_STRIKES_BTC)
-        opt_type = rng.choice(["call", "put"])
-        exchange = rng.choice(_OFT_EXCHANGES)
-        contracts = rng.randint(5, 80)
-        btc_price = rng.uniform(75000, 95000)
-        iv = round(rng.uniform(0.45, 1.20), 4)
-        delta = round(rng.uniform(0.1, 0.9), 3)
-        premium_per = round(rng.uniform(500, 4000), 2)
-        notional_usd = round(contracts * btc_price * 0.001, 2)  # 0.001 BTC per contract
-        # Ensure >$100k
-        if notional_usd < 100_000:
-            notional_usd = round(notional_usd + 100_000, 2)
-        side = rng.choice(["buy", "sell"])
-        ts = now - rng.uniform(0, 3600 * 24)
-        trades.append({
-            "ts": round(ts, 3),
-            "exchange": exchange,
-            "instrument": _oft_make_instrument(strike, expiry, opt_type),
-            "type": opt_type,
-            "strike": strike,
-            "expiry": expiry,
-            "side": side,
-            "contracts": contracts,
-            "btc_price": round(btc_price, 2),
-            "premium_per_contract": premium_per,
-            "notional_usd": notional_usd,
-            "iv": iv,
-            "delta": delta,
-        })
-    # Sort newest first
-    trades.sort(key=lambda t: t["ts"], reverse=True)
-    return trades
-
-
-def _oft_compute_skew_by_expiry(trades: list) -> dict:
-    """Aggregate call/put volume by expiry, compute skew."""
-    agg: dict = {}
-    for t in trades:
-        exp = t["expiry"]
-        if exp not in agg:
-            agg[exp] = {"call_volume_usd": 0.0, "put_volume_usd": 0.0}
-        key = "call_volume_usd" if t["type"] == "call" else "put_volume_usd"
-        agg[exp][key] += t["notional_usd"]
-
-    result = {}
-    for exp, vols in agg.items():
-        cv = round(vols["call_volume_usd"], 2)
-        pv = round(vols["put_volume_usd"], 2)
-        result[exp] = {
-            "call_volume_usd": cv,
-            "put_volume_usd": pv,
-            "skew_ratio": _oft_skew_ratio(cv, pv),
-            "skew_signal": _oft_skew_signal(cv, pv),
-            "net_flow_usd": _oft_net_flow(cv, pv),
-        }
-    return result
-
-
-def _oft_detect_unusual_flow(trades: list) -> list:
-    """Flag trades with notional > 3x mean as unusual flow alerts."""
-    if not trades:
-        return []
-    mean_n = sum(t["notional_usd"] for t in trades) / len(trades)
-    alerts = []
-    for t in trades:
-        if _oft_unusual_threshold(t["notional_usd"], mean_n):
-            severity = "critical" if t["notional_usd"] > mean_n * 6 else "high"
-            alerts.append({
-                "ts": t["ts"],
-                "instrument": t["instrument"],
-                "exchange": t["exchange"],
-                "notional_usd": t["notional_usd"],
-                "side": t["side"],
-                "type": t["type"],
-                "severity": severity,
-                "reason": (
-                    f"Unusual {t['type']} {t['side']}: "
-                    f"${t['notional_usd']:,.0f} notional "
-                    f"({t['notional_usd']/mean_n:.1f}x avg)"
-                ),
-            })
-    alerts.sort(key=lambda a: a["notional_usd"], reverse=True)
-    return alerts
-
-
-def _oft_build_strike_heatmap(trades: list) -> dict:
-    """Aggregate call/put OI-proxy (notional) per strike."""
-    hm: dict = {}
-    for t in trades:
-        k = str(t["strike"])
-        if k not in hm:
-            hm[k] = {"call_notional_usd": 0.0, "put_notional_usd": 0.0, "net_flow_usd": 0.0}
-        if t["type"] == "call":
-            hm[k]["call_notional_usd"] = round(hm[k]["call_notional_usd"] + t["notional_usd"], 2)
-        else:
-            hm[k]["put_notional_usd"] = round(hm[k]["put_notional_usd"] + t["notional_usd"], 2)
-        sign = 1 if t["side"] == "buy" else -1
-        hm[k]["net_flow_usd"] = round(hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2)
-    # Add dominant type per strike
-    for k, v in hm.items():
-        v["dominant"] = "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
-        v["call_notional_usd"] = round(v["call_notional_usd"], 2)
-        v["put_notional_usd"] = round(v["put_notional_usd"], 2)
-    return hm
-
-
-async def compute_options_flow_tracker() -> dict:
+    Returns divergence Z-score, DEX dominance ratio trend, and early price
+    discovery signal. Uses simulated data seeded by 5-min time bucket so
+    values are stable within a refresh cycle.
     """
-    Options flow tracker: aggregate large trades (>$100k notional) across
-    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
-    positioning heat map by strike.
-    Uses simulated data — no real API calls needed.
-    """
-    trades = _oft_simulate_large_trades()
-    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
-    unusual_alerts = _oft_detect_unusual_flow(trades)
-    strike_heatmap = _oft_build_strike_heatmap(trades)
+    import math
+    rng = _dex_cex_seed()
 
-    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
-    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
-    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
-    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
-    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
-    skew_pct = _oft_skew_percentile(overall_ratio)
+    # ── Simulated DEX protocol volumes (USD) ──────────────────────────────────
+    dex_protocols: dict = {
+        "uniswap_v3": rng.uniform(8e6, 25e6),
+        "uniswap_v2": rng.uniform(2e6, 8e6),
+        "curve":      rng.uniform(5e6, 18e6),
+        "balancer":   rng.uniform(1e6, 6e6),
+    }
+    total_dex = sum(dex_protocols.values())
 
-    desc = (
-        f"{overall_signal.capitalize()} options flow: "
-        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
-        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
-        f"dominant expiry {dominant_exp}"
+    # ── Simulated CEX volume ──────────────────────────────────────────────────
+    cex_volume = rng.uniform(40e6, 120e6)
+
+    total_volume = total_dex + cex_volume
+    dominance_ratio = total_dex / total_volume if total_volume > 0 else 0.0
+
+    # ── Historical dominance for Z-score ──────────────────────────────────────
+    hist = _dex_cex_dominance_history(30)
+    mean_dom = sum(hist) / len(hist) if hist else 0.0
+    variance = sum((x - mean_dom) ** 2 for x in hist) / len(hist) if hist else 0.0
+    std_dom = math.sqrt(variance)
+    zscore = _dex_cex_zscore(dominance_ratio, hist)
+
+    # ── Trend ─────────────────────────────────────────────────────────────────
+    dom_trend, trend_delta = _dex_cex_trend(hist)
+
+    # ── Price discovery signal ────────────────────────────────────────────────
+    price_discovery, discovery_signal = _dex_price_discovery(zscore)
+
+    # ── Protocol breakdown (% of total DEX) ──────────────────────────────────
+    protocol_pct = {
+        k: round(v / total_dex * 100, 1) if total_dex > 0 else 0.0
+        for k, v in dex_protocols.items()
+    }
+
+    # ── Sparkline (last 24 of history) ────────────────────────────────────────
+    dom_series = [round(d, 4) for d in hist[-24:]]
+
+    description = (
+        f"DEX {dominance_ratio * 100:.1f}% of total volume; "
+        f"Z-score {zscore:.2f} — {price_discovery.replace('_', ' ')}"
     )
 
     return {
-        "large_trades": trades[:20],  # top 20 most recent
-        "skew_by_expiry": skew_by_expiry,
-        "unusual_flow_alerts": unusual_alerts[:10],
-        "strike_heatmap": strike_heatmap,
-        "summary": {
-            "total_call_volume_usd": round(total_call_vol, 2),
-            "total_put_volume_usd": round(total_put_vol, 2),
-            "overall_skew_ratio": overall_ratio,
-            "net_flow_direction": overall_signal,
-            "dominant_expiry": dominant_exp,
-            "skew_percentile": skew_pct,
-            "unusual_activity_count": len(unusual_alerts),
-            "total_trades_analyzed": len(trades),
-            "exchanges": list({t["exchange"] for t in trades}),
-        },
-        "description": desc,
+        "symbol":               symbol or "global",
+        "window_hours":         window_hours,
+        "dex_volume_usd":       round(total_dex, 0),
+        "cex_volume_usd":       round(cex_volume, 0),
+        "total_volume_usd":     round(total_volume, 0),
+        "dex_dominance_ratio":  round(dominance_ratio, 4),
+        "dex_dominance_pct":    round(dominance_ratio * 100, 2),
+        "divergence_zscore":    zscore,
+        "dominance_trend":      dom_trend,
+        "trend_delta":          trend_delta,
+        "price_discovery":      price_discovery,
+        "discovery_signal":     discovery_signal,
+        "protocols":            {k: round(v, 0) for k, v in dex_protocols.items()},
+        "protocol_breakdown_pct": protocol_pct,
+        "dominance_history":    dom_series,
+        "mean_dominance":       round(mean_dom, 4),
+        "std_dominance":        round(std_dom, 4),
+        "description":          description,
     }
+
 
