@@ -5203,3 +5203,53 @@ async def liquidation_heatmap_endpoint(
         }
 
     return JSONResponse({"status": "ok", "ts": now, "window_s": window_s, "symbols": result})
+
+
+@router.get("/momentum-rank")
+async def momentum_rank_endpoint():
+    """
+    Rank all tracked symbols by composite momentum score (5m/15m/1h).
+
+    Score = 0.5 × pct_5m + 0.3 × pct_15m + 0.2 × pct_1h
+    where pct_Xm = (last_close − first_open) / first_open × 100 over X-minute window.
+    Symbols ranked by score descending (rank 1 = strongest bullish momentum).
+    """
+    now = time.time()
+    syms = get_symbols()
+    windows = {"5m": 300, "15m": 900, "1h": 3600}
+    weights = {"5m": 0.5, "15m": 0.3, "1h": 0.2}
+
+    async def _sym_rank(sym: str) -> dict:
+        tasks = [
+            get_ohlcv(interval_seconds=60, window_seconds=w, symbol=sym)
+            for w in windows.values()
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        pcts: dict = {}
+        for label, candles in zip(windows.keys(), results):
+            if isinstance(candles, list) and len(candles) >= 1:
+                o = candles[0].get("open")
+                c = candles[-1].get("close")
+                pcts[label] = round((c - o) / o * 100, 4) if o and c else None
+            else:
+                pcts[label] = None
+        score = round(
+            sum(weights[k] * (pcts[k] or 0.0) for k in windows),
+            4,
+        )
+        direction = "bull" if score > 0.1 else "bear" if score < -0.1 else "neutral"
+        return {
+            "symbol":   sym,
+            "score":    score,
+            "pct_5m":   pcts["5m"],
+            "pct_15m":  pcts["15m"],
+            "pct_1h":   pcts["1h"],
+            "direction": direction,
+        }
+
+    rows = list(await asyncio.gather(*[_sym_rank(s) for s in syms]))
+    rows.sort(key=lambda r: r["score"], reverse=True)
+    for i, r in enumerate(rows, start=1):
+        r["rank"] = i
+
+    return JSONResponse({"status": "ok", "ts": now, "ranked": rows})
