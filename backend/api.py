@@ -79,6 +79,7 @@ from metrics import (
     detect_ob_walls,
     compute_session_volume_profile,
     compute_order_flow_toxicity,
+    compute_momentum_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -5397,3 +5398,19 @@ async def momentum_rank_endpoint():
         r["rank"] = i
 
     return JSONResponse({"status": "ok", "ts": now, "ranked": rows})
+
+
+@router.get("/momentum-divergence")
+async def momentum_divergence_endpoint(
+    symbol: Optional[str] = Query(None),
+    window: int = Query(3600, ge=300, le=86400),
+    bucket: int = Query(300, ge=60, le=3600),
+):
+    """Price vs OI momentum divergence detector."""
+    target = symbol or get_symbols()[0]
+    data = await compute_momentum_divergence(
+        symbol=target,
+        window_seconds=window,
+        bucket_seconds=bucket,
+    )
+    return JSONResponse(data)
