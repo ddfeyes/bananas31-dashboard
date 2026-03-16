@@ -26,6 +26,7 @@ let regimeTimelineChart = null;  // Chart.js
 let wsAlerts     = null;
 
 let refreshTimer = null;
+let _refreshRunning = false;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -2420,6 +2421,8 @@ async function renderCrossAssetCorr() {
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
+  if (_refreshRunning) return;
+  _refreshRunning = true;
   const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
 
   try {
@@ -3020,7 +3023,7 @@ async function init() {
   // are Chart.js instances created inline in their render functions
   connectAlerts();
 
-  // After 10s replace any still-Loading cards with Error badge
+  // After 60s replace any still-Loading cards with Error badge
   setTimeout(() => {
     document.querySelectorAll('[id$="-content"]').forEach(el => {
       const txt = el.textContent.trim();
@@ -3028,7 +3031,7 @@ async function init() {
         el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
       }
     });
-  }, 10000);
+  }, 60000);
 
   await loadSymbols();
   await refresh();
