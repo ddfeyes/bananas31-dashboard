@@ -3225,9 +3225,9 @@ async function init() {
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
   safeInit(initAggressorChart);
-  safeInit(initVolumeProfileChart);
-  safeInit(initRegimeTimelineChart);
-  safeInit(initAdaptiveVpChart);
+  try { if (typeof initVolumeProfileChart === 'function') safeInit(initVolumeProfileChart); } catch(e) { console.warn('initVolumeProfileChart not defined'); }
+  try { if (typeof initRegimeTimelineChart === 'function') safeInit(initRegimeTimelineChart); } catch(e) { console.warn('initRegimeTimelineChart not defined'); }
+  try { if (typeof initAdaptiveVpChart === 'function') safeInit(initAdaptiveVpChart); } catch(e) { console.warn('initAdaptiveVpChart not defined'); }
   connectAlerts();
 
   // After 10s replace any still-Loading cards with Error badge
