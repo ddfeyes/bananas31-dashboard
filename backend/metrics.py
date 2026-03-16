@@ -8356,3 +8356,390 @@ async def compute_holder_distribution_card() -> dict:
     }
 
 
+# ── Cross-Chain Arbitrage Monitor ─────────────────────────────────────────────
+
+_CHAINS = ["ETH", "BSC", "ARB", "OP", "BASE"]
+_ARB_ASSETS = ["BTC", "ETH", "USDC"]
+
+# Bridge name -> (flat_fee_usd, bps_fee)
+_BRIDGES: dict[str, tuple[float, float]] = {
+    "Stargate":  (0.50, 6.0),
+    "Across":    (0.30, 4.0),
+    "Hop":       (0.20, 5.0),
+    "Synapse":   (0.40, 7.0),
+    "Celer":     (0.25, 5.5),
+}
+
+# Base reference prices (simulated, USD)
+_BASE_PRICES: dict[str, float] = {
+    "BTC":  67_420.0,
+    "ETH":   3_540.0,
+    "USDC":      1.0,
+}
+
+# Per-chain deviation seeds (fraction) — simulate persistent DEX/CEX gaps
+_CHAIN_BIAS: dict[str, dict[str, float]] = {
+    "ETH":  {"BTC":  0.0000, "ETH":  0.0000, "USDC":  0.0000},
+    "BSC":  {"BTC":  0.0012, "ETH": -0.0008, "USDC":  0.0001},
+    "ARB":  {"BTC": -0.0005, "ETH":  0.0015, "USDC": -0.0001},
+    "OP":   {"BTC":  0.0008, "ETH": -0.0004, "USDC":  0.0002},
+    "BASE": {"BTC": -0.0003, "ETH":  0.0009, "USDC":  0.0000},
+}
+
+# Arb frequency weights per hour — higher = more arb activity
+_ARB_FREQ_BASE: list[float] = [
+    0.2, 0.1, 0.1, 0.1, 0.1, 0.2,   # 00-05 UTC
+    0.4, 0.7, 0.9, 0.8, 0.8, 0.7,   # 06-11 UTC
+    0.8, 0.9, 1.0, 0.9, 0.8, 0.8,   # 12-17 UTC
+    0.7, 0.6, 0.5, 0.4, 0.3, 0.2,   # 18-23 UTC
+]
+_DAY_SCALE: list[float] = [0.6, 0.9, 1.0, 1.0, 0.9, 0.8, 0.5]  # Mon-Sun
+
+
+def _simulated_price(asset: str, chain: str, noise_seed: float) -> float:
+    """Return a simulated price for asset on chain, with deterministic noise."""
+    base = _BASE_PRICES[asset]
+    bias = _CHAIN_BIAS[chain][asset]
+    noise = ((noise_seed * 1_000_003) % 200 - 100) / 1_000_000  # ±0.0001
+    return base * (1.0 + bias + noise)
+
+
+def _spread_bps(high: float, low: float) -> float:
+    if low <= 0:
+        return 0.0
+    return round((high - low) / low * 10_000, 2)
+
+
+def _fee_adjusted_profit_bps(gross_bps: float, bridge: str, trade_size_usd: float) -> float:
+    """Return fee-adjusted profit in bps for a given bridge and trade size."""
+    flat, pct_bps = _BRIDGES[bridge]
+    flat_bps = flat / trade_size_usd * 10_000 if trade_size_usd > 0 else 9999
+    return round(gross_bps - pct_bps - flat_bps, 2)
+
+
+def _best_bridge(gross_bps: float, trade_size_usd: float) -> dict:
+    """Return the bridge with highest fee-adjusted profit."""
+    best_name = ""
+    best_profit = float("-inf")
+    for name in _BRIDGES:
+        profit = _fee_adjusted_profit_bps(gross_bps, name, trade_size_usd)
+        if profit > best_profit:
+            best_profit = profit
+            best_name = name
+    flat, pct_bps = _BRIDGES[best_name]
+    return {
+        "bridge": best_name,
+        "flat_fee_usd": flat,
+        "pct_fee_bps": pct_bps,
+        "net_profit_bps": round(best_profit, 2),
+        "profitable": best_profit > 0,
+    }
+
+
+async def compute_cross_chain_arb_monitor(
+    trade_size_usd: float = 10_000.0,
+    min_spread_bps: float = 2.0,
+) -> dict:
+    """Compute cross-chain arbitrage opportunities for BTC/ETH/USDC across 5 chains.
+
+    Tracks price discrepancies across ETH/BSC/ARB/OP/BASE using simulated DEX
+    prices. Calculates spread in bps, fee-adjusted profit signal, best bridge
+    route, and a 24h×7d arb frequency heatmap.
+
+    Args:
+        trade_size_usd:  Notional trade size used for fee-adjusted profit calc.
+        min_spread_bps:  Threshold below which spread is labelled 'tight'.
+
+    Returns:
+        assets:            {asset -> {chain_prices, spread_bps, high_chain,
+                            low_chain, signal, best_bridge}}
+        opportunities:     Sorted list of actionable arb pairs
+        bridge_summary:    All bridges with their fee structures
+        arb_frequency_heatmap: 24×7 matrix (hours × days) of arb frequency scores
+        summary:           {active_opps, max_spread_bps, best_asset, status}
+        trade_size_usd:    echoed
+        generated_at:      unix timestamp
+    """
+    import time as _time
+    import math as _math
+
+    now = _time.time()
+    seed = (now % 3600) / 3600  # 0..1 cycle per hour
+
+    assets: dict[str, dict] = {}
+    opportunities: list[dict] = []
+
+    for asset in _ARB_ASSETS:
+        chain_prices: dict[str, float] = {}
+        for i, chain in enumerate(_CHAINS):
+            chain_prices[chain] = round(
+                _simulated_price(asset, chain, seed + i * 0.137), 6
+            )
+
+        prices_sorted = sorted(chain_prices.items(), key=lambda x: x[1])
+        low_chain, low_price   = prices_sorted[0]
+        high_chain, high_price = prices_sorted[-1]
+
+        spread = _spread_bps(high_price, low_price)
+        bridge_info = _best_bridge(spread, trade_size_usd)
+
+        if spread >= min_spread_bps:
+            signal = "ARBITRAGE" if bridge_info["profitable"] else "SPREAD_ONLY"
+        elif spread > 0:
+            signal = "TIGHT"
+        else:
+            signal = "FLAT"
+
+        assets[asset] = {
+            "chain_prices": chain_prices,
+            "spread_bps": spread,
+            "high_chain": high_chain,
+            "high_price": round(high_price, 6),
+            "low_chain": low_chain,
+            "low_price": round(low_price, 6),
+            "signal": signal,
+            "best_bridge": bridge_info,
+        }
+
+        if bridge_info["profitable"] and spread >= min_spread_bps:
+            opportunities.append({
+                "asset": asset,
+                "buy_chain":  low_chain,
+                "sell_chain": high_chain,
+                "buy_price":  round(low_price, 6),
+                "sell_price": round(high_price, 6),
+                "spread_bps": spread,
+                "net_profit_bps": bridge_info["net_profit_bps"],
+                "bridge": bridge_info["bridge"],
+                "trade_size_usd": trade_size_usd,
+                "profit_usd": round(
+                    trade_size_usd * bridge_info["net_profit_bps"] / 10_000, 4
+                ),
+            })
+
+    opportunities.sort(key=lambda x: x["net_profit_bps"], reverse=True)
+
+    # Bridge fee summary
+    bridge_summary: list[dict] = [
+        {
+            "name": name,
+            "flat_fee_usd": flat,
+            "pct_fee_bps": pct,
+            "supported_chains": _CHAINS,
+        }
+        for name, (flat, pct) in _BRIDGES.items()
+    ]
+
+    # Arb frequency heatmap: rows=7 days, cols=24 hours
+    heatmap: list[list[float]] = []
+    for day in range(7):
+        row: list[float] = []
+        for hour in range(24):
+            freq = _ARB_FREQ_BASE[hour] * _DAY_SCALE[day]
+            noise = 0.05 * _math.sin(seed * _math.pi * 2 + hour * 0.5 + day * 1.1)
+            row.append(round(min(1.0, max(0.0, freq + noise)), 3))
+        heatmap.append(row)
+
+    all_spreads = [a["spread_bps"] for a in assets.values()]
+    max_spread = max(all_spreads) if all_spreads else 0.0
+    best_asset = max(assets, key=lambda k: assets[k]["spread_bps"]) if assets else ""
+
+    status = (
+        "ACTIVE"   if opportunities else
+        "WATCHING" if max_spread >= min_spread_bps * 0.5 else
+        "QUIET"
+    )
+
+    return {
+        "assets": assets,
+        "opportunities": opportunities,
+        "bridge_summary": bridge_summary,
+        "arb_frequency_heatmap": heatmap,
+        "summary": {
+            "active_opportunities": len(opportunities),
+            "max_spread_bps": round(max_spread, 2),
+            "best_asset": best_asset,
+            "status": status,
+            "chains_monitored": len(_CHAINS),
+            "assets_monitored": len(_ARB_ASSETS),
+        },
+        "trade_size_usd": trade_size_usd,
+        "generated_at": round(now, 3),
+    }
+
+
+async def compute_cross_chain_arb_monitor() -> Dict:
+    """Cross-chain arbitrage monitor: price discrepancies for BTC/ETH/USDC across ETH/BSC/ARB/OP/BASE.
+
+    Returns spread in bps, fee-adjusted profit signal, best bridge route suggestion,
+    and arb frequency heatmap. Uses simulated pricing with realistic variation.
+    """
+    now = time.time()
+
+    # Deterministic seed per minute for stable within-minute results
+    seed = int(now // 60)
+    rng_state = seed
+
+    def _rng(lo: float, hi: float) -> float:
+        nonlocal rng_state
+        rng_state = (rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+        return lo + (rng_state / 0xFFFFFFFF) * (hi - lo)
+
+    CHAINS = ["ETH", "BSC", "ARB", "OP", "BASE"]
+    ASSETS: Dict[str, float] = {
+        "BTC": 65000.0,
+        "ETH": 3200.0,
+        "USDC": 1.0,
+    }
+
+    BRIDGE_ROUTES = [
+        {"protocol": "Stargate", "fee_bps": 6.0, "time_sec": 180},
+        {"protocol": "Across",   "fee_bps": 4.0, "time_sec": 120},
+        {"protocol": "Hop",      "fee_bps": 5.0, "time_sec": 300},
+        {"protocol": "Celer",    "fee_bps": 3.0, "time_sec": 240},
+        {"protocol": "Synapse",  "fee_bps": 4.5, "time_sec": 210},
+    ]
+
+    GAS_COSTS: Dict[str, float] = {
+        "ETH": 12.0,
+        "BSC": 0.5,
+        "ARB": 0.8,
+        "OP":  0.6,
+        "BASE": 0.5,
+    }
+
+    assets_data: Dict = {}
+    all_opportunities: List[Dict] = []
+
+    for asset, base_price in ASSETS.items():
+        chains_data: Dict = {}
+        for chain in CHAINS:
+            drift = _rng(-0.004, 0.004)  # ±40 bps random drift
+            price = round(base_price * (1.0 + drift), 6)
+            liq = round(_rng(500_000.0, 5_000_000.0), 0)
+            chains_data[chain] = {
+                "price": price,
+                "liquidity_usd": liq,
+                "gas_cost_usd": GAS_COSTS[chain],
+            }
+
+        # Find best spread (highest sell_price / buy_price)
+        best_spread_bps = 0.0
+        best_buy = CHAINS[0]
+        best_sell = CHAINS[1]
+        for buy_chain in CHAINS:
+            for sell_chain in CHAINS:
+                if buy_chain == sell_chain:
+                    continue
+                buy_p = chains_data[buy_chain]["price"]
+                sell_p = chains_data[sell_chain]["price"]
+                spread_bps = ((sell_p - buy_p) / buy_p) * 10_000
+                if spread_bps > best_spread_bps:
+                    best_spread_bps = spread_bps
+                    best_buy = buy_chain
+                    best_sell = sell_chain
+
+        best_bridge = min(BRIDGE_ROUTES, key=lambda r: r["fee_bps"])
+        trade_size_usd = 10_000.0
+        gross_profit = (best_spread_bps / 10_000) * trade_size_usd
+        bridge_fee = (best_bridge["fee_bps"] / 10_000) * trade_size_usd
+        gas_total = GAS_COSTS[best_buy] + GAS_COSTS[best_sell]
+        fee_adj_profit = gross_profit - bridge_fee - gas_total
+        fee_adj_bps = (fee_adj_profit / trade_size_usd) * 10_000
+        is_profitable = fee_adj_profit > 0.0
+
+        assets_data[asset] = {
+            "chains": chains_data,
+            "best_spread": {
+                "buy_chain": best_buy,
+                "sell_chain": best_sell,
+                "spread_bps": round(best_spread_bps, 2),
+                "gross_profit_usd": round(gross_profit, 2),
+                "fee_adjusted_profit_usd": round(fee_adj_profit, 2),
+                "fee_adjusted_profit_bps": round(fee_adj_bps, 2),
+                "bridge_protocol": best_bridge["protocol"],
+                "bridge_fee_bps": best_bridge["fee_bps"],
+                "bridge_time_sec": best_bridge["time_sec"],
+                "is_profitable": is_profitable,
+            },
+        }
+
+        all_opportunities.append({
+            "asset": asset,
+            "buy_chain": best_buy,
+            "sell_chain": best_sell,
+            "spread_bps": round(best_spread_bps, 2),
+            "fee_adjusted_profit_bps": round(fee_adj_bps, 2),
+            "bridge_route": f"{best_buy}→{best_sell} via {best_bridge['protocol']}",
+            "bridge_time_sec": best_bridge["time_sec"],
+            "is_profitable": is_profitable,
+            "trade_size_usd": trade_size_usd,
+            "fee_adjusted_profit_usd": round(fee_adj_profit, 2),
+        })
+
+    top_opportunities = sorted(
+        all_opportunities, key=lambda x: x["fee_adjusted_profit_bps"], reverse=True
+    )
+
+    # Bridge route matrix (best route for each chain pair)
+    best_bridge_global = min(BRIDGE_ROUTES, key=lambda r: r["fee_bps"])
+    bridge_route_matrix: List[Dict] = []
+    for from_chain in CHAINS:
+        for to_chain in CHAINS:
+            if from_chain == to_chain:
+                continue
+            bridge_route_matrix.append({
+                "from_chain": from_chain,
+                "to_chain": to_chain,
+                "protocol": best_bridge_global["protocol"],
+                "fee_bps": best_bridge_global["fee_bps"],
+                "time_sec": best_bridge_global["time_sec"],
+            })
+
+    # Historical arb frequency heatmap (24h × 5 chain pairs)
+    CHAIN_PAIRS = ["ETH-BSC", "ETH-ARB", "ETH-OP", "ETH-BASE", "BSC-ARB"]
+    hours = list(range(24))
+    heatmap_counts: List[List[int]] = []
+    for h in hours:
+        row: List[int] = []
+        for _pair in CHAIN_PAIRS:
+            base_freq = 3.0 + (5.0 if h in {1, 2, 3, 9, 14, 15} else 0.0)
+            count = int(_rng(base_freq * 0.5, base_freq * 1.5))
+            row.append(count)
+        heatmap_counts.append(row)
+
+    best_opp = top_opportunities[0] if top_opportunities else None
+    if best_opp and best_opp["fee_adjusted_profit_bps"] > 10.0:
+        signal = "high_opportunity"
+    elif best_opp and best_opp["fee_adjusted_profit_bps"] > 3.0:
+        signal = "moderate"
+    else:
+        signal = "low"
+
+    best_opportunity = (
+        {
+            "asset": best_opp["asset"],
+            "route": best_opp["bridge_route"],
+            "spread_bps": best_opp["spread_bps"],
+            "fee_adjusted_profit_bps": best_opp["fee_adjusted_profit_bps"],
+            "is_profitable": best_opp["is_profitable"],
+        }
+        if best_opp
+        else None
+    )
+
+    return {
+        "status": "ok",
+        "ts": round(now, 3),
+        "assets": assets_data,
+        "top_opportunities": top_opportunities,
+        "bridge_routes": BRIDGE_ROUTES,
+        "arb_frequency_heatmap": {
+            "hours": hours,
+            "chain_pairs": CHAIN_PAIRS,
+            "counts": heatmap_counts,
+        },
+        "signal": signal,
+        "best_opportunity": best_opportunity,
+    }
+
