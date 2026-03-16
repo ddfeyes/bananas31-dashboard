@@ -5727,228 +5727,194 @@ async def compute_options_skew(
     }
 
 
-# ── Whale Alert Tracker ───────────────────────────────────────────────────────
+# ── Market Depth Imbalance ────────────────────────────────────────────────────
 
-_WHALE_MEDIUM_USD: float = 50_000.0
-_WHALE_HIGH_USD: float = 100_000.0
-_WHALE_CRITICAL_USD: float = 500_000.0
-
-
-def _wa_classify_size(usd: float) -> str:
-    """Return alert severity level for a single trade's USD value."""
-    if usd >= _WHALE_CRITICAL_USD:
-        return "critical"
-    if usd >= _WHALE_HIGH_USD:
-        return "high"
-    return "medium"
+_DEPTH_THRESHOLDS = (0.1, 0.5, 1.0)   # % from mid price
+_DEPTH_LEVEL_LIMIT = 20                # max levels per side for computation
 
 
-def _wa_flow_score(buy_usd: float, sell_usd: float) -> float:
-    """Return 0–100 flow score; 100 = all buys, 0 = all sells, 50 = zero/equal."""
-    total = buy_usd + sell_usd
+def _di_imbalance_ratio(bid_depth: float, ask_depth: float) -> float:
+    total = bid_depth + ask_depth
     if total <= 0:
-        return 50.0
-    return round(buy_usd / total * 100, 2)
+        return 0.0
+    return round((bid_depth - ask_depth) / total, 6)
 
 
-def _wa_flow_direction(buy_usd: float, sell_usd: float) -> str:
-    """Return 'inflow' (buy-dominated ≥60%), 'outflow' (sell-dominated ≥60%), 'mixed'."""
-    score = _wa_flow_score(buy_usd, sell_usd)
-    if score >= 60.0:
-        return "inflow"
-    if score <= 40.0:
-        return "outflow"
-    return "mixed"
+def _di_weighted_imbalance(
+    bid_levels: List[dict],
+    ask_levels: List[dict],
+    mid_price: float,
+) -> float:
+    def _wsum(levels: List[dict]) -> float:
+        total = 0.0
+        for lv in levels:
+            dist = max(abs(lv["price"] - mid_price), 1e-10)
+            total += lv["size"] / dist
+        return total
+    return _di_imbalance_ratio(_wsum(bid_levels), _wsum(ask_levels))
 
 
-def _wa_cluster_trades(
-    trades: list,
-    cluster_window_s: float = 60.0,
-    price_proximity_pct: float = 0.5,
-) -> list:
-    """Group trades within time window and price proximity into clusters.
-
-    Two consecutive trades are in the same cluster if:
-      - time between them ≤ cluster_window_s
-      - price difference from running cluster mean ≤ price_proximity_pct %
-    """
-    if not trades:
-        return []
-
-    sorted_trades = sorted(trades, key=lambda t: t["ts"])
-    clusters: list = []
-    current: list = [sorted_trades[0]]
-
-    for trade in sorted_trades[1:]:
-        prev_ts = current[-1]["ts"]
-        mid_price = sum(t["price"] for t in current) / len(current)
-        time_diff = trade["ts"] - prev_ts
-        price_diff_pct = (
-            abs(trade["price"] - mid_price) / mid_price * 100
-            if mid_price > 0
-            else 100.0
-        )
-        if time_diff <= cluster_window_s and price_diff_pct <= price_proximity_pct:
-            current.append(trade)
-        else:
-            clusters.append(current)
-            current = [trade]
-
-    clusters.append(current)
-    return clusters
-
-
-def _wa_cluster_stats(cluster: list, cluster_id: int) -> dict:
-    """Compute aggregate statistics for a single trade cluster."""
-    buy_usd = sum(
-        t["price"] * t["qty"]
-        for t in cluster
-        if t.get("side", "") in ("buy", "Buy")
-    )
-    sell_usd = sum(
-        t["price"] * t["qty"]
-        for t in cluster
-        if t.get("side", "") not in ("buy", "Buy")
-    )
-    total_usd = buy_usd + sell_usd
-    prices = [t["price"] for t in cluster]
-    mid_price = sum(prices) / len(prices) if prices else 0.0
-    start_ts = cluster[0]["ts"]
-    end_ts = cluster[-1]["ts"]
-    dominant_side = "buy" if buy_usd >= sell_usd else "sell"
-
-    return {
-        "id": cluster_id,
-        "start_ts": round(start_ts, 3),
-        "end_ts": round(end_ts, 3),
-        "duration_s": round(end_ts - start_ts, 3),
-        "num_trades": len(cluster),
-        "total_usd": round(total_usd, 2),
-        "buy_usd": round(buy_usd, 2),
-        "sell_usd": round(sell_usd, 2),
-        "dominant_side": dominant_side,
-        "flow": _wa_flow_direction(buy_usd, sell_usd),
-        "flow_score": _wa_flow_score(buy_usd, sell_usd),
-        "mid_price": round(mid_price, 8),
-        "alert_level": _wa_classify_size(total_usd),
-    }
-
-
-def _wa_exchange_flow_summary(cluster_stats: list) -> dict:
-    """Aggregate exchange flow direction across all clusters."""
-    if not cluster_stats:
-        return {
-            "direction": "mixed",
-            "inflow_usd": 0.0,
-            "outflow_usd": 0.0,
-            "net_usd": 0.0,
-            "net_direction": "neutral",
-            "dominant_side": "neutral",
-        }
-
-    inflow_usd = sum(c["buy_usd"] for c in cluster_stats)
-    outflow_usd = sum(c["sell_usd"] for c in cluster_stats)
-    net_usd = inflow_usd - outflow_usd
-    direction = _wa_flow_direction(inflow_usd, outflow_usd)
-    net_direction = (
-        "positive" if net_usd > 0 else ("negative" if net_usd < 0 else "neutral")
-    )
-    dominant_side = (
-        "buy" if inflow_usd > outflow_usd
-        else ("sell" if outflow_usd > inflow_usd else "neutral")
-    )
-
-    return {
-        "direction": direction,
-        "inflow_usd": round(inflow_usd, 2),
-        "outflow_usd": round(outflow_usd, 2),
-        "net_usd": round(net_usd, 2),
-        "net_direction": net_direction,
-        "dominant_side": dominant_side,
-    }
-
-
-async def compute_whale_alerts(
-    symbol: str,
-    window_seconds: int = 3600,
-    min_usd: float = 50_000.0,
-    cluster_window_s: int = 60,
-    price_proximity_pct: float = 0.5,
+def _di_depth_at(
+    bid_levels: List[dict],
+    ask_levels: List[dict],
+    mid_price: float,
+    threshold_pct: float,
 ) -> dict:
-    """Whale alert tracker: large trade detection, clustering, and exchange flow.
+    pct = threshold_pct / 100.0
+    lo  = mid_price * (1 - pct)
+    hi  = mid_price * (1 + pct)
+    bid_sum = sum(lv["size"] for lv in bid_levels if lo <= lv["price"] <= mid_price)
+    ask_sum = sum(lv["size"] for lv in ask_levels if mid_price <= lv["price"] <= hi)
+    return {
+        "bid":       round(bid_sum, 4),
+        "ask":       round(ask_sum, 4),
+        "imbalance": _di_imbalance_ratio(bid_sum, ask_sum),
+    }
+
+
+async def compute_depth_imbalance(
+    symbol: str,
+    level_limit: int = _DEPTH_LEVEL_LIMIT,
+) -> dict:
+    """
+    Market depth imbalance from the latest orderbook snapshot.
 
     Returns:
-      alerts    — top-20 individual whale trades sorted by value_usd desc
-      clusters  — top-10 whale trade clusters sorted by total_usd desc
-      exchange_flow — aggregate inflow/outflow summary
-      summary   — counts, totals, and metadata
+      - imbalance_ratio: (bid - ask) / (bid + ask) across top N levels
+      - weighted_imbalance: proximity-weighted variant
+      - pressure: bullish / bearish / neutral
+      - pressure_score: 0-100 intensity
+      - bid/ask depth in USD and size
+      - per-level breakdown for heatmap
+      - depth_at thresholds (0.1% / 0.5% / 1% from mid)
     """
-    from storage import get_recent_trades
+    import json
+    from storage import get_latest_orderbook
 
-    since = time.time() - window_seconds
-    all_trades = await get_recent_trades(symbol=symbol, since=since, limit=50_000)
+    now = time.time()
+    snapshots = await get_latest_orderbook(symbol=symbol, limit=1)
 
-    # Filter to whale-sized trades and annotate
-    whale_trades: list = []
-    for t in all_trades:
-        usd = t["price"] * t["qty"]
-        if usd >= min_usd:
-            whale_trades.append(
-                {
-                    "ts": t["ts"],
-                    "price": t["price"],
-                    "qty": t["qty"],
-                    "side": t["side"],
-                    "value_usd": round(usd, 2),
-                    "level": _wa_classify_size(usd),
-                }
-            )
+    if not snapshots:
+        return {
+            "status": "ok", "symbol": symbol, "ts": now,
+            "mid_price": None,
+            "imbalance_ratio": 0.0, "imbalance_pct": 50.0,
+            "weighted_imbalance": 0.0,
+            "pressure": "neutral", "pressure_score": 0.0,
+            "bid_depth_usd": 0.0, "ask_depth_usd": 0.0,
+            "levels": [],
+            "depth_at": {
+                f"{t}pct": {"bid": 0.0, "ask": 0.0, "imbalance": 0.0}
+                for t in _DEPTH_THRESHOLDS
+            },
+            "description": "No orderbook data",
+        }
 
-    # Top-20 alerts sorted by value desc
-    alerts = sorted(whale_trades, key=lambda t: t["value_usd"], reverse=True)[:20]
+    snap = snapshots[0]
+    snap_ts = float(snap.get("ts", now))
 
-    # Cluster whale trades by time + price proximity
-    raw_clusters = _wa_cluster_trades(whale_trades, cluster_window_s, price_proximity_pct)
-    cluster_stats = [
-        _wa_cluster_stats(c, i + 1)
-        for i, c in enumerate(raw_clusters)
-        if c and sum(t["price"] * t["qty"] for t in c) >= min_usd
+    # Parse bids and asks — stored as JSON [[price, size], ...]
+    try:
+        raw_bids = json.loads(snap.get("bids", "[]"))
+        raw_asks = json.loads(snap.get("asks", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        raw_bids, raw_asks = [], []
+
+    bid_levels = [
+        {"price": float(b[0]), "size": float(b[1])}
+        for b in raw_bids[:level_limit]
+        if len(b) >= 2
     ]
-    cluster_stats.sort(key=lambda c: c["total_usd"], reverse=True)
+    ask_levels = [
+        {"price": float(a[0]), "size": float(a[1])}
+        for a in raw_asks[:level_limit]
+        if len(a) >= 2
+    ]
 
-    exchange_flow = _wa_exchange_flow_summary(cluster_stats)
+    # Mid price from best bid / best ask
+    best_bid_p = bid_levels[0]["price"] if bid_levels else None
+    best_ask_p = ask_levels[0]["price"] if ask_levels else None
+    if best_bid_p and best_ask_p:
+        mid_price = (best_bid_p + best_ask_p) / 2
+    elif best_bid_p:
+        mid_price = best_bid_p
+    elif best_ask_p:
+        mid_price = best_ask_p
+    else:
+        mid_price = float(snap.get("best_bid") or snap.get("best_ask") or 0)
 
-    total_whale_usd = sum(t["value_usd"] for t in whale_trades)
-    buy_whale_usd = sum(
-        t["value_usd"] for t in whale_trades if t["side"] in ("buy", "Buy")
-    )
-    sell_whale_usd = sum(
-        t["value_usd"] for t in whale_trades if t["side"] not in ("buy", "Buy")
-    )
-    level_counts: dict = {"medium": 0, "high": 0, "critical": 0}
-    for t in whale_trades:
-        level_counts[t["level"]] = level_counts.get(t["level"], 0) + 1
+    bid_size_total = sum(lv["size"] for lv in bid_levels)
+    ask_size_total = sum(lv["size"] for lv in ask_levels)
 
-    largest_cluster_usd = max(
-        (c["total_usd"] for c in cluster_stats), default=0.0
+    bid_depth_usd = sum(lv["price"] * lv["size"] for lv in bid_levels)
+    ask_depth_usd = sum(lv["price"] * lv["size"] for lv in ask_levels)
+    total_usd     = bid_depth_usd + ask_depth_usd
+
+    imb_ratio = _di_imbalance_ratio(bid_size_total, ask_size_total)
+    w_imb     = _di_weighted_imbalance(bid_levels, ask_levels, mid_price) if mid_price else imb_ratio
+    imb_pct   = round((bid_size_total / (bid_size_total + ask_size_total) * 100)
+                      if (bid_size_total + ask_size_total) > 0 else 50.0, 2)
+    p_score   = round(abs(imb_ratio) * 100, 2)
+
+    if imb_ratio > 0.1:
+        pressure = "bullish"
+    elif imb_ratio < -0.1:
+        pressure = "bearish"
+    else:
+        pressure = "neutral"
+
+    # Per-level list (interleaved bid/ask, sorted by proximity to mid)
+    levels_out: List[dict] = []
+    for lv in bid_levels:
+        usd = round(lv["price"] * lv["size"], 4)
+        levels_out.append({
+            "side":         "bid",
+            "price":        lv["price"],
+            "size":         lv["size"],
+            "usd":          usd,
+            "pct_of_total": round(usd / total_usd * 100, 2) if total_usd > 0 else 0.0,
+        })
+    for lv in ask_levels:
+        usd = round(lv["price"] * lv["size"], 4)
+        levels_out.append({
+            "side":         "ask",
+            "price":        lv["price"],
+            "size":         lv["size"],
+            "usd":          usd,
+            "pct_of_total": round(usd / total_usd * 100, 2) if total_usd > 0 else 0.0,
+        })
+    levels_out.sort(key=lambda x: abs(x["price"] - mid_price) if mid_price else x["price"])
+
+    # Depth at thresholds
+    depth_at: dict = {}
+    if mid_price:
+        for t in _DEPTH_THRESHOLDS:
+            depth_at[f"{t}pct"] = _di_depth_at(bid_levels, ask_levels, mid_price, t)
+    else:
+        for t in _DEPTH_THRESHOLDS:
+            depth_at[f"{t}pct"] = {"bid": 0.0, "ask": 0.0, "imbalance": 0.0}
+
+    direction_word = {"bullish": "Bullish", "bearish": "Bearish", "neutral": "Balanced"}[pressure]
+    desc = (
+        f"{direction_word} pressure: bids dominate by "
+        f"{imb_ratio * 100:+.0f}% (score {p_score:.0f})"
+        if pressure != "neutral"
+        else f"Balanced order book (imbalance {imb_ratio * 100:+.1f}%)"
     )
 
     return {
-        "symbol": symbol,
-        "alerts": alerts,
-        "clusters": cluster_stats[:10],
-        "exchange_flow": exchange_flow,
-        "summary": {
-            "total_whale_usd": round(total_whale_usd, 2),
-            "buy_whale_usd": round(buy_whale_usd, 2),
-            "sell_whale_usd": round(sell_whale_usd, 2),
-            "cluster_count": len(cluster_stats),
-            "alert_count": len(whale_trades),
-            "critical_count": level_counts.get("critical", 0),
-            "high_count": level_counts.get("high", 0),
-            "medium_count": level_counts.get("medium", 0),
-            "largest_cluster_usd": round(largest_cluster_usd, 2),
-            "window_seconds": window_seconds,
-            "min_usd_threshold": min_usd,
-        },
+        "status":             "ok",
+        "symbol":             symbol,
+        "ts":                 snap_ts,
+        "mid_price":          round(mid_price, 10) if mid_price else None,
+        "imbalance_ratio":    imb_ratio,
+        "imbalance_pct":      imb_pct,
+        "weighted_imbalance": round(w_imb, 6),
+        "pressure":           pressure,
+        "pressure_score":     p_score,
+        "bid_depth_usd":      round(bid_depth_usd, 4),
+        "ask_depth_usd":      round(ask_depth_usd, 4),
+        "levels":             levels_out,
+        "depth_at":           depth_at,
+        "description":        desc,
     }

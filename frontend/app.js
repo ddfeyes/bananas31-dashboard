@@ -23383,109 +23383,93 @@ async function refresh() {
     await Promise.all([safe(renderMomentumDivergence)]);
     // Batch 15: spread analysis
     await Promise.all([safe(renderMarketMicrostructure)]);
-    // Batch 18: whale alerts
-    await Promise.all([safe(renderWhaleAlerts)]);
+    // Batch 17: depth imbalance
+    await Promise.all([safe(renderDepthImbalance)]);
   } finally {
     _refreshRunning = false;
   }
 }
 
-// ── Whale Alerts ──────────────────────────────────────────────────────────────
-async function renderWhaleAlerts() {
-  const sym    = encodeURIComponent(activeSymbol);
-  const data   = await apiFetch(`/whale-alerts?symbol=${sym}`);
-  const el     = document.getElementById('whale-alert-content');
-  const badge  = document.getElementById('whale-alert-badge');
-  if (!data || !el) return;
+// ── Depth Imbalance ───────────────────────────────────────────────────────────
+async function renderDepthImbalance() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('depth-imbalance-content');
+  const badge = document.getElementById('depth-imbalance-badge');
+  if (!el) return;
+  const data = await apiFetch(`/depth-imbalance?symbol=${sym}`);
+  if (!data) { setErr('depth-imbalance-content'); return; }
 
-  const ef  = data.exchange_flow || {};
-  const sum = data.summary || {};
-  const alerts   = data.alerts || [];
-  const clusters = data.clusters || [];
+  const pressure = data.pressure      || 'neutral';
+  const ratio    = data.imbalance_ratio ?? 0;
+  const wRatio   = data.weighted_imbalance ?? 0;
+  const score    = data.pressure_score ?? 0;
+  const bidUsd   = data.bid_depth_usd  ?? 0;
+  const askUsd   = data.ask_depth_usd  ?? 0;
+  const pct      = data.imbalance_pct  ?? 50;
+  const mid      = data.mid_price;
 
-  // Direction badge
-  const dirColor = ef.direction === 'inflow'
-    ? 'var(--green)'
-    : ef.direction === 'outflow'
-      ? 'var(--red)'
-      : 'var(--muted)';
-  const dirLabel = ef.direction === 'inflow' ? 'INFLOW' : ef.direction === 'outflow' ? 'OUTFLOW' : 'MIXED';
+  const pCls = pressure === 'bullish' ? 'badge-green' : pressure === 'bearish' ? 'badge-red' : 'badge-blue';
   if (badge) {
-    badge.textContent = dirLabel;
-    badge.style.display = 'inline-block';
-    badge.style.color = dirColor;
+    badge.textContent = pressure.toUpperCase();
+    badge.className = `card-badge ${pCls}`;
+    badge.style.display = '';
   }
-
-  if (!alerts.length) {
-    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:4px 0">No whale trades in window</div>`;
-    return;
-  }
-
-  // Flow summary bar
-  const buyPct  = sum.total_whale_usd > 0 ? sum.buy_whale_usd / sum.total_whale_usd * 100 : 50;
-  const sellPct = 100 - buyPct;
-  const flowBar = `
-    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:6px">
-      <div style="width:${buyPct.toFixed(1)}%;background:var(--green)"></div>
-      <div style="width:${sellPct.toFixed(1)}%;background:var(--red)"></div>
-    </div>`;
 
   const fmtUsd = v => {
-    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
-    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    if (v == null) return '—';
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
     return '$' + v.toFixed(0);
   };
+  const ratioCol = r => r > 0.1 ? 'var(--green)' : r < -0.1 ? 'var(--red)' : 'var(--muted)';
+  const barW = Math.round(pct);
 
-  // Level badge colors
-  const lvlColor = l => l === 'critical' ? 'var(--red)' : l === 'high' ? '#f59e0b' : 'var(--muted)';
+  // Depth bar
+  const depthBar = `
+    <div style="display:flex;align-items:center;gap:4px;margin:4px 0">
+      <span style="font-size:9px;color:var(--muted);width:28px;text-align:right">bid</span>
+      <div style="flex:1;height:8px;background:var(--bg2);border-radius:3px;overflow:hidden">
+        <div style="width:${barW}%;height:100%;background:var(--green);border-radius:3px 0 0 3px"></div>
+      </div>
+      <div style="flex:1;height:8px;background:var(--bg2);border-radius:3px;overflow:hidden">
+        <div style="width:${100 - barW}%;height:100%;background:var(--red);border-radius:0 3px 3px 0;float:right"></div>
+      </div>
+      <span style="font-size:9px;color:var(--muted);width:28px">ask</span>
+    </div>`;
 
-  // Top alerts table
-  const alertRows = alerts.slice(0, 8).map(a => {
-    const side = a.side.toLowerCase();
-    const col  = side === 'buy' ? 'var(--green)' : 'var(--red)';
-    const ts   = new Date(a.ts * 1000).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+  // Depth-at thresholds
+  const da = data.depth_at || {};
+  const threshRows = Object.entries(da).map(([band, d]) => {
+    const col = ratioCol(d.imbalance);
     return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding-right:4px">${ts}</td>
-      <td style="font-size:9px;color:${col};padding-right:4px">${side.toUpperCase()}</td>
-      <td style="font-size:9px;color:var(--fg);text-align:right;padding-right:4px">${fmtUsd(a.value_usd)}</td>
-      <td style="font-size:9px;color:${lvlColor(a.level)};text-align:right">${a.level.toUpperCase()}</td>
-    </tr>`;
-  }).join('');
-
-  // Cluster summary rows
-  const clusterRows = clusters.slice(0, 4).map(c => {
-    const flowCol = c.flow === 'inflow' ? 'var(--green)' : c.flow === 'outflow' ? 'var(--red)' : 'var(--muted)';
-    return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding-right:4px">${c.num_trades}tx</td>
-      <td style="font-size:9px;color:var(--fg);text-align:right;padding-right:4px">${fmtUsd(c.total_usd)}</td>
-      <td style="font-size:9px;color:${flowCol};text-align:right;padding-right:4px">${c.flow.toUpperCase()}</td>
-      <td style="font-size:9px;color:var(--muted);text-align:right">${c.flow_score.toFixed(0)}%</td>
+      <td style="font-size:9px;color:var(--muted);padding-right:6px">${band}</td>
+      <td style="font-size:9px;color:var(--green);text-align:right;padding-right:4px">${fmtUsd(d.bid * (mid || 1))}</td>
+      <td style="font-size:9px;color:var(--red);text-align:right;padding-right:4px">${fmtUsd(d.ask * (mid || 1))}</td>
+      <td style="font-size:9px;color:${col};font-weight:600;text-align:right">${d.imbalance >= 0 ? '+' : ''}${(d.imbalance * 100).toFixed(1)}%</td>
     </tr>`;
   }).join('');
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>buy: <b style="color:var(--green)">${fmtUsd(sum.buy_whale_usd || 0)}</b></span>
-      <span>sell: <b style="color:var(--red)">${fmtUsd(sum.sell_whale_usd || 0)}</b></span>
-      <span>net: <b style="color:${ef.net_direction === 'positive' ? 'var(--green)' : ef.net_direction === 'negative' ? 'var(--red)' : 'var(--muted)'}">${fmtUsd(Math.abs(ef.net_usd || 0))}</b></span>
-      <span>clusters: <b style="color:var(--fg)">${sum.cluster_count || 0}</b></span>
+      <span>ratio: <b style="color:${ratioCol(ratio)}">${ratio >= 0 ? '+' : ''}${(ratio * 100).toFixed(1)}%</b></span>
+      <span>weighted: <b style="color:${ratioCol(wRatio)}">${wRatio >= 0 ? '+' : ''}${(wRatio * 100).toFixed(1)}%</b></span>
+      <span>score: <b style="color:var(--fg)">${score.toFixed(0)}</b></span>
     </div>
-    ${flowBar}
-    <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:2px">Top Trades</div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:6px">
-      <tbody>${alertRows}</tbody>
-    </table>
-    ${clusters.length > 0 ? `
-    <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:2px">Clusters</div>
-    <table style="border-collapse:collapse;width:100%">
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:10px;margin-bottom:2px">
+      <span>bids: <b style="color:var(--green)">${fmtUsd(bidUsd)}</b></span>
+      <span>asks: <b style="color:var(--red)">${fmtUsd(askUsd)}</b></span>
+    </div>
+    ${depthBar}
+    <table style="border-collapse:collapse;width:100%;margin-top:4px">
       <thead><tr>
-        <th style="font-size:9px;color:var(--muted);text-align:left">size</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">total</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">flow</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right">score</th>
+        <th style="font-size:9px;color:var(--muted);text-align:left">band</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">bid$</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">ask$</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">imb</th>
       </tr></thead>
-      <tbody>${clusterRows}</tbody>
-    </table>` : ''}`;
+      <tbody>${threshRows}</tbody>
+    </table>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

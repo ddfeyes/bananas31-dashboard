@@ -82,7 +82,7 @@ from metrics import (
     compute_momentum_divergence,
     compute_spread_analysis,
     compute_options_skew,
-    compute_whale_alerts,
+    compute_depth_imbalance,
 )
 
 router = APIRouter(prefix="/api")
@@ -5444,19 +5444,12 @@ async def options_skew_endpoint(
     return JSONResponse(data)
 
 
-@router.get("/whale-alerts")
-async def whale_alerts_endpoint(
+@router.get("/depth-imbalance")
+async def depth_imbalance_endpoint(
     symbol: Optional[str] = Query(None),
-    window: int = Query(3600, ge=300, le=86400),
-    min_usd: float = Query(50_000, ge=10_000),
-    cluster_window: int = Query(60, ge=10, le=300),
+    levels: int = Query(20, ge=5, le=50),
 ):
-    """Whale alert tracker: large transaction detection, clustering, exchange flow."""
+    """Market depth imbalance: bid/ask pressure ratio from latest orderbook snapshot."""
     target = symbol or get_symbols()[0]
-    data = await compute_whale_alerts(
-        symbol=target,
-        window_seconds=window,
-        min_usd=min_usd,
-        cluster_window_s=cluster_window,
-    )
+    data = await compute_depth_imbalance(symbol=target, level_limit=levels)
     return JSONResponse(data)
