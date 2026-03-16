@@ -2517,6 +2517,8 @@ async function refresh() {
     // Batch 27: DEX vs CEX flow
     await Promise.all([safe(refreshDexVsCexFlow)]);
     await Promise.all([safe(refreshOptionsFlowTracker)]);
+    // Batch 27: token unlock calendar
+    await Promise.all([safe(renderTokenUnlockCalendar)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3068,6 +3070,91 @@ async function renderNftMarketPulse() {
         <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">FLOOR</th>
         <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">24H</th>
         <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">LIQ</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
+}
+
+// ── Token Unlock Calendar ──────────────────────────────────────────────────────
+async function renderTokenUnlockCalendar() {
+  const el    = document.getElementById('token-unlock-content');
+  const badge = document.getElementById('token-unlock-badge');
+  if (!el) return;
+  const data = await apiFetch('/token-unlock-calendar');
+  if (!data) { setErr('token-unlock-content'); return; }
+
+  const events  = data.events  || [];
+  const summary = data.summary || {};
+
+  if (!events.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No unlock events in window</div>';
+    return;
+  }
+
+  const critCount = summary.critical_count || 0;
+  if (badge) {
+    if (critCount > 0) {
+      badge.textContent = `${critCount} CRITICAL`;
+      badge.className = 'card-badge badge-red';
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  const riskColor = label => {
+    if (label === 'critical') return '#ef4444';
+    if (label === 'high')     return '#f97316';
+    if (label === 'medium')   return '#eab308';
+    return 'var(--muted)';
+  };
+
+  const avgLabel = summary.avg_risk_score >= 75 ? 'critical'
+                 : summary.avg_risk_score >= 50 ? 'high'
+                 : summary.avg_risk_score >= 25 ? 'medium' : 'low';
+
+  const rows = events.map(e => {
+    const impactCol = e.historical_price_impact_pct < 0 ? '#ef4444' : '#22c55e';
+    const impactStr = (e.historical_price_impact_pct > 0 ? '+' : '') + e.historical_price_impact_pct.toFixed(1) + '%';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="font-size:10px;padding:3px 0;color:var(--fg);font-weight:600">${e.symbol}</td>
+      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.unlock_date}</td>
+      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.pct_circulating_supply.toFixed(1)}%</td>
+      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.unlock_usd_formatted}</td>
+      <td style="font-size:10px;padding:3px 2px;color:${impactCol};text-align:right">${impactStr}</td>
+      <td style="font-size:10px;padding:3px 0;color:${riskColor(e.risk_label)};text-align:right;font-weight:600">${e.risk_score.toFixed(0)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:9px;color:var(--muted)">TOTAL UNLOCKING</div>
+        <div style="font-size:13px;font-weight:600;color:var(--fg)">${fmtUSD(summary.total_unlock_usd)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">AVG RISK</div>
+        <div style="font-size:13px;font-weight:600;color:${riskColor(avgLabel)}">${(summary.avg_risk_score ?? 0).toFixed(1)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">HIGHEST RISK</div>
+        <div style="font-size:13px;font-weight:600;color:#ef4444">${summary.highest_risk_token ?? '—'}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">CRITICAL</div>
+        <div style="font-size:13px;font-weight:600;color:#ef4444">${summary.critical_count ?? 0}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500;padding-bottom:4px">TOKEN</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">DATE</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">%SUPPLY</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">SIZE</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">HIST Δ</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">RISK</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
