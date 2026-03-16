@@ -14,6 +14,7 @@ const WHALE_USD    = 10000;  // highlight threshold
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let _refreshRunning = false;
+const delay = ms => new Promise(r => setTimeout(r, ms));
 let activeSymbol = null;
 let allSymbols   = [];
 let priceChart   = null;   // TradingView Lightweight Charts instance
@@ -30,7 +31,7 @@ let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-async function apiFetch(path, timeoutMs = 8000) {
+async function apiFetch(path, timeoutMs = 15000) {
   const url = API + path;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -4526,7 +4527,7 @@ async function renderWhaleFlow() {
   if (!el) return;
 
   try {
-    const sym = activeSymbol || 'BTCUSDT';
+    const sym = activeSymbol || 'BANANAS31USDT';
     const res = await fetch(`/api/whale-flow?symbol=${sym}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -4633,7 +4634,7 @@ async function renderGammaExposure() {
   if (!el) return;
 
   try {
-    const sym = activeSymbol || 'BTCUSDT';
+    const sym = activeSymbol || 'BANANAS31USDT';
     const res = await fetch(`/api/gamma-exposure?symbol=${sym}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
