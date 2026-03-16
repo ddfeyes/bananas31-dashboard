@@ -3062,6 +3062,54 @@ async function renderRvIv() {
     <div style="font-size:10px;color:var(--muted);margin-top:4px;">${ratio != null ? (ratio < 1 ? 'IV premium: vol risk priced in' : 'RV exceeds IV: realized spike') : ''}</div>`;
 }
 
+async function renderMomentumDivergence() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('momentum-divergence-content');
+  const badge = document.getElementById('momentum-divergence-badge');
+  if (!el) return;
+  const data = await apiFetch(`/momentum-divergence?symbol=${sym}`);
+  if (!data) { setErr('momentum-divergence-content'); return; }
+
+  const divType = data.divergence_type || 'none';
+  const severity = data.severity || 'low';
+  const score = data.score ?? 0;
+  const priceMom = data.price_momentum;
+  const oiMom = data.oi_momentum;
+  const nEvents = data.n_events ?? 0;
+
+  const badgeClass = divType === 'bullish' ? 'badge-green'
+                   : divType === 'bearish' ? 'badge-red'
+                   : 'badge-blue';
+  if (badge) {
+    badge.textContent = divType;
+    badge.className = `card-badge ${badgeClass}`;
+    badge.style.display = '';
+  }
+
+  const fmtMom = v => {
+    if (v == null) return '—';
+    const sign = v > 0 ? '+' : '';
+    return `${sign}${v.toFixed(2)}%`;
+  };
+  const sevColor = severity === 'high' ? 'var(--red)'
+                 : severity === 'medium' ? 'var(--yellow)'
+                 : 'var(--muted)';
+
+  el.innerHTML = `
+    <div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;">
+      <span style="color:var(--muted)">score</span>
+      <span style="color:${sevColor};font-weight:600">${score} <span style="font-weight:400;color:var(--muted)">(${severity})</span></span>
+      <span style="color:var(--muted)">price mom</span>
+      <span style="color:${priceMom < 0 ? 'var(--red)' : priceMom > 0 ? 'var(--green)' : 'var(--muted)'}">${fmtMom(priceMom)}</span>
+      <span style="color:var(--muted)">OI mom</span>
+      <span style="color:${oiMom > 0 ? 'var(--green)' : oiMom < 0 ? 'var(--red)' : 'var(--muted)'}">${fmtMom(oiMom)}</span>
+      <span style="color:var(--muted)">events</span>
+      <span>${nEvents}</span>
+    </div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -3150,6 +3198,8 @@ async function refresh() {
     await Promise.all([safe(renderSessionVolumeProfile)]);
     // Batch 15: OFT
     await Promise.all([safe(renderOrderFlowToxicity)]);
+    // Batch 15: momentum divergence
+    await Promise.all([safe(renderMomentumDivergence)]);
   } finally {
     _refreshRunning = false;
   }

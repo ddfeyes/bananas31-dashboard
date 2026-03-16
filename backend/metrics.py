@@ -5163,3 +5163,200 @@ async def compute_order_flow_toxicity(
         "window_seconds": window_seconds,
         "n_trades":       n_trades,
     }
+
+
+async def compute_momentum_divergence(
+    symbol: str = None,
+    window_seconds: int = 3600,
+    bucket_seconds: int = 300,
+    threshold: float = 0.1,
+) -> Dict:
+    """
+    Price vs OI (Open Interest) momentum divergence detector.
+
+    Per bucket:
+      price_mom = (close - open) / open * 100
+      oi_mom    = (oi_end - oi_start) / oi_start * 100
+
+    Bullish divergence: price_mom < -threshold AND oi_mom > threshold
+      (price falling while OI rises → short build-up, squeeze fuel)
+    Bearish divergence: price_mom > threshold AND oi_mom < -threshold
+      (price rising while OI falls → weak rally, reversal risk)
+
+    Score 0–100: fraction × 60 + min(avg_spread, 10) × 4
+    Severity: low (<30) | medium (<60) | high (≥60)
+    """
+    now = time.time()
+    since = now - window_seconds
+
+    candles, oi_rows = await asyncio.gather(
+        get_ohlcv(interval_seconds=bucket_seconds, window_seconds=window_seconds, symbol=symbol),
+        get_oi_history(limit=2000, since=since, symbol=symbol),
+    )
+
+    _empty: Dict = {
+        "status": "ok",
+        "symbol": symbol,
+        "divergence_type": "none",
+        "severity": "low",
+        "score": 0.0,
+        "price_momentum": None,
+        "oi_momentum": None,
+        "events": [],
+        "series": [],
+        "description": "Insufficient data",
+        "window_seconds": window_seconds,
+        "bucket_seconds": bucket_seconds,
+        "n_events": 0,
+    }
+
+    if not candles or not oi_rows:
+        return _empty
+
+    # Build price series: [{ts, price_mom}]
+    price_series = []
+    for c in candles:
+        o = float(c.get("open") or 0)
+        cl = float(c.get("close") or 0)
+        if o <= 0:
+            continue
+        pm = round((cl - o) / o * 100, 4)
+        price_series.append({"ts": float(c["ts"]), "price_mom": pm})
+
+    if not price_series:
+        return _empty
+
+    # Build OI series: [{ts, oi_mom}] — bucket OI rows into bucket_seconds intervals
+    # For each bucket, use first OI value as oi_start and last as oi_end
+    oi_buckets: Dict[int, Dict] = {}
+    for row in oi_rows:
+        ts = float(row.get("ts") or 0)
+        oi = float(row.get("oi") or row.get("open_interest") or 0)
+        if oi <= 0:
+            continue
+        key = int(ts // bucket_seconds) * bucket_seconds
+        if key not in oi_buckets:
+            oi_buckets[key] = {"oi_start": oi, "oi_end": oi}
+        else:
+            oi_buckets[key]["oi_end"] = oi
+
+    oi_series = []
+    for key, vals in sorted(oi_buckets.items()):
+        oi_start = vals["oi_start"]
+        oi_end = vals["oi_end"]
+        if oi_start <= 0:
+            continue
+        om = round((oi_end - oi_start) / oi_start * 100, 4)
+        oi_series.append({"ts": float(key), "oi_mom": om})
+
+    if not oi_series:
+        return _empty
+
+    # Align price and OI series by bucket timestamp
+    oi_map = {round(r["ts"] / bucket_seconds) * bucket_seconds: r["oi_mom"] for r in oi_series}
+    aligned = []
+    for p in price_series:
+        key = round(p["ts"] / bucket_seconds) * bucket_seconds
+        if key in oi_map:
+            aligned.append({
+                "ts": key,
+                "price_mom": p["price_mom"],
+                "oi_mom": oi_map[key],
+            })
+
+    if not aligned:
+        return _empty
+
+    # Classify each aligned bucket
+    series_out = []
+    events = []
+    for pt in aligned:
+        pm = pt["price_mom"]
+        om = pt["oi_mom"]
+        if pm < -threshold and om > threshold:
+            div = "bullish"
+            events.append({
+                "ts": pt["ts"],
+                "type": "bullish",
+                "price_mom": pm,
+                "oi_mom": om,
+                "description": (
+                    f"Price fell {pm:.1f}% while OI rose +{om:.1f}%"
+                ),
+            })
+        elif pm > threshold and om < -threshold:
+            div = "bearish"
+            events.append({
+                "ts": pt["ts"],
+                "type": "bearish",
+                "price_mom": pm,
+                "oi_mom": om,
+                "description": (
+                    f"Price rose +{pm:.1f}% while OI fell {om:.1f}%"
+                ),
+            })
+        else:
+            div = "none"
+        series_out.append({
+            "ts": pt["ts"],
+            "price_mom": pm,
+            "oi_mom": om,
+            "divergence": div,
+        })
+
+    total_buckets = len(aligned)
+
+    # Score
+    frac = len(events) / total_buckets if total_buckets > 0 else 0.0
+    spreads = [abs((e["price_mom"] or 0) - (e["oi_mom"] or 0)) for e in events]
+    avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
+    score = round(min(100.0, frac * 60 + min(avg_spread, 10.0) * 4), 2)
+
+    # Severity
+    if score >= 60:
+        severity = "high"
+    elif score >= 30:
+        severity = "medium"
+    else:
+        severity = "low"
+
+    # Overall divergence type: majority vote among events
+    bull_count = sum(1 for e in events if e["type"] == "bullish")
+    bear_count = sum(1 for e in events if e["type"] == "bearish")
+    if bull_count > bear_count:
+        divergence_type = "bullish"
+    elif bear_count > bull_count:
+        divergence_type = "bearish"
+    elif events:
+        divergence_type = events[-1]["type"]
+    else:
+        divergence_type = "none"
+
+    # Recent (last bucket) momentum values
+    last = aligned[-1]
+    price_momentum = last["price_mom"]
+    oi_momentum = last["oi_mom"]
+
+    # Description
+    if divergence_type == "bullish":
+        description = "Bullish divergence: price falling while OI rises — potential squeeze"
+    elif divergence_type == "bearish":
+        description = "Bearish divergence: price rising while OI falls — weak rally"
+    else:
+        description = "No significant momentum divergence detected"
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "divergence_type": divergence_type,
+        "severity": severity,
+        "score": score,
+        "price_momentum": price_momentum,
+        "oi_momentum": oi_momentum,
+        "events": events,
+        "series": series_out,
+        "description": description,
+        "window_seconds": window_seconds,
+        "bucket_seconds": bucket_seconds,
+        "n_events": len(events),
+    }
