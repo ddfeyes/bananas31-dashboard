@@ -2586,7 +2586,11 @@ async function refresh() {
     // Batch 35: support/resistance levels (Wave 24)
     await Promise.all([safe(renderSupportResistance)]);
     // Batch 36: realized vs implied volatility (Wave 24)
-    await Promise.all([safe(renderRealizedImpliedVol)]);
+    await Promise.all([safe(renderRealizedImpliedVol), safe(renderRvIv),
+      safe(renderDefiTvlTracker), safe(renderFundingRateHeatmap), safe(renderGasFeePredictor),
+      safe(renderHolderDistribution), safe(renderLiquidationCascade), safe(renderDepthImbalance),
+      safe(renderMarketMicrostructure), safe(renderMomentumDivergence), safe(renderOptionsSkew),
+      safe(renderSessionVolumeProfile), safe(renderValidatorActivity)]);
     // Batch 37: net taker delta chart + smart money divergence (Wave 24/25)
     await Promise.all([safe(renderNetTakerDelta), safe(renderSmartMoneyDivergence)]);
     // Batch 38: trade size distribution histogram (Wave 24)
@@ -4961,7 +4965,7 @@ async function renderFundingArbScanner() {
   if (!el) return;
 
   try {
-    const data = await apiFetch('/funding-arb-scanner');
+    const data = await apiFetch("/api/funding-arb-scanner");
     if (!data) { setErr('funding-arb-scanner-content'); return; }
 
     const { top_pairs, avg_spread_bps, extreme_count } = data;
@@ -5507,6 +5511,141 @@ async function renderVolatilityRegimeHMM() {
     <div style="font-size:9px;color:#888;">${data.description || ''}</div>`;
 }
 
+
+// ── Defi TVL Tracker ──────────────────────────────────────────────────────────
+async function renderDefiTvlTracker() {
+  // endpoint: /api/defi-tvl-tracker
+  const el    = document.getElementById('defi-tvl-tracker-content');
+  const badge = document.getElementById('defi-tvl-tracker-badge');
+  if (!el) return;
+  const data = await apiFetch('/defi-tvl-tracker');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.momentum || 'stable'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">TVL: $${(data.total_tvl_usd||0).toLocaleString()}</div>`;
+}
+
+// ── Funding Rate Heatmap ──────────────────────────────────────────────────────
+async function renderFundingRateHeatmap() {
+  // endpoint: /api/funding-rate-heatmap
+  const el    = document.getElementById('funding-rate-heatmap-content');
+  const badge = document.getElementById('funding-rate-heatmap-badge');
+  if (!el) return;
+  const data = await apiFetch('/funding-rate-heatmap');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.anomaly_level || 'normal'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Funding rate z-score: ${(data.z_score||0).toFixed(2)}</div>`;
+}
+
+// ── Gas Fee Predictor ─────────────────────────────────────────────────────────
+async function renderGasFeePredictor() {
+  // endpoint: /api/gas-fee-predictor
+  const el    = document.getElementById('gas-fee-predictor-content');
+  const badge = document.getElementById('gas-fee-predictor-badge');
+  if (!el) return;
+  const data = await apiFetch('/gas-fee-predictor');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.trend || 'stable'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Next block: ${(data.next_block_gwei||0).toFixed(1)} Gwei</div>`;
+}
+
+// ── Holder Distribution ───────────────────────────────────────────────────────
+async function renderHolderDistribution() {
+  // endpoint: /api/holder-distribution-card
+  const el    = document.getElementById('holder-distribution-content');
+  const badge = document.getElementById('holder-distribution-badge');
+  if (!el) return;
+  const data = await apiFetch('/holder-distribution-card');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.gini != null ? `Gini ${data.gini.toFixed(2)}` : '—'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Gini: ${(data.gini||0).toFixed(3)}</div>`;
+}
+
+// ── Liquidation Cascade ───────────────────────────────────────────────────────
+async function renderLiquidationCascade() {
+  // endpoint: /api/liquidation-cascade
+  const el    = document.getElementById('liquidation-cascade-content');
+  const badge = document.getElementById('liquidation-cascade-badge');
+  if (!el) return;
+  const data = await apiFetch('/liquidation-cascade');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.level || 'low'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Risk score: ${(data.risk_score||0).toFixed(1)}</div>`;
+}
+
+// ── Market Depth Imbalance ────────────────────────────────────────────────────
+async function renderDepthImbalance() {
+  // endpoint: /api/depth-imbalance
+  const el    = document.getElementById('depth-imbalance-content');
+  const badge = document.getElementById('depth-imbalance-badge');
+  if (!el) return;
+  const data = await apiFetch('/depth-imbalance');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.pressure_label || 'neutral'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Imbalance: ${(data.ratio||0).toFixed(3)}</div>`;
+}
+
+// ── Market Microstructure / Spread Analysis ───────────────────────────────────
+async function renderMarketMicrostructure() {
+  // endpoint: /api/spread-analysis
+  const el    = document.getElementById('spread-analysis-content');
+  const badge = document.getElementById('spread-analysis-badge');
+  if (!el) return;
+  const data = await apiFetch('/spread-analysis');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.regime || 'normal'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Spread: ${(data.spread_bps||0).toFixed(2)} bps</div>`;
+}
+
+// ── Momentum Divergence ───────────────────────────────────────────────────────
+async function renderMomentumDivergence() {
+  // endpoint: /api/momentum-divergence
+  const el    = document.getElementById('momentum-divergence-content');
+  const badge = document.getElementById('momentum-divergence-badge');
+  if (!el) return;
+  const data = await apiFetch('/momentum-divergence');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.signal || 'none'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Signal: ${data.signal || 'none'}</div>`;
+}
+
+// ── Options Skew ──────────────────────────────────────────────────────────────
+async function renderOptionsSkew() {
+  // endpoint: /api/options-skew
+  const el    = document.getElementById('options-skew-content');
+  const badge = document.getElementById('options-skew-badge');
+  if (!el) return;
+  const data = await apiFetch('/options-skew');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.skew_label || 'neutral'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Skewness: ${(data.skewness||0).toFixed(3)}</div>`;
+}
+
+// ── Session Volume Profile ────────────────────────────────────────────────────
+async function renderSessionVolumeProfile() {
+  // endpoint: /api/session-volume-profile
+  const el    = document.getElementById('session-volume-profile-content');
+  const badge = document.getElementById('session-volume-profile-badge');
+  if (!el) return;
+  const data = await apiFetch('/session-volume-profile');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.session || '—'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">Session: ${data.session || '—'} · POC: ${data.poc || '—'}</div>`;
+}
+
+// ── Validator Activity ────────────────────────────────────────────────────────
+async function renderValidatorActivity() {
+  // endpoint: /api/validator-activity
+  const el    = document.getElementById('validator-activity-content');
+  const badge = document.getElementById('validator-activity-badge');
+  if (!el) return;
+  const data = await apiFetch('/validator-activity');
+  if (!data) { el.textContent = 'No data'; return; }
+  if (badge) { badge.textContent = data.health_label || 'normal'; badge.style.display = ''; }
+  el.innerHTML = `<div style="font-size:11px;">APY: ${(data.staking_apy||0).toFixed(2)}%</div>`;
+}
+
+// ── Leverage Heatmap alias ────────────────────────────────────────────────────
+const renderLeverageHeatmap = renderLeverageRatioHeatmap;
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);

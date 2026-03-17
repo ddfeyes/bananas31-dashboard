@@ -6110,16 +6110,21 @@ def _l2_rank_chains(chains: dict) -> list:
 
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
+    if previous == 0:
+        return 0.0
+    return float((current - previous) / previous * 100.0)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  NFT MARKET PULSE                                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 
 def _nft_floor_change_pct(current: float, previous: float) -> float:
     """% change in floor price from previous to current."""
+    if previous == 0:
+        return 0.0
+    return float((current - previous) / previous * 100.0)
 
 
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
@@ -6207,6 +6212,14 @@ def _nft_trend_direction(prices: list) -> str:
 
 def _nft_volume_zscore(current: float, history: list) -> float:
     """Z-score of current volume vs history."""
+    if len(history) < 2:
+        return 0.0
+    import math
+    mean = sum(history) / len(history)
+    std = math.sqrt(sum((x - mean) ** 2 for x in history) / len(history))
+    if std == 0:
+        return 0.0
+    return float((current - mean) / std)
 
 
 def _ml_fed_balance_delta(current: float, previous: float) -> float:
@@ -12257,6 +12270,9 @@ def _wa_exchange_flow_summary(cluster_stats_list: list) -> dict:
         "net_usd": float(net_usd),
         "net_direction": net_direction,
         "dominant_side": dominant_side,
+    }
+
+
 # ── Smart Money Flow Index ────────────────────────────────────────────────────
 
 async def compute_smart_money_flow(
