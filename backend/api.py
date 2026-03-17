@@ -130,6 +130,7 @@ from metrics import (
     compute_miner_flow_signals,
     compute_derivatives_term_structure,
     compute_perpetual_funding_heatmap,
+    compute_on_chain_active_addresses,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5441,21 +5442,40 @@ async def token_velocity_nvt_endpoint():
     return JSONResponse(data)
 
 
-
 @router.get("/options-flow-tracker")
 async def options_flow_tracker_endpoint(symbol: Optional[str] = "BTCUSDT"):
     """Options flow tracker — returns synthetic data when live feed unavailable."""
-    return JSONResponse({"status": "ok", "symbol": symbol, "summary": {
-        "net_flow_direction": "neutral", "call_volume_usd": 0, "put_volume_usd": 0,
-        "put_call_ratio": 1.0, "total_volume_usd": 0
-    }, "skew_by_expiry": {}, "top_strikes": [], "message": "No options data available for this symbol"})
+    return JSONResponse(
+        {
+            "status": "ok",
+            "symbol": symbol,
+            "summary": {
+                "net_flow_direction": "neutral",
+                "call_volume_usd": 0,
+                "put_volume_usd": 0,
+                "put_call_ratio": 1.0,
+                "total_volume_usd": 0,
+            },
+            "skew_by_expiry": {},
+            "top_strikes": [],
+            "message": "No options data available for this symbol",
+        }
+    )
 
 
 @router.get("/cross-chain-bridge-monitor")
 async def cross_chain_bridge_monitor_endpoint():
     """Cross-chain bridge monitor — stub endpoint."""
-    return JSONResponse({"status": "ok", "congestion": {"label": "unknown", "score": 0},
-        "chains": {}, "total_volume_24h": 0, "message": "Bridge monitor data unavailable"})
+    return JSONResponse(
+        {
+            "status": "ok",
+            "congestion": {"label": "unknown", "score": 0},
+            "chains": {},
+            "total_volume_24h": 0,
+            "message": "Bridge monitor data unavailable",
+        }
+    )
+
 
 @router.get("/protocol-revenue-card")
 async def protocol_revenue_endpoint():
@@ -5538,6 +5558,7 @@ async def cross_correlation_signal_endpoint(
     series_b: Optional[str] = None,
 ):
     """Cross-correlation signal between two price series (comma-separated floats)."""
+
     def _parse(s: Optional[str]) -> list:
         if not s:
             return []
@@ -5545,6 +5566,7 @@ async def cross_correlation_signal_endpoint(
             return [float(x) for x in s.split(",") if x.strip()]
         except (ValueError, TypeError):
             return []
+
     a = _parse(series_a)
     b = _parse(series_b)
     data = compute_cross_correlation_signal(a, b)
@@ -5579,7 +5601,9 @@ async def smart_money_flow_endpoint(
     threshold: float = Query(default=50000.0, ge=1000.0),
 ):
     """Smart Money Flow Index: institutional vs retail flow divergence [0-100]."""
-    data = await compute_smart_money_flow(symbol=symbol, window_seconds=window, threshold_usd=threshold)
+    data = await compute_smart_money_flow(
+        symbol=symbol, window_seconds=window, threshold_usd=threshold
+    )
     return JSONResponse(data)
 
 
@@ -5590,7 +5614,9 @@ async def vol_regime_hmm_endpoint(
     bucket: int = Query(default=300, ge=60, le=3600),
 ):
     """Volatility regime classifier with HMM-style state smoothing (4 classes)."""
-    data = await compute_vol_regime_hmm(symbol=symbol, window_seconds=window, bucket_seconds=bucket)
+    data = await compute_vol_regime_hmm(
+        symbol=symbol, window_seconds=window, bucket_seconds=bucket
+    )
     return JSONResponse(data)
 
 
@@ -5851,10 +5877,12 @@ async def validator_activity_endpoint():
     data = await compute_validator_activity()
     return JSONResponse(data)
 
+
 @router.get("/miner-flow-signals")
 async def miner_flow_signals_endpoint():
     """Miner flow signals: wallet outflow rate, reserve ratio, price correlation, 30d forecast."""
     return JSONResponse(await compute_miner_flow_signals())
+
 
 @router.get("/derivatives-term-structure")
 async def derivatives_term_structure_endpoint():
@@ -5863,7 +5891,14 @@ async def derivatives_term_structure_endpoint():
     data = await compute_derivatives_term_structure()
     return JSONResponse(data)
 
+
 @router.get("/perpetual-funding-heatmap")
 async def perpetual_funding_heatmap_endpoint():
     """Perpetual funding rate heatmap across exchanges."""
     return JSONResponse(await compute_perpetual_funding_heatmap())
+
+
+@router.get("/on-chain-active-addresses")
+async def on_chain_active_addresses_endpoint():
+    """On-chain active addresses: daily active, growth rate, price correlation, sparkline."""
+    return JSONResponse(await compute_on_chain_active_addresses())

@@ -2608,6 +2608,8 @@ async function refresh() {
     await Promise.all([safe(renderDerivativesTermStructure)]);
     // Batch 43: perpetual funding heatmap (Wave 26)
     await Promise.all([safe(fetchPerpetualFundingHeatmap)]);
+    // Batch 44: on-chain active addresses (Wave 26, Issue 156)
+    await Promise.all([safe(fetchOnChainActiveAddresses)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5870,6 +5872,86 @@ function renderPerpetualFundingHeatmap(data) {
   }
 
   el.innerHTML = tableHtml + extremesHtml + arbHtml;
+}
+
+// ── On-Chain Active Addresses ─────────────────────────────────────────────────
+async function fetchOnChainActiveAddresses() {
+  try {
+    const res = await fetch('/api/on-chain-active-addresses');
+    const data = await res.json();
+    renderOnChainActiveAddresses(data);
+  } catch (e) {
+    const el = document.getElementById('on-chain-active-addresses-content');
+    if (el) el.textContent = 'Error loading on-chain active addresses.';
+  }
+}
+
+function renderOnChainActiveAddresses(data) {
+  const el    = document.getElementById('on-chain-active-addresses-content');
+  const badge = document.getElementById('on-chain-active-addresses-badge');
+  if (!el) return;
+
+  const addr24h    = data.active_addresses_24h    || 0;
+  const addr7dAvg  = data.active_addresses_7d_avg || 0;
+  const growth7d   = data.growth_rate_7d           ?? 0;
+  const growth30d  = data.growth_rate_30d          ?? 0;
+  const trend      = data.trend                    || 'stable';
+  const corr30d    = data.price_correlation_30d    ?? 0;
+  const history    = data.historical_daily         || [];
+  const netUtil    = data.network_utilization      ?? 0;
+  const newRatio   = data.new_addresses_ratio      ?? 0;
+
+  const trendCol = (t) => {
+    if (t === 'growing')  return 'var(--bull, #26a69a)';
+    if (t === 'declining') return 'var(--bear, #ef5350)';
+    return 'var(--muted)';
+  };
+  const growthCol = (g) => g > 0 ? 'var(--bull, #26a69a)' : g < 0 ? 'var(--bear, #ef5350)' : 'var(--muted)';
+  const corrCol   = (c) => c >= 0.5 ? 'var(--bull, #26a69a)' : c <= -0.5 ? 'var(--bear, #ef5350)' : 'var(--muted)';
+
+  const fmtK = (n) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(0)}K` : `${n}`;
+
+  // Sparkline SVG from historical_daily
+  let sparkSvg = '';
+  if (history.length > 1) {
+    const counts = history.map(e => e.count);
+    const minC   = Math.min(...counts);
+    const maxC   = Math.max(...counts);
+    const range  = maxC - minC || 1;
+    const W = 120, H = 28;
+    const pts = counts.map((c, i) => {
+      const x = (i / (counts.length - 1)) * W;
+      const y = H - ((c - minC) / range) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    sparkSvg = `<svg width="${W}" height="${H}" style="vertical-align:middle;margin-left:6px">
+      <polyline points="${pts}" fill="none" stroke="var(--bull,#26a69a)" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  const statsHtml = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+      <span>24h: <b>${fmtK(addr24h)}</b>${sparkSvg}</span>
+      <span>7d avg: <b>${fmtK(addr7dAvg)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+      <span>7d growth: <b style="color:${growthCol(growth7d)}">${growth7d >= 0 ? '+' : ''}${growth7d.toFixed(2)}%</b></span>
+      <span>30d growth: <b style="color:${growthCol(growth30d)}">${growth30d >= 0 ? '+' : ''}${growth30d.toFixed(2)}%</b></span>
+      <span>trend: <b style="color:${trendCol(trend)}">${trend}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap">
+      <span>price corr 30d: <b style="color:${corrCol(corr30d)}">${corr30d >= 0 ? '+' : ''}${corr30d.toFixed(4)}</b></span>
+      <span>net util: <b>${(netUtil * 100).toFixed(1)}%</b></span>
+      <span>new addr ratio: <b>${(newRatio * 100).toFixed(1)}%</b></span>
+    </div>`;
+
+  if (badge) {
+    badge.textContent = trend.toUpperCase();
+    badge.className = `card-badge ${trend === 'growing' ? 'badge-green' : trend === 'declining' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  el.innerHTML = statsHtml;
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
