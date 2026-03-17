@@ -2606,6 +2606,8 @@ async function refresh() {
     await Promise.all([safe(fetchMinerFlowSignals)]);
     // Batch 42: derivatives term structure (Wave 25)
     await Promise.all([safe(renderDerivativesTermStructure)]);
+    // Batch 43: perpetual funding heatmap (Wave 26)
+    await Promise.all([safe(fetchPerpetualFundingHeatmap)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5792,6 +5794,82 @@ async function renderDerivativesTermStructure() {
       <span>bi-qtr: <b>${(oidist.bi_quarterly||0).toFixed(1)}%</b></span>
     </div>
     <div style="font-size:10px">${tenorRows}</div>`;
+}
+
+// ── Perpetual Funding Heatmap ─────────────────────────────────────────────────
+async function fetchPerpetualFundingHeatmap() {
+  try {
+    const res = await fetch('/api/perpetual-funding-heatmap');
+    const data = await res.json();
+    renderPerpetualFundingHeatmap(data);
+  } catch (e) {
+    const el = document.getElementById('perpetual-funding-heatmap-content');
+    if (el) el.textContent = 'Error loading perpetual funding heatmap.';
+  }
+}
+
+function renderPerpetualFundingHeatmap(data) {
+  const el    = document.getElementById('perpetual-funding-heatmap-content');
+  const badge = document.getElementById('perpetual-funding-heatmap-badge');
+  if (!el) return;
+
+  const symbols   = data.symbols   || [];
+  const exchanges = data.exchanges || [];
+  const matrix    = data.matrix    || [];
+  const extremes  = data.funding_extremes || {};
+  const arbs      = data.arbitrage_opportunities || [];
+  const avgRates  = data.avg_rates || {};
+
+  // Color coding: green = low/negative, red = high positive funding
+  const rateColor = (r) => {
+    if (r <= 0)    return 'var(--bull, #26a69a)';
+    if (r < 0.03)  return 'var(--muted)';
+    if (r < 0.06)  return 'var(--warn, #f0a500)';
+    return 'var(--bear, #ef5350)';
+  };
+
+  // Build matrix table header
+  let tableHtml = `<table style="border-collapse:collapse;font-size:10px;width:100%;margin-bottom:6px">`;
+  tableHtml += `<thead><tr><th style="text-align:left;padding:2px 6px;color:var(--muted)">Symbol</th>`;
+  for (const exc of exchanges) {
+    tableHtml += `<th style="text-align:right;padding:2px 6px;color:var(--muted)">${exc}</th>`;
+  }
+  tableHtml += `<th style="text-align:right;padding:2px 6px;color:var(--muted)">avg</th></tr></thead><tbody>`;
+
+  for (const row of matrix) {
+    tableHtml += `<tr><td style="padding:2px 6px;color:var(--muted)">${row.symbol}</td>`;
+    for (const exc of exchanges) {
+      const r = row[exc] ?? 0;
+      tableHtml += `<td style="text-align:right;padding:2px 6px;color:${rateColor(r)}">${r >= 0 ? '+' : ''}${(r * 100).toFixed(4)}%</td>`;
+    }
+    const avg = avgRates[row.symbol] ?? 0;
+    tableHtml += `<td style="text-align:right;padding:2px 6px;color:${rateColor(avg)}">${avg >= 0 ? '+' : ''}${(avg * 100).toFixed(4)}%</td>`;
+    tableHtml += `</tr>`;
+  }
+  tableHtml += `</tbody></table>`;
+
+  // Extremes row
+  const extremesHtml = `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+    <span>max: <b style="color:var(--bear)">${extremes.max_symbol}/${extremes.max_exchange} ${extremes.max_rate >= 0 ? '+' : ''}${((extremes.max_rate||0)*100).toFixed(4)}%</b></span>
+    <span>min: <b style="color:var(--bull)">${extremes.min_symbol}/${extremes.min_exchange} ${extremes.min_rate >= 0 ? '+' : ''}${((extremes.min_rate||0)*100).toFixed(4)}%</b></span>
+  </div>`;
+
+  // Arbitrage opportunities
+  let arbHtml = '';
+  if (arbs.length > 0) {
+    const arbItems = arbs.slice(0, 5).map(a =>
+      `<span style="color:var(--warn)">${a.symbol}: long ${a.long_exchange} / short ${a.short_exchange} (${a.rate_diff_bps.toFixed(1)} bps)</span>`
+    ).join(' &nbsp;·&nbsp; ');
+    arbHtml = `<div style="font-size:10px;color:var(--muted);margin-top:2px">arb: ${arbItems}</div>`;
+  }
+
+  if (badge) {
+    badge.textContent = arbs.length > 0 ? `${arbs.length} ARB` : 'NO ARB';
+    badge.className = `card-badge ${arbs.length > 0 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  el.innerHTML = tableHtml + extremesHtml + arbHtml;
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
