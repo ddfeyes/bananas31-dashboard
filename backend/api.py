@@ -5637,3 +5637,68 @@ async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None):
     """
     data = await compute_dex_vs_cex_flow(symbol)
     return JSONResponse(data)
+
+
+@router.get("/btc-dominance-tracker")
+@cache_result(ttl_seconds=120)
+async def btc_dominance_tracker_endpoint():
+    """
+    BTC Dominance Tracker: BTC/ETH/alt market dominance breakdown, regime
+    classifier (BTC season / altcoin season / neutral), 90-day sparkline with
+    30-day MA, and BTC dominance vs altcoin index correlation.
+
+    Data: CoinGecko /global endpoint (free, no key). Falls back to realistic
+    mock data. Cache TTL: 120s.
+    """
+    from metrics import compute_btc_dominance
+
+    data = await compute_btc_dominance()
+    return JSONResponse(data)
+
+
+@router.get("/derivatives-heatmap")
+async def derivatives_heatmap_endpoint(symbol: str = "BTC"):
+    """Derivatives heatmap: OI by strike/expiry, max pain, GEX, PCR."""
+    return JSONResponse({"asset": symbol, "error": "not implemented"})
+
+
+@router.get("/exchange-netflow")
+async def exchange_netflow_endpoint():
+    """Exchange net flow dashboard: BTC inflow/outflow across top exchanges."""
+    return JSONResponse({"error": "not implemented"})
+
+
+@router.get("/fear-greed")
+async def fear_greed_endpoint(symbol: str = "BANANAS31USDT"):
+    """Composite Fear & Greed Index for a symbol."""
+    return JSONResponse({"symbol": symbol, "error": "not implemented"})
+
+
+@router.get("/network-health-score")
+async def network_health_score_endpoint():
+    """Bitcoin network health composite score."""
+    return JSONResponse({"error": "not implemented"})
+
+
+@router.get("/stablecoin-flow")
+async def stablecoin_flow_endpoint():
+    """On-chain stablecoin flow tracker (USDT/USDC/DAI)."""
+    return JSONResponse({"error": "not implemented"})
+
+
+@router.get("/perpetual-basis")
+async def perpetual_basis_endpoint(symbol: str = "BANANAS31USDT"):
+    """Perpetual futures basis tracker."""
+    return JSONResponse({"symbol": symbol, "error": "not implemented"})
+
+
+@router.get("/staking-yield-tracker")
+async def staking_yield_tracker_endpoint():
+    """Staking yield tracker: ETH/SOL/ADA/DOT/AVAX APY trends."""
+    return JSONResponse({"error": "not implemented"})
+
+
+@router.get("/whale-alerts")
+async def whale_alerts_endpoint(symbol: str = "BANANAS31USDT"):
+    """Whale alert tracker with clustering and exchange flow detection."""
+    return JSONResponse({"symbol": symbol, "error": "not implemented"})

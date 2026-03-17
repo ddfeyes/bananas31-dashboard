@@ -2592,7 +2592,7 @@ async function refresh() {
     // Batch 38: trade size distribution histogram (Wave 24)
     await Promise.all([safe(renderTradeSizeDist)]);
     // Batch 39: leverage ratio heatmap (Wave 24)
-    await Promise.all([safe(renderLeverageHeatmap)]);
+    await Promise.all([safe(renderLeverageRatioHeatmap)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5171,7 +5171,7 @@ async function renderTradeSizeDist() {
 
 
 // ── Leverage Ratio Heatmap (Wave 24, Issue #129) ─────────────────────────────
-async function renderLeverageHeatmap() {
+async function renderLeverageRatioHeatmap() {
   const el    = document.getElementById('leverage-heatmap-content');
   const badge = document.getElementById('leverage-heatmap-badge');
   if (!el) return;
@@ -5248,6 +5248,135 @@ async function renderLeverageHeatmap() {
   `;
 }
 
+
+// ── BTC Dominance Tracker ─────────────────────────────────────────────────────
+async function renderBtcDominanceTracker() {
+  const el = document.getElementById('btc-dominance-tracker-content');
+  if (!el) return;
+  const data = await apiFetch('/btc-dominance-tracker');
+  if (!data) { el.textContent = 'Error loading data'; return; }
+
+  const { btc = {}, eth = {}, alts = {}, regime = {} } = data;
+  const regimeColor = regime.label === 'btc_season' ? '#f7931a'
+                    : regime.label === 'alt_season'  ? '#8b5cf6' : '#888';
+  const regimeText = (regime.label || 'neutral').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const dirArrow = regime.direction === 'rising' ? '↑' : regime.direction === 'falling' ? '↓' : '→';
+
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      <div style="background:#f7931a22;border:1px solid #f7931a;border-radius:4px;padding:6px 10px;min-width:70px;">
+        <div style="font-size:9px;color:#888;">BTC DOM</div>
+        <div style="font-size:14px;color:#f7931a;font-weight:bold;">${(btc.dominance_pct||0).toFixed(1)}%</div>
+        <div style="font-size:9px;color:#aaa;">${(btc.change_24h_pct||0) > 0 ? '+' : ''}${(btc.change_24h_pct||0).toFixed(1)}% 24h</div>
+      </div>
+      <div style="background:#627eea22;border:1px solid #627eea;border-radius:4px;padding:6px 10px;min-width:70px;">
+        <div style="font-size:9px;color:#888;">ETH DOM</div>
+        <div style="font-size:14px;color:#627eea;font-weight:bold;">${(eth.dominance_pct||0).toFixed(1)}%</div>
+        <div style="font-size:9px;color:#aaa;">${(eth.change_24h_pct||0) > 0 ? '+' : ''}${(eth.change_24h_pct||0).toFixed(1)}% 24h</div>
+      </div>
+      <div style="background:#8b5cf622;border:1px solid #8b5cf6;border-radius:4px;padding:6px 10px;min-width:70px;">
+        <div style="font-size:9px;color:#888;">ALTS DOM</div>
+        <div style="font-size:14px;color:#8b5cf6;font-weight:bold;">${(alts.dominance_pct||0).toFixed(1)}%</div>
+        <div style="font-size:9px;color:#aaa;">${(alts.change_24h_pct||0) > 0 ? '+' : ''}${(alts.change_24h_pct||0).toFixed(1)}% 24h</div>
+      </div>
+      <div style="background:${regimeColor}22;border:1px solid ${regimeColor};border-radius:4px;padding:6px 10px;min-width:90px;">
+        <div style="font-size:9px;color:#888;">REGIME ${dirArrow}</div>
+        <div style="font-size:12px;color:${regimeColor};font-weight:bold;">${regimeText}</div>
+        <div style="font-size:9px;color:#aaa;">conf ${((regime.confidence||0)*100).toFixed(0)}%</div>
+      </div>
+    </div>
+    <div style="color:#888;font-size:9px;">${data.description || ''}</div>
+  `;
+}
+
+
+// ── Derivatives Heatmap ────────────────────────────────────────────────────────
+async function renderDerivativesHeatmap() {
+  const el = document.getElementById('derivatives-heatmap-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/derivatives-heatmap');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Exchange Netflow Dashboard ─────────────────────────────────────────────────
+async function renderExchangeNetflow() {
+  const el = document.getElementById('exchange-netflow-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/exchange-netflow');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Fear & Greed Composite ─────────────────────────────────────────────────────
+async function renderFearGreed() {
+  const el = document.getElementById('fear-greed-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/fear-greed');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Network Health Score ───────────────────────────────────────────────────────
+async function renderNetworkHealthScore() {
+  const el = document.getElementById('network-health-score-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/network-health-score');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Stablecoin Flow ────────────────────────────────────────────────────────────
+async function renderStablecoinFlow() {
+  const el = document.getElementById('stablecoin-flow-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/stablecoin-flow');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Perpetual Basis Tracker ────────────────────────────────────────────────────
+async function renderPerpetualBasis() {
+  const el = document.getElementById('perpetual-basis-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/perpetual-basis');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Staking Yield Tracker ──────────────────────────────────────────────────────
+async function renderStakingYieldTracker() {
+  const el = document.getElementById('staking-yield-tracker-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/staking-yield-tracker');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
+
+// ── Whale Alerts ───────────────────────────────────────────────────────────────
+async function renderWhaleAlerts() {
+  const el = document.getElementById('whale-alert-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/whale-alerts');
+    const data = await r.json();
+    el.innerHTML = `<div style="color:#aaa;">${data.description || JSON.stringify(data)}</div>`;
+  } catch(e) { el.innerHTML = `<div style="color:#f66;">Error: ${e.message}</div>`; }
+}
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);

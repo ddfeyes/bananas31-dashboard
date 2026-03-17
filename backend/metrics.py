@@ -5746,8 +5746,11 @@ async def compute_miner_reserve() -> dict:
         "description": desc,
     }
 
-    # Layer 2 Metrics helpers  (_l2_)
-    # ==============================================def _l2_tvl_share(chains: dict) -> dict:
+# Layer 2 Metrics helpers  (_l2_)
+# ==============================================
+
+
+def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -5833,8 +5836,11 @@ def _l2_tvl_change_pct(current: float, previous: float) -> float:
         return 0.0
     return float((current - previous) / previous * 100.0)
 
-    # =====================================================# Gas Fee Predictor helpers  (_gf_)
-    # ==============================================def _gf_base_fee_trend(fees: list) -> str:
+# Gas Fee Predictor helpers  (_gf_)
+# ==============================================
+
+
+def _gf_base_fee_trend(fees: list) -> str:
     """
     Linear regression slope over fee history.
     Returns 'rising' / 'falling' / 'stable' (|slope| < 0.5 Gwei/period).
@@ -6019,8 +6025,10 @@ async def compute_token_velocity_nvt() -> dict:
         "description": desc,
     }
 
-    # Layer 2 Metrics helpers  (_l2_)
-    # ==============================================def _l2_tvl_share(chains: dict) -> dict:
+# Layer 2 Metrics helpers  (_l2_) [duplicate removed]
+
+
+def _l2_tvl_share_dup_REMOVE(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -6419,8 +6427,11 @@ async def compute_macro_liquidity_indicator() -> dict:
         "description": desc,
     }
 
-    # =====================================================# Validator Activity helpers  (_va_)
-    # ==============================================def _va_effectiveness_rate(attested: int, total: int) -> float:
+# Validator Activity helpers  (_va_)
+# ==============================================
+
+
+def _va_effectiveness_rate(attested: int, total: int) -> float:
     """Attestation effectiveness: attested / total * 100, clamped [0, 100]."""
     if total <= 0:
         return 0.0
@@ -7682,8 +7693,11 @@ async def compute_nft_market_pulse() -> dict:
         "description": desc,
     }
 
-    # BTC Dominance Tracker helpers  (_bd_)
-    # ==============================================def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
+# BTC Dominance Tracker helpers  (_bd_)
+# ==============================================
+
+
+def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
     if total_market_cap <= 0:
         return 0.0
@@ -11374,4 +11388,873 @@ async def compute_protocol_revenue_card() -> dict:
         "top_protocol": None,
         "signal": "unavailable",
         "error": None,
+    }
+
+
+# ── Cross-Chain Bridge Monitor helpers ───────────────────────────────────────
+
+def _cb_net_flow(inflow: float, outflow: float) -> float:
+    """Return net flow (inflow - outflow) for a chain."""
+    return float(inflow - outflow)
+
+
+def _cb_flow_label(net_flow: float, threshold: float = 1.0) -> str:
+    """Return 'inflow', 'outflow', or 'balanced' based on net_flow magnitude."""
+    if net_flow >= threshold:
+        return "inflow"
+    elif net_flow <= -threshold:
+        return "outflow"
+    return "balanced"
+
+
+def _cb_chain_dominance(inflows: dict) -> str:
+    """Return the chain name with the highest inflow. Returns 'unknown' if empty."""
+    if not inflows:
+        return "unknown"
+    return max(inflows, key=lambda k: inflows[k])
+
+
+def _cb_utilization_rate(volume: float, capacity: float) -> float:
+    """Return utilization % (0–100). Returns 0.0 if capacity is zero."""
+    if capacity <= 0.0:
+        return 0.0
+    return float(min(volume / capacity * 100.0, 100.0))
+
+
+def _cb_anomaly_flag(current: float, average: float) -> bool:
+    """Return True if current >= 2x the 7-day average (and average > 0)."""
+    if average <= 0.0:
+        return False
+    return bool(current / average >= 2.0)
+
+
+def _cb_bridge_rank(volumes: dict, top_n: int = None) -> list:
+    """
+    Rank bridges by volume descending.
+
+    Args:
+        volumes: dict of {bridge_name: volume_24h}
+        top_n:   optional limit on returned entries
+
+    Returns list of dicts with keys: name, volume_24h, rank
+    """
+    if not volumes:
+        return []
+    sorted_items = sorted(volumes.items(), key=lambda x: x[1], reverse=True)
+    if top_n is not None:
+        sorted_items = sorted_items[:top_n]
+    return [
+        {"name": name, "volume_24h": vol, "rank": i + 1}
+        for i, (name, vol) in enumerate(sorted_items)
+    ]
+
+
+def _cb_volume_zscore(current: float, history: list) -> float:
+    """
+    Compute z-score of current volume relative to history.
+    Returns 0.0 if history has fewer than 2 elements or std == 0.
+    """
+    if len(history) < 2:
+        return 0.0
+    n = len(history)
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    if variance == 0.0:
+        return 0.0
+    std = variance ** 0.5
+    return float((current - mean) / std)
+
+
+def _cb_congestion_label(avg_wait_seconds: int) -> str:
+    """
+    Map average wait time (seconds) to a congestion label.
+      < 60s   → 'low'
+      < 300s  → 'moderate'
+      < 900s  → 'high'
+      >= 900s → 'severe'
+    """
+    if avg_wait_seconds < 60:
+        return "low"
+    elif avg_wait_seconds < 300:
+        return "moderate"
+    elif avg_wait_seconds < 900:
+        return "high"
+    return "severe"
+
+
+# ── Derivatives Heatmap helpers ───────────────────────────────────────────────
+
+def _dh_parse_instrument(name: str):
+    """
+    Parse a Deribit-style option instrument name, e.g. 'BTC-27DEC24-95000-C'.
+    Returns dict with keys: asset, expiry, strike, option_type
+    Returns None if the name is invalid.
+    """
+    if not name:
+        return None
+    parts = name.split("-")
+    if len(parts) != 4:
+        return None
+    asset, expiry, strike_str, opt = parts
+    if opt not in ("C", "P"):
+        return None
+    try:
+        strike = float(strike_str)
+    except ValueError:
+        return None
+    option_type = "call" if opt == "C" else "put"
+    return {"asset": asset, "expiry": expiry, "strike": strike, "option_type": option_type}
+
+
+def _dh_total_payout(spot: float, calls: dict, puts: dict) -> float:
+    """
+    Compute total payout to option holders at spot price S.
+    calls: {strike: oi}, puts: {strike: oi}
+    """
+    payout = 0.0
+    for k, oi in calls.items():
+        payout += max(0.0, spot - k) * oi
+    for k, oi in puts.items():
+        payout += max(0.0, k - spot) * oi
+    return float(payout)
+
+
+def _dh_max_pain(strikes: list, calls: dict, puts: dict) -> float:
+    """Return the strike that minimises total payout to option buyers."""
+    if not strikes:
+        return 0.0
+    return float(min(strikes, key=lambda s: _dh_total_payout(s, calls, puts)))
+
+
+def _dh_gex_at_strike(gamma: float, oi: float, spot: float, contract_size: float = 1.0) -> float:
+    """GEX = gamma * OI * contract_size * spot^2 / 1000"""
+    return float(gamma * oi * contract_size * spot ** 2 / 1000.0)
+
+
+def _dh_oi_concentration(oi_by_strike: dict) -> float:
+    """
+    Return the share of total OI held by the top-3 strikes (0-1).
+    Returns 0.0 if empty.
+    """
+    if not oi_by_strike:
+        return 0.0
+    total = sum(oi_by_strike.values())
+    if total == 0.0:
+        return 0.0
+    top3 = sorted(oi_by_strike.values(), reverse=True)[:3]
+    return float(sum(top3) / total)
+
+
+def _dh_put_call_ratio(call_oi: float, put_oi: float) -> float:
+    """
+    Return put/call ratio = put_oi / call_oi.
+    Returns 0.0 if call_oi is zero.
+    """
+    if call_oi <= 0.0:
+        return 0.0
+    return float(put_oi / call_oi)
+
+
+def _dh_nearest_expiries(expiries: list, n: int) -> list:
+    """Return the n nearest (sorted ascending) expiry date strings."""
+    if not expiries:
+        return []
+    sorted_exp = sorted(expiries)
+    return sorted_exp[:n]
+
+
+# ── Exchange Netflow Dashboard helpers ────────────────────────────────────────
+
+def _enf_net_flow_proxy(volume_btc: float, open_price: float, close_price: float) -> float:
+    """
+    Net flow proxy from OHLCV candle.
+    inflow_proxy  = volume × max(0, close - open)
+    outflow_proxy = volume × max(0, open - close)
+    net = inflow - outflow
+    Returns 0.0 if open_price is zero.
+    """
+    if open_price <= 0.0:
+        return 0.0
+    inflow = volume_btc * max(0.0, close_price - open_price)
+    outflow = volume_btc * max(0.0, open_price - close_price)
+    return float(inflow - outflow)
+
+
+def _enf_flow_direction(net_flow: float, threshold: float = 0.0) -> str:
+    """
+    Return 'inflow', 'outflow', or 'neutral'.
+    Values within ±threshold are 'neutral'.
+    """
+    if net_flow > threshold:
+        return "inflow"
+    elif net_flow < -threshold:
+        return "outflow"
+    return "neutral"
+
+
+def _enf_accumulation_signal(net_flow_7d: float, trend: str) -> str:
+    """
+    Derive accumulation/distribution/neutral signal.
+    accumulation: positive 7d flow AND increasing trend
+    distribution: negative 7d flow AND decreasing trend
+    neutral: otherwise
+    """
+    if net_flow_7d > 0 and trend == "increasing":
+        return "accumulation"
+    if net_flow_7d < 0 and trend == "decreasing":
+        return "distribution"
+    return "neutral"
+
+
+def _enf_flow_strength(net_flow: float, max_flow: float) -> float:
+    """
+    Return flow strength 0-100 based on |net_flow| / max_flow.
+    Returns 0.0 if max_flow is zero.
+    """
+    if max_flow <= 0.0:
+        return 0.0
+    strength = abs(net_flow) / max_flow * 100.0
+    return float(min(100.0, max(0.0, strength)))
+
+
+def _enf_exchange_rank(exchanges: dict) -> list:
+    """
+    Rank exchanges by net_flow descending.
+    Returns list of (name, data) tuples.
+    """
+    if not exchanges:
+        return []
+    return sorted(exchanges.items(), key=lambda x: x[1].get("net_flow", 0.0), reverse=True)
+
+
+def _enf_trend(values: list) -> str:
+    """
+    Determine trend direction from a list of values.
+    Uses linear regression slope sign.
+    Returns 'increasing', 'decreasing', or 'stable'.
+    """
+    if len(values) < 2:
+        return "stable"
+    n = len(values)
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(values) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, values))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    if den == 0.0:
+        return "stable"
+    slope = num / den
+    threshold = abs(mean_y) * 0.01 if mean_y != 0.0 else 0.01
+    if slope > threshold:
+        return "increasing"
+    if slope < -threshold:
+        return "decreasing"
+    return "stable"
+
+
+def _enf_zscore(current: float, history: list) -> float:
+    """
+    Z-score of current value relative to history.
+    Returns 0.0 if fewer than 2 elements or std == 0.
+    """
+    if len(history) < 2:
+        return 0.0
+    n = len(history)
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    if variance == 0.0:
+        return 0.0
+    return float((current - mean) / variance ** 0.5)
+
+
+# ── Fear & Greed Composite helpers ────────────────────────────────────────────
+
+def _fg_clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp value to [lo, hi]."""
+    return float(max(lo, min(hi, value)))
+
+
+def _fg_normalize(value: float, lo: float, hi: float) -> float:
+    """
+    Normalize value to 0-100 within [lo, hi].
+    Returns 50.0 if lo == hi.
+    """
+    if lo == hi:
+        return 50.0
+    normalized = (value - lo) / (hi - lo) * 100.0
+    return float(_fg_clamp(normalized, 0.0, 100.0))
+
+
+def _fg_label(score: float) -> str:
+    """Map composite score to label."""
+    if score <= 20:
+        return "Extreme Fear"
+    if score <= 40:
+        return "Fear"
+    if score <= 59:
+        return "Neutral"
+    if score <= 79:
+        return "Greed"
+    return "Extreme Greed"
+
+
+def _fg_label_color(label: str) -> str:
+    """Return color string for a fear/greed label."""
+    colors = {
+        "Extreme Fear": "#ff2222",
+        "Fear": "#ff8800",
+        "Neutral": "#ffff00",
+        "Greed": "#88cc00",
+        "Extreme Greed": "#00cc44",
+    }
+    return colors.get(label, "#888888")
+
+
+def _fg_funding_score(funding_rate: float) -> float:
+    """
+    Convert funding rate to 0-100 score.
+    0% funding → 50, positive → greed, negative → fear.
+    Normalized over [-0.05, 0.05] range.
+    """
+    return _fg_normalize(funding_rate, -0.05, 0.05)
+
+
+def _fg_oi_momentum_score(oi_change_pct: float) -> float:
+    """
+    Convert OI percentage change to 0-100 score.
+    0% → 50, positive → greed.
+    Normalized over [-20, 20] range.
+    """
+    return _fg_normalize(oi_change_pct, -20.0, 20.0)
+
+
+def _fg_price_deviation_score(deviation_pct: float) -> float:
+    """
+    Convert price deviation from SMA (%) to 0-100 score.
+    0% → 50, above SMA → greed.
+    Normalized over [-10, 10] range.
+    """
+    return _fg_normalize(deviation_pct, -10.0, 10.0)
+
+
+def _fg_volatility_score(regime: str) -> float:
+    """
+    Convert volatility regime to 0-100 score.
+    low=70, mid=50, high=35, extreme=15, unknown=50
+    """
+    mapping = {"low": 70.0, "mid": 50.0, "high": 35.0, "extreme": 15.0}
+    return float(mapping.get(regime, 50.0))
+
+
+def _fg_taker_score(buy_ratio: float) -> float:
+    """
+    Convert taker buy ratio [0, 1] to 0-100 score.
+    0.5 → 50, 1.0 → 100, 0.0 → 0.
+    """
+    return _fg_clamp(buy_ratio * 100.0, 0.0, 100.0)
+
+
+def _fg_liquidation_score(liquidation_count: int) -> float:
+    """
+    Convert number of recent liquidations to 0-100 score.
+    More liquidations → more fear → lower score.
+    Normalized inversely; caps at 20 liquidations.
+    """
+    score = 100.0 - min(liquidation_count / 20.0, 1.0) * 100.0
+    return float(max(0.0, score))
+
+
+def _fg_composite(scores: list, weights: list) -> float:
+    """Weighted average of scores list."""
+    return float(sum(s * w for s, w in zip(scores, weights)))
+
+
+# ── Network Health Score helpers ──────────────────────────────────────────────
+
+def _nh_normalize(value: float, lo: float, hi: float) -> float:
+    """Normalize value to 0-100 within [lo, hi]. Returns 50 if lo==hi."""
+    if lo == hi:
+        return 50.0
+    result = (value - lo) / (hi - lo) * 100.0
+    return float(max(0.0, min(100.0, result)))
+
+
+def _nh_hash_rate_score(hash_7d: float, hash_30d: float) -> float:
+    """
+    Score based on 7d vs 30d hash rate.
+    Returns 50 if 30d is zero (no baseline).
+    Otherwise normalizes ratio to 0-100 (ratio range [0.5, 1.5]).
+    """
+    if hash_30d <= 0.0:
+        return 50.0
+    ratio = hash_7d / hash_30d
+    return _nh_normalize(ratio, 0.5, 1.5)
+
+
+def _nh_mempool_score(tx_count: int, max_count: int) -> float:
+    """
+    Inverted mempool congestion score.
+    0 txs → 100, full → 0.
+    """
+    if max_count <= 0:
+        return 100.0
+    ratio = tx_count / max_count
+    return float(max(0.0, min(100.0, (1.0 - ratio) * 100.0)))
+
+
+def _nh_address_score(current: int, ma_30d: int) -> float:
+    """
+    Score based on active addresses vs 30d MA.
+    Returns 50 if ma_30d is zero.
+    """
+    if ma_30d <= 0:
+        return 50.0
+    ratio = current / ma_30d
+    return _nh_normalize(ratio, 0.5, 1.5)
+
+
+def _nh_fee_score(current_fee: float, avg_fee: float) -> float:
+    """
+    Inverted fee pressure score.
+    Lower fees → higher score.
+    Returns 50 if avg_fee is zero.
+    """
+    if avg_fee <= 0.0:
+        return 50.0
+    ratio = current_fee / avg_fee
+    # Inverted: ratio 0.5 → 100, ratio 1.0 → 50, ratio 1.5 → 0
+    return _nh_normalize(2.0 - ratio, 0.5, 1.5)
+
+
+def _nh_composite(scores: dict, weights: dict) -> float:
+    """
+    Weighted average of component scores.
+    Keys in scores not present in weights are ignored.
+    """
+    if not scores or not weights:
+        return 0.0
+    total = sum(weights.get(k, 0.0) * v for k, v in scores.items())
+    return float(total)
+
+
+def _nh_health_label(score: float) -> str:
+    """Map score to health label."""
+    if score >= 90:
+        return "excellent"
+    if score >= 70:
+        return "healthy"
+    if score >= 50:
+        return "neutral"
+    if score >= 30:
+        return "stressed"
+    return "critical"
+
+
+def _nh_trend(history: list) -> str:
+    """
+    Determine trend from score history list.
+    Compares second-half average to first-half average.
+    """
+    if len(history) < 2:
+        return "stable"
+    mid = len(history) // 2
+    first = sum(history[:mid]) / mid
+    second = sum(history[mid:]) / len(history[mid:])
+    diff = second - first
+    if diff > 1.0:
+        return "improving"
+    if diff < -1.0:
+        return "declining"
+    return "stable"
+
+
+# ── On-chain Stablecoin Flow helpers ─────────────────────────────────────────
+
+def _sf_net_flow(current_supply: float, previous_supply: float) -> float:
+    """Net flow = current - previous supply."""
+    return float(current_supply - previous_supply)
+
+
+def _sf_flow_direction(net_flow: float, threshold: float = 0.0) -> str:
+    """Return 'inflow', 'outflow', or 'neutral'."""
+    if net_flow > threshold:
+        return "inflow"
+    elif net_flow < -threshold:
+        return "outflow"
+    return "neutral"
+
+
+def _sf_flow_signal(net_flow_7d: float, threshold: float = 1_000_000_000.0) -> str:
+    """
+    Return 'bullish', 'bearish', or 'neutral' based on 7d net flow.
+    Default threshold: $1B.
+    """
+    if net_flow_7d > threshold:
+        return "bullish"
+    if net_flow_7d < -threshold:
+        return "bearish"
+    return "neutral"
+
+
+def _sf_momentum(flows: list) -> float:
+    """
+    Compute flow momentum (acceleration).
+    Requires at least 3 data points.
+    Returns the average of second-half flows minus first-half average.
+    """
+    if len(flows) < 3:
+        return 0.0
+    mid = len(flows) // 2
+    first_avg = sum(flows[:mid]) / mid
+    second_avg = sum(flows[mid:]) / len(flows[mid:])
+    return float(second_avg - first_avg)
+
+
+def _sf_rolling_average(values: list, n: int) -> float:
+    """Return average of last n values. Returns 0.0 if empty."""
+    if not values:
+        return 0.0
+    window = values[-n:]
+    return float(sum(window) / len(window))
+
+
+def _sf_flow_zscore(current: float, history: list) -> float:
+    """Z-score of current flow relative to history. Returns 0.0 if insufficient data."""
+    if len(history) < 2:
+        return 0.0
+    n = len(history)
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    if variance == 0.0:
+        return 0.0
+    return float((current - mean) / variance ** 0.5)
+
+
+def _sf_combine_stables(stablecoins: dict) -> dict:
+    """
+    Aggregate per-stablecoin flow data into a combined summary.
+    Each entry should have 'inflow_24h' and 'inflow_7d' keys.
+    """
+    net_24h = sum(v.get("inflow_24h", 0.0) for v in stablecoins.values())
+    net_7d = sum(v.get("inflow_7d", 0.0) for v in stablecoins.values())
+    return {
+        "net_flow_24h": float(net_24h),
+        "net_flow_7d": float(net_7d),
+        "flow_direction": _sf_flow_direction(net_24h),
+        "flow_signal": _sf_flow_signal(net_7d),
+    }
+
+
+# ── Perpetual Basis Tracker helpers ──────────────────────────────────────────
+
+def _pb_basis_pct(perp_price: float, spot_price: float) -> float:
+    """
+    Basis % = (perp - spot) / spot * 100.
+    Returns 0.0 if spot is zero.
+    """
+    if spot_price <= 0.0:
+        return 0.0
+    return float((perp_price - spot_price) / spot_price * 100.0)
+
+
+def _pb_annualized_from_price(basis_pct: float, funding_interval_hours: float = 8.0) -> float:
+    """
+    Annualized basis rate = basis_pct × (365 × 24 / funding_interval_hours).
+    """
+    return float(basis_pct * 365 * 24 / funding_interval_hours)
+
+
+def _pb_funding_annualized(funding_rate: float) -> float:
+    """
+    Annualized funding rate % = funding_rate × 3 × 365 × 100.
+    (3 payouts per day assumed)
+    """
+    return float(funding_rate * 3 * 365 * 100.0)
+
+
+def _pb_carry_signal(basis_pct: float, threshold: float = 0.1) -> str:
+    """
+    Carry signal based on basis vs threshold.
+    positive_carry: basis >= threshold
+    negative_carry: basis <= -threshold
+    neutral: otherwise
+    """
+    if basis_pct >= threshold:
+        return "positive_carry"
+    if basis_pct <= -threshold:
+        return "negative_carry"
+    return "neutral"
+
+
+def _pb_carry_strength(basis_pct: float, max_basis: float = 5.0) -> float:
+    """
+    Carry strength 0-100 based on |basis_pct|.
+    Normalized over [0, max_basis].
+    """
+    strength = abs(basis_pct) / max_basis * 100.0
+    return float(min(100.0, max(0.0, strength)))
+
+
+def _pb_carry_action(signal: str) -> str:
+    """Return trade action string for a carry signal."""
+    mapping = {
+        "positive_carry": "short_perp_long_spot",
+        "negative_carry": "long_perp_short_spot",
+        "neutral": "no_trade",
+    }
+    return mapping.get(signal, "no_trade")
+
+
+def _pb_basis_zscore(current_basis: float, history: list) -> float:
+    """
+    Z-score of current basis vs history list of dicts with 'basis_pct' key.
+    Returns 0.0 if insufficient data or std == 0.
+    """
+    if len(history) < 2:
+        return 0.0
+    values = [h["basis_pct"] for h in history]
+    n = len(values)
+    mean = sum(values) / n
+    variance = sum((x - mean) ** 2 for x in values) / n
+    if variance == 0.0:
+        return 0.0
+    return float((current_basis - mean) / variance ** 0.5)
+
+
+# ── Staking Yield Tracker helpers ─────────────────────────────────────────────
+
+def _sy_real_yield(apy: float, inflation_rate: float) -> float:
+    """Real yield = APY - inflation rate."""
+    return float(apy - inflation_rate)
+
+
+def _sy_stake_ratio(staked: float, total: float) -> float:
+    """
+    Stake ratio % = staked / total * 100.
+    Returns 0.0 if total is zero.
+    """
+    if total <= 0:
+        return 0.0
+    return float(staked / total * 100.0)
+
+
+def _sy_concentration_risk(validator_stakes: list) -> float:
+    """
+    Compute concentration risk as HHI-based score 0-100.
+    Empty → 0.0, single validator → 100.0.
+    """
+    if not validator_stakes:
+        return 0.0
+    total = sum(validator_stakes)
+    if total == 0:
+        return 0.0
+    shares = [s / total for s in validator_stakes]
+    hhi = sum(s ** 2 for s in shares)
+    # HHI ranges from 1/n (perfectly equal) to 1 (full concentration)
+    n = len(shares)
+    min_hhi = 1.0 / n if n > 0 else 0.0
+    # Normalize to 0-100
+    score = (hhi - min_hhi) / (1.0 - min_hhi) * 100.0 if (1.0 - min_hhi) > 0 else 100.0
+    return float(max(0.0, min(100.0, score)))
+
+
+def _sy_apy_trend(apy_history: list) -> str:
+    """
+    Determine APY trend from history list.
+    Uses linear regression slope.
+    """
+    if len(apy_history) < 2:
+        return "stable"
+    n = len(apy_history)
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(apy_history) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, apy_history))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    if den == 0.0:
+        return "stable"
+    slope = num / den
+    threshold = abs(mean_y) * 0.01 if mean_y != 0.0 else 0.001
+    if slope > threshold:
+        return "rising"
+    if slope < -threshold:
+        return "falling"
+    return "stable"
+
+
+def _sy_yield_label(real_yield: float) -> str:
+    """
+    Label based on real yield.
+    >= 2.0 → 'attractive', > 0 → 'neutral', <= 0 → 'negative'
+    """
+    if real_yield >= 2.0:
+        return "attractive"
+    if real_yield > 0.0:
+        return "neutral"
+    return "negative"
+
+
+def _sy_validator_growth(current: float, previous: float) -> float:
+    """
+    Validator growth % = (current - previous) / previous * 100.
+    Returns 0.0 if previous is zero.
+    """
+    if previous <= 0:
+        return 0.0
+    return float((current - previous) / previous * 100.0)
+
+
+def _sy_risk_label(concentration_risk: float) -> str:
+    """
+    Map concentration risk score to label.
+    >= 60 → 'high', >= 35 → 'medium', else → 'low'
+    """
+    if concentration_risk >= 60.0:
+        return "high"
+    if concentration_risk >= 35.0:
+        return "medium"
+    return "low"
+
+
+def _sy_apy_zscore(current_apy: float, history: list) -> float:
+    """Z-score of current APY vs history. Returns 0.0 if insufficient data."""
+    if len(history) < 2:
+        return 0.0
+    n = len(history)
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    if variance == 0.0:
+        return 0.0
+    return float((current_apy - mean) / variance ** 0.5)
+
+
+# ── Whale Alert helpers ────────────────────────────────────────────────────────
+
+def _wa_classify_size(value_usd: float) -> str:
+    """
+    Classify trade size.
+    >= 500k → 'critical', >= 100k → 'high', else → 'medium'
+    """
+    if value_usd >= 500_000:
+        return "critical"
+    if value_usd >= 100_000:
+        return "high"
+    return "medium"
+
+
+def _wa_flow_score(buy_usd: float, sell_usd: float) -> float:
+    """
+    Flow score 0-100 based on buy ratio.
+    100 = all buys, 0 = all sells, 50 = equal or zero.
+    """
+    total = buy_usd + sell_usd
+    if total <= 0.0:
+        return 50.0
+    return float(buy_usd / total * 100.0)
+
+
+def _wa_flow_direction(buy_usd: float, sell_usd: float) -> str:
+    """
+    Flow direction based on buy ratio.
+    > 60% buys → 'inflow', < 40% buys → 'outflow', else → 'mixed'
+    """
+    score = _wa_flow_score(buy_usd, sell_usd)
+    if score > 60.0:
+        return "inflow"
+    if score < 40.0:
+        return "outflow"
+    return "mixed"
+
+
+def _wa_cluster_trades(
+    trades: list,
+    cluster_window_s: float = 60.0,
+    price_proximity_pct: float = 2.0,
+) -> list:
+    """
+    Cluster trades by time proximity and price proximity.
+    Returns list of clusters (each cluster is a list of trades).
+    Trades are chained: each trade compared to the previous trade in the chain.
+    """
+    if not trades:
+        return []
+    sorted_trades = sorted(trades, key=lambda t: t["ts"])
+    clusters = []
+    current_cluster = [sorted_trades[0]]
+    for trade in sorted_trades[1:]:
+        prev = current_cluster[-1]
+        time_diff = trade["ts"] - prev["ts"]
+        if prev["price"] > 0:
+            price_diff_pct = abs(trade["price"] - prev["price"]) / prev["price"] * 100.0
+        else:
+            price_diff_pct = 0.0
+        if time_diff <= cluster_window_s and price_diff_pct <= price_proximity_pct:
+            current_cluster.append(trade)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [trade]
+    clusters.append(current_cluster)
+    return clusters
+
+
+def _wa_cluster_stats(trades: list, cluster_id: int) -> dict:
+    """
+    Compute statistics for a cluster of trades.
+    """
+    if not trades:
+        return {}
+    buy_usd = sum(t["value_usd"] for t in trades if t["side"].lower() in ("buy", "b"))
+    sell_usd = sum(t["value_usd"] for t in trades if t["side"].lower() in ("sell", "s"))
+    total_usd = buy_usd + sell_usd
+    start_ts = min(t["ts"] for t in trades)
+    end_ts = max(t["ts"] for t in trades)
+    duration = end_ts - start_ts
+    mid_price = sum(t["price"] for t in trades) / len(trades)
+    flow = _wa_flow_direction(buy_usd, sell_usd)
+    flow_score = _wa_flow_score(buy_usd, sell_usd)
+    dominant_side = "buy" if buy_usd >= sell_usd else "sell"
+    alert_level = _wa_classify_size(total_usd)
+    return {
+        "id": cluster_id,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_s": float(duration),
+        "num_trades": len(trades),
+        "total_usd": float(total_usd),
+        "buy_usd": float(buy_usd),
+        "sell_usd": float(sell_usd),
+        "dominant_side": dominant_side,
+        "flow": flow,
+        "flow_score": float(flow_score),
+        "mid_price": float(mid_price),
+        "alert_level": alert_level,
+    }
+
+
+def _wa_exchange_flow_summary(cluster_stats_list: list) -> dict:
+    """
+    Aggregate exchange flow from a list of cluster stats dicts.
+    """
+    if not cluster_stats_list:
+        return {
+            "direction": "mixed",
+            "inflow_usd": 0.0,
+            "outflow_usd": 0.0,
+            "net_usd": 0.0,
+            "net_direction": "neutral",
+            "dominant_side": "neutral",
+        }
+    inflow_usd = sum(s.get("buy_usd", 0.0) for s in cluster_stats_list)
+    outflow_usd = sum(s.get("sell_usd", 0.0) for s in cluster_stats_list)
+    net_usd = inflow_usd - outflow_usd
+    direction = _wa_flow_direction(inflow_usd, outflow_usd)
+    net_direction = "positive" if net_usd > 0 else ("negative" if net_usd < 0 else "neutral")
+    dominant_side = "buy" if inflow_usd > outflow_usd else ("sell" if outflow_usd > inflow_usd else "neutral")
+    return {
+        "direction": direction,
+        "inflow_usd": float(inflow_usd),
+        "outflow_usd": float(outflow_usd),
+        "net_usd": float(net_usd),
+        "net_direction": net_direction,
+        "dominant_side": dominant_side,
     }
