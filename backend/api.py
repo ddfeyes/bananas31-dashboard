@@ -5377,9 +5377,19 @@ async def protocol_revenue_endpoint():
 
 
 @router.get("/leverage-ratio-heatmap")
-async def leverage_ratio_heatmap_endpoint():
-    """Leverage ratio heatmap: OI/mcap across BTC/ETH/SOL/BNB perps with risk signals."""
-    data = await compute_leverage_ratio_heatmap()
+@cache_result(ttl_seconds=60)
+async def leverage_ratio_heatmap_endpoint(symbol: Optional[str] = None):
+    """
+    Leverage Ratio Heatmap: OI/MCap ratios across BTC/ETH/SOL/BNB.
+
+    Computes leverage ratios, risk signals, heatmap colors, and 30-day history.
+    Data is seeded-mock (deterministic per symbol, no live API). Cache TTL: 60s.
+
+    Query params:
+        symbol: trading pair (default: BTCUSDT)
+    """
+    from leverage_heatmap import compute_leverage_ratio_heatmap
+    data = compute_leverage_ratio_heatmap(symbol)
     return JSONResponse(data)
 
 

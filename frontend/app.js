@@ -2569,6 +2569,8 @@ async function refresh() {
     await Promise.all([safe(renderNetTakerDelta)]);
     // Batch 38: trade size distribution histogram (Wave 24)
     await Promise.all([safe(renderTradeSizeDist)]);
+    // Batch 39: leverage ratio heatmap (Wave 24)
+    await Promise.all([safe(renderLeverageHeatmap)]);
   } finally {
     _refreshRunning = false;
   }
@@ -4450,6 +4452,85 @@ async function renderTradeSizeDist() {
     </div>
     ${rows}
     <div style="margin-top:5px;color:#666;font-size:10px;">Total: ${totalTrades.toLocaleString()} trades · 1h window</div>
+  `;
+}
+
+
+// ── Leverage Ratio Heatmap (Wave 24, Issue #129) ─────────────────────────────
+async function renderLeverageHeatmap() {
+  const el    = document.getElementById('leverage-heatmap-content');
+  const badge = document.getElementById('leverage-heatmap-badge');
+  if (!el) return;
+
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/leverage-ratio-heatmap?symbol=${sym}`);
+  if (!data) { setErr('leverage-heatmap-content'); return; }
+
+  const { assets, description } = data;
+  if (!assets) { setErr('leverage-heatmap-content'); return; }
+
+  // Determine overall sector risk badge
+  const assetList = Object.keys(assets);
+  let sectorRisk = 'low';
+  for (const a of assetList) {
+    const sig = assets[a].risk_signal;
+    if (sig === 'high') { sectorRisk = 'high'; break; }
+    if (sig === 'medium' && sectorRisk !== 'high') sectorRisk = 'medium';
+  }
+
+  if (badge) {
+    badge.textContent = sectorRisk.toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.fontSize = '10px';
+    badge.style.padding = '2px 6px';
+    badge.style.borderRadius = '3px';
+    badge.style.color = '#fff';
+    if (sectorRisk === 'high') {
+      badge.style.background = '#e74c3c';
+    } else if (sectorRisk === 'medium') {
+      badge.style.background = '#f39c12';
+    } else {
+      badge.style.background = '#27ae60';
+    }
+  }
+
+  // Color map for heatmap_color field
+  const colorMap = {
+    red:    '#e74c3c',
+    orange: '#e67e22',
+    yellow: '#f1c40f',
+    green:  '#27ae60',
+  };
+
+  // Trend arrows
+  const trendArrow = {
+    rising:  { arrow: '↑', color: '#e74c3c' },
+    falling: { arrow: '↓', color: '#27ae60' },
+    stable:  { arrow: '→', color: '#aaa' },
+  };
+
+  const boxes = assetList.map(asset => {
+    const d = assets[asset];
+    const bg = colorMap[d.heatmap_color] || '#555';
+    const ta = trendArrow[d.trend] || trendArrow.stable;
+    const riskBg = d.risk_signal === 'high' ? '#e74c3c'
+                 : d.risk_signal === 'medium' ? '#f39c12' : '#27ae60';
+    return `
+      <div style="background:${bg}22;border:1px solid ${bg};border-radius:4px;padding:6px 8px;min-width:80px;">
+        <div style="font-weight:bold;font-size:12px;color:${bg};">${asset}</div>
+        <div style="font-size:13px;color:#eee;margin:2px 0;">${d.leverage_ratio.toFixed(2)}x</div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="background:${riskBg};color:#fff;font-size:9px;padding:1px 4px;border-radius:2px;">${d.risk_signal.toUpperCase()}</span>
+          <span style="color:${ta.color};font-size:12px;">${ta.arrow}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+      ${boxes}
+    </div>
+    <div style="color:#888;font-size:9px;line-height:1.4;">${description || ''}</div>
   `;
 }
 
