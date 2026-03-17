@@ -127,6 +127,7 @@ from metrics import (
     compute_smart_money_flow,
     compute_vol_regime_hmm,
     compute_social_sentiment_momentum,
+    compute_miner_flow_signals,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5847,3 +5848,9 @@ async def validator_activity_endpoint():
     """Validator activity: effectiveness rate, queue pressure, staking APY."""
     data = await compute_validator_activity()
     return JSONResponse(data)
+
+
+@router.get("/miner-flow-signals")
+async def miner_flow_signals_endpoint():
+    """Miner flow signals: wallet outflow rate, reserve ratio, price correlation, 30d forecast."""
+    return JSONResponse(await compute_miner_flow_signals())

@@ -2602,6 +2602,8 @@ async function refresh() {
     await Promise.all([safe(renderSmartMoneyFlow), safe(renderVolatilityRegimeHMM)]);
     // Batch 41: social sentiment momentum (Wave 25)
     await Promise.all([safe(refreshSocialSentimentMomentum)]);
+    // Batch 42: miner flow signals (Wave 25)
+    await Promise.all([safe(fetchMinerFlowSignals)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5700,6 +5702,47 @@ async function refreshSocialSentimentMomentum() {
     <div style="font-size:10px;color:var(--muted);margin-top:4px">
       <span style="margin-right:4px">trending:</span>${tokenRows}
     </div>`;
+}
+
+// ── Miner Flow Signals ─────────────────────────────────────────────────────────
+async function fetchMinerFlowSignals() {
+  try {
+    const res = await fetch('/api/miner-flow-signals');
+    const data = await res.json();
+    renderMinerFlowSignals(data);
+  } catch (e) {
+    const el = document.getElementById('miner-flow-signals-content');
+    if (el) el.textContent = 'Error loading miner flow signals.';
+  }
+}
+
+function renderMinerFlowSignals(data) {
+  const el = document.getElementById('miner-flow-signals-content');
+  if (!el) return;
+
+  const risk = (data.miner_capitulation_risk || 'low').toLowerCase();
+  const riskCol = risk === 'high' ? 'var(--bear)' : risk === 'medium' ? 'var(--warn, #f0a500)' : 'var(--bull)';
+  const trendCol = (t) => t === 'increasing' || t === 'rising' ? 'var(--bear)' : t === 'decreasing' || t === 'falling' ? 'var(--bull)' : 'var(--muted)';
+  const reserveCol = data.reserve_trend === 'accumulating' ? 'var(--bull)' : data.reserve_trend === 'depleting' ? 'var(--bear)' : 'var(--muted)';
+
+  const forecast = (data.sell_pressure_forecast_30d || []).slice(0, 7);
+  const forecastStr = forecast.map(v => v.toFixed(0)).join(', ');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>outflow: <b>${(data.outflow_rate_btc || 0).toFixed(1)} BTC/day</b> <span style="color:${trendCol(data.outflow_trend)}">(${data.outflow_trend || '—'})</span></span>
+      <span>7d avg: <b>${(data.outflow_rate_7d_avg || 0).toFixed(1)} BTC</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>reserve: <b>${((data.reserve_btc || 0) / 1000).toFixed(1)}k BTC</b> <span style="color:${reserveCol}">(${data.reserve_trend || '—'})</span></span>
+      <span>ratio: <b>${((data.reserve_ratio || 0) * 100).toFixed(1)}%</b></span>
+      <span>corr 90d: <b>${(data.price_correlation_90d || 0).toFixed(3)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>sell pressure trend: <b style="color:${trendCol(data.sell_pressure_trend)}">${data.sell_pressure_trend || '—'}</b></span>
+      <span>cap risk: <b style="color:${riskCol}">${risk}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted)">forecast (7d): <b>${forecastStr}</b> BTC/day</div>`;
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
