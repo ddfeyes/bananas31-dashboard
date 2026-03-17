@@ -12764,3 +12764,103 @@ async def compute_social_sentiment_momentum() -> Dict:
         "trending_tokens": trending_tokens,
         "timestamp": timestamp,
     }
+
+
+# ── Wave 25 · Task 5 — Miner Flow Signals ─────────────────────────────────────
+
+async def compute_miner_flow_signals() -> dict:
+    """Miner flow signals: wallet outflow rate, reserve ratio, price correlation,
+    30-day sell pressure forecast.
+
+    Deterministic seed 20260323. No real external calls.
+    """
+    import datetime as _dt_mfs
+
+    _rng = _random.Random(20260323)
+
+    # ── Daily BTC outflow from miner wallets ────────────────────────────────────
+    outflow_rate_btc: float = round(_rng.uniform(200.0, 1500.0), 2)
+
+    # ── 7-day average outflow ───────────────────────────────────────────────────
+    outflow_7d: list = [round(_rng.uniform(200.0, 1500.0), 2) for _ in range(7)]
+    outflow_rate_7d_avg: float = round(sum(outflow_7d) / 7.0, 2)
+
+    # ── Outflow trend ───────────────────────────────────────────────────────────
+    if outflow_rate_btc > outflow_rate_7d_avg * 1.05:
+        outflow_trend = "increasing"
+    elif outflow_rate_btc < outflow_rate_7d_avg * 0.95:
+        outflow_trend = "decreasing"
+    else:
+        outflow_trend = "stable"
+
+    # ── Miner reserve (BTC) ─────────────────────────────────────────────────────
+    reserve_btc: float = round(_rng.uniform(50_000.0, 300_000.0), 2)
+    peak_reserve_btc: float = round(reserve_btc * _rng.uniform(1.05, 1.80), 2)
+    reserve_ratio: float = round(min(1.0, reserve_btc / peak_reserve_btc), 4)
+
+    # ── Reserve trend ───────────────────────────────────────────────────────────
+    _rv = _rng.random()
+    if _rv < 0.33:
+        reserve_trend = "accumulating"
+    elif _rv < 0.67:
+        reserve_trend = "depleting"
+    else:
+        reserve_trend = "stable"
+
+    # ── 90-day price correlation (outflow vs drawdown) ─────────────────────────
+    price_correlation_90d: float = round(_rng.uniform(-1.0, 1.0), 4)
+
+    # ── Historical drawdowns (10 events, fixed base date for determinism) ──────
+    historical_drawdowns: list = []
+    _base = _dt_mfs.date(2025, 12, 18)  # fixed anchor → deterministic dates
+    for i in range(10):
+        event_date = _base - _dt_mfs.timedelta(days=(9 - i) * 9)
+        outflow_spike: float = round(_rng.uniform(500.0, 3000.0), 2)
+        price_drawdown_pct: float = round(-abs(_rng.uniform(0.5, 25.0)), 2)
+        historical_drawdowns.append(
+            {
+                "date": event_date.strftime("%Y-%m-%d"),
+                "outflow_spike": outflow_spike,
+                "price_drawdown_pct": price_drawdown_pct,
+            }
+        )
+
+    # ── 30-day sell pressure forecast (BTC/day) ─────────────────────────────────
+    sell_pressure_forecast_30d: list = [
+        round(_rng.uniform(200.0, 1500.0), 2) for _ in range(30)
+    ]
+
+    # ── Sell pressure trend ─────────────────────────────────────────────────────
+    _first_half_avg = sum(sell_pressure_forecast_30d[:15]) / 15.0
+    _second_half_avg = sum(sell_pressure_forecast_30d[15:]) / 15.0
+    if _second_half_avg > _first_half_avg * 1.05:
+        sell_pressure_trend = "rising"
+    elif _second_half_avg < _first_half_avg * 0.95:
+        sell_pressure_trend = "falling"
+    else:
+        sell_pressure_trend = "neutral"
+
+    # ── Miner capitulation risk ─────────────────────────────────────────────────
+    if reserve_ratio < 0.5 and outflow_trend == "increasing":
+        miner_capitulation_risk = "high"
+    elif reserve_ratio < 0.7 or outflow_trend == "increasing":
+        miner_capitulation_risk = "medium"
+    else:
+        miner_capitulation_risk = "low"
+
+    timestamp: str = _dt_mfs.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "outflow_rate_btc": outflow_rate_btc,
+        "outflow_rate_7d_avg": outflow_rate_7d_avg,
+        "outflow_trend": outflow_trend,
+        "reserve_ratio": reserve_ratio,
+        "reserve_btc": reserve_btc,
+        "reserve_trend": reserve_trend,
+        "price_correlation_90d": price_correlation_90d,
+        "historical_drawdowns": historical_drawdowns,
+        "sell_pressure_forecast_30d": sell_pressure_forecast_30d,
+        "sell_pressure_trend": sell_pressure_trend,
+        "miner_capitulation_risk": miner_capitulation_risk,
+        "timestamp": timestamp,
+    }
