@@ -119,6 +119,7 @@ from metrics import (
     compute_holder_distribution_card,
     compute_protocol_revenue_card,
     compute_dex_vs_cex_flow,
+    compute_liquidation_cascade_detector,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5702,3 +5703,10 @@ async def staking_yield_tracker_endpoint():
 async def whale_alerts_endpoint(symbol: str = "BANANAS31USDT"):
     """Whale alert tracker with clustering and exchange flow detection."""
     return JSONResponse({"symbol": symbol, "error": "not implemented"})
+
+
+@router.get("/liquidation-cascade-detector")
+async def liquidation_cascade_detector_endpoint(symbol: str = "BANANAS31USDT"):
+    """Liquidation cascade detector — probability, regime, cascade chain."""
+    data = await compute_liquidation_cascade_detector()
+    return JSONResponse(data)

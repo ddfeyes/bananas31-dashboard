@@ -24,6 +24,7 @@ def result():
 
 @pytest.fixture(scope="module")
 def client():
+    from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from api import router
 
