@@ -1956,7 +1956,7 @@ async function renderLargeTrades() {
     return `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:3px 6px 3px 0"><span style="color:${sideCol};font-weight:700;font-size:10px">${sideLbl}</span></td>
       <td style="padding:3px 6px;font-family:monospace;font-size:11px">${fmtPrice(t.price)}</td>
-      <td style="padding:3px 6px;text-align:right;font-size:11px;color:var(--yellow);font-weight:600">${fmtUsd(t.usd_value)}</td>
+      <td style="padding:3px 6px;text-align:right;font-size:11px;color:var(--yellow);font-weight:600">${fmtUsd(t.value_usd ?? t.usd_value ?? 0)}</td>
       <td style="padding:3px 0;text-align:right;font-size:10px;color:var(--muted)">${fmtTs(t.ts)}</td>
     </tr>`;
   }).join('');
@@ -3036,7 +3036,7 @@ async function refreshDexVsCexFlow() {
 async function renderCrossChainBridge() {
   const el = document.getElementById('bridge-monitor-content');
   if (!el) return;
-  const data = await fetchJSON('/api/cross-chain-bridge-monitor');
+  const data = await apiFetch('/cross-chain-bridge-monitor');
   if (!data) { el.textContent = 'Unavailable'; return; }
   const badge = document.getElementById('bridge-monitor-badge');
   const cong = data.congestion?.label ?? 'unknown';
