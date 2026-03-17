@@ -9486,26 +9486,37 @@ async def compute_smart_money_index() -> dict:
 
 async def compute_order_flow_toxicity() -> Dict:
     """
-    VPIN: Volume-Synchronized Probability of Informed Trading.
+    VPIN: Volume-Synchronized Probability of Informed Trading (enhanced).
 
     Partitions volume into equal-sized buckets and estimates the fraction of
     informed trading using buy/sell volume imbalance per bucket.
 
     VPIN = (1/n) * sum(|V_buy_i - V_sell_i|) / V_bucket
+
+    Enhanced with: toxicity percentile rank, alert when >80th percentile,
+    per-bucket toxicity classification, and top-10 symbol comparison.
     """
     import random
     from datetime import datetime, timezone
 
-    rng = random.Random(20260320)
+    rng = random.Random(20260321)
 
+    # ── Parameters ────────────────────────────────────────────────────────────
     N_BUCKETS = 50
-    BUCKET_VOLUME = 1000.0
+    BUCKET_VOLUME = 1000.0  # each bucket has ~1000 units of volume
+    ALERT_THRESHOLD = 80.0
+    TOP10_SYMBOLS = [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+        "ADAUSDT", "BANANAS31USDT", "COSUSDT", "DEXEUSDT", "LYNUSDT",
+    ]
 
+    # ── Generate synthetic volume buckets ────────────────────────────────────
     volume_buckets: List[Dict] = []
     total_buy_vol = 0.0
     total_sell_vol = 0.0
 
     for i in range(N_BUCKETS):
+        # buy fraction per bucket: slightly biased to model real order flow
         buy_frac = rng.gauss(0.52, 0.12)
         buy_frac = max(0.05, min(0.95, buy_frac))
         sell_frac = 1.0 - buy_frac
@@ -9517,48 +9528,105 @@ async def compute_order_flow_toxicity() -> Dict:
         total_buy_vol += buy_vol
         total_sell_vol += sell_vol
 
-        volume_buckets.append({
-            "bucket_id": i,
-            "buy_vol": buy_vol,
-            "sell_vol": sell_vol,
-            "imbalance": imbalance,
-        })
+        volume_buckets.append(
+            {
+                "bucket_id": i,
+                "buy_vol": buy_vol,
+                "sell_vol": sell_vol,
+                "imbalance": imbalance,
+            }
+        )
 
+    # ── VPIN score (0–1) ─────────────────────────────────────────────────────
     vpin_score = round(
         sum(b["imbalance"] for b in volume_buckets) / N_BUCKETS,
         6,
     )
 
+    # ── Rolling VPIN (50 values, sliding window of 10 buckets) ───────────────
     window = 10
     rolling_vpin_50: List[float] = []
     for i in range(N_BUCKETS):
         start = max(0, i - window + 1)
-        window_buckets = volume_buckets[start: i + 1]
+        window_buckets = volume_buckets[start : i + 1]
         wvpin = round(
             sum(b["imbalance"] for b in window_buckets) / len(window_buckets),
             6,
         )
         rolling_vpin_50.append(wvpin)
 
+    # ── Buy / sell volume fractions across all buckets ────────────────────────
     total_vol = total_buy_vol + total_sell_vol
     buy_volume_frac = round(total_buy_vol / total_vol, 6)
     sell_volume_frac = round(total_sell_vol / total_vol, 6)
 
-    if vpin_score < 0.25:
-        toxicity_level = "low"
-    elif vpin_score < 0.50:
-        toxicity_level = "medium"
-    elif vpin_score < 0.75:
-        toxicity_level = "high"
-    else:
-        toxicity_level = "extreme"
+    # ── Toxicity level classification ─────────────────────────────────────────
+    def _toxicity_level(score: float) -> str:
+        if score < 0.25:
+            return "low"
+        elif score < 0.50:
+            return "medium"
+        elif score < 0.75:
+            return "high"
+        return "extreme"
 
+    toxicity_level = _toxicity_level(vpin_score)
+
+    # ── Informed trading signal ───────────────────────────────────────────────
     if vpin_score >= 0.50:
         informed_trading_signal = "high_toxicity"
     elif vpin_score <= 0.20:
         informed_trading_signal = "low_toxicity"
     else:
         informed_trading_signal = "neutral"
+
+    # ── VPIN history (100 values for percentile calculation) ─────────────────
+    vpin_history: List[float] = [
+        round(rng.uniform(0.0, 1.0), 6) for _ in range(100)
+    ]
+
+    # ── Toxicity percentile rank ──────────────────────────────────────────────
+    rank_below = sum(1 for v in vpin_history if v < vpin_score)
+    rank_equal = sum(1 for v in vpin_history if v == vpin_score)
+    toxicity_percentile = round(
+        (rank_below + 0.5 * rank_equal) / len(vpin_history) * 100, 4
+    )
+
+    # ── Toxicity alert ────────────────────────────────────────────────────────
+    toxicity_alert: bool = toxicity_percentile > ALERT_THRESHOLD
+
+    # ── Per-bucket toxicity classification ───────────────────────────────────
+    bucket_classifications: List[Dict] = []
+    for i, b in enumerate(volume_buckets):
+        rv = rolling_vpin_50[i]
+        bucket_classifications.append(
+            {
+                "bucket_id": i,
+                "vpin_window": rv,
+                "toxicity_class": _toxicity_level(rv),
+            }
+        )
+
+    # ── Top-10 symbol comparison ──────────────────────────────────────────────
+    sym_data: List[Dict] = []
+    for sym in TOP10_SYMBOLS:
+        sv = round(rng.uniform(0.05, 0.95), 6)
+        sym_history = [round(rng.uniform(0.0, 1.0), 6) for _ in range(100)]
+        sym_rb = sum(1 for v in sym_history if v < sv)
+        sym_re = sum(1 for v in sym_history if v == sv)
+        sym_pct = round((sym_rb + 0.5 * sym_re) / 100 * 100, 4)
+        sym_data.append(
+            {
+                "symbol": sym,
+                "vpin_score": sv,
+                "toxicity_level": _toxicity_level(sv),
+                "toxicity_percentile": sym_pct,
+            }
+        )
+
+    sym_data.sort(key=lambda x: x["vpin_score"], reverse=True)
+    for rank_idx, s in enumerate(sym_data, 1):
+        s["rank"] = rank_idx
 
     return {
         "vpin_score": vpin_score,
@@ -9569,6 +9637,12 @@ async def compute_order_flow_toxicity() -> Dict:
         "informed_trading_signal": informed_trading_signal,
         "rolling_vpin_50": rolling_vpin_50,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "toxicity_percentile": toxicity_percentile,
+        "toxicity_alert": toxicity_alert,
+        "bucket_classifications": bucket_classifications,
+        "symbol_comparison": sym_data,
+        "alert_threshold": ALERT_THRESHOLD,
+        "vpin_history": vpin_history,
     }
 
 
