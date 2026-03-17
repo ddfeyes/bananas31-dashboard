@@ -2561,6 +2561,8 @@ async function refresh() {
     await Promise.all([safe(renderGammaExposure)]);
     // Batch 34: funding rate arbitrage scanner (Wave 23)
     await Promise.all([safe(renderFundingArbScanner)]);
+    // Batch 35: support/resistance levels (Wave 24)
+    await Promise.all([safe(renderSupportResistance)]);
   } finally {
     _refreshRunning = false;
   }
@@ -4187,6 +4189,72 @@ async function renderFundingArbScanner() {
   } catch (err) {
     console.error('Error rendering funding arb scanner:', err);
     if (el) el.innerHTML = 'Error';
+  }
+}
+
+
+// ── Support / Resistance Levels (Wave 24, Issue #125) ─────────────────────────
+async function renderSupportResistance() {
+  const el    = document.getElementById('support-resistance-content');
+  const badge = document.getElementById('support-resistance-badge');
+  if (!el) return;
+
+  try {
+    const sym = encodeURIComponent(activeSymbol || 'BANANAS31USDT');
+    const res = await fetch(`/api/support-resistance?symbol=${sym}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const { current_price, levels } = data;
+
+    const fmtPrice = (p) => p < 0.01 ? p.toFixed(8) : p.toFixed(4);
+
+    // Sort by abs(distance_pct) ascending, take top 6
+    const sorted = (levels || [])
+      .slice()
+      .sort((a, b) => Math.abs(a.distance_pct) - Math.abs(b.distance_pct))
+      .slice(0, 6);
+
+    // Badge: nearest level type
+    if (badge) {
+      if (sorted.length > 0) {
+        const nearest = sorted[0];
+        badge.textContent = nearest.type.toUpperCase();
+        badge.className = 'card-badge ' + (nearest.type === 'support' ? 'badge-green' : 'badge-red');
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    if (sorted.length === 0) {
+      el.innerHTML = '<div style="color:var(--muted);padding:6px 0">No levels detected</div>';
+      return;
+    }
+
+    const rows = sorted.map(lvl => {
+      const near = Math.abs(lvl.distance_pct) < 0.5;
+      const isSupport = lvl.type === 'support';
+      const typeColor = isSupport ? '#00e082' : '#ff4d4f';
+      const rowStyle = near ? 'background:rgba(255,200,0,0.12);border-radius:3px;' : '';
+      const distSign = lvl.distance_pct >= 0 ? '+' : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 4px;${rowStyle}">
+        <span style="font-family:monospace;color:var(--fg)">${fmtPrice(lvl.price)}</span>
+        <span style="color:${typeColor};font-size:10px;font-weight:600;min-width:68px;text-align:center">${lvl.type.toUpperCase()}</span>
+        <span style="color:var(--muted);font-size:10px">${lvl.touches}T</span>
+        <span style="color:${near ? '#f0c040' : 'var(--muted)'};font-size:10px;min-width:52px;text-align:right">${distSign}${lvl.distance_pct.toFixed(2)}%</span>
+      </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div style="color:var(--muted);font-size:10px;margin-bottom:4px">
+        Price: <span style="color:var(--fg);font-family:monospace">${fmtPrice(current_price)}</span>
+      </div>
+      ${rows}`;
+
+  } catch (e) {
+    if (el) el.innerHTML = `<span class="card-badge badge-red" style="display:inline-block">Error</span>`;
+    console.warn('[renderSupportResistance]', e.message);
   }
 }
 
