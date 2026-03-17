@@ -173,11 +173,11 @@ def test_js_calls_net_taker_delta_api():
 
 
 def test_js_uses_active_symbol():
-    """renderNetTakerDelta must use getSymbols() for multi-symbol parallel fetch."""
+    """renderNetTakerDelta must use allSymbols global for multi-symbol parallel fetch."""
     js = _js()
     # Find the function body
     start = js.find("async function renderNetTakerDelta()")
     end   = js.find("\nasync function ", start + 1)
     body  = js[start:end]
-    assert "getSymbols" in body
+    assert "allSymbols" in body
     assert "Promise.all" in body
