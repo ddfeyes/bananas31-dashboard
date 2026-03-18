@@ -5049,7 +5049,9 @@ async def compute_cross_asset_corr(
                 continue
             bench_rets = _cac_log_returns(filled)
             n = min(len(active_rets), len(bench_rets))
-            rc = _cac_rolling_corr(active_rets[:n], bench_rets[:n], rolling_window, method=corr_method)
+            rc = _cac_rolling_corr(
+                active_rets[:n], bench_rets[:n], rolling_window, method=corr_method
+            )
             pts: List[dict] = []
             for i, corr_val in enumerate(rc):
                 if corr_val is not None:
@@ -5779,6 +5781,7 @@ async def compute_miner_reserve() -> dict:
         "description": desc,
     }
 
+
 # Layer 2 Metrics helpers  (_l2_)
 # ==============================================
 
@@ -5868,6 +5871,7 @@ def _l2_tvl_change_pct(current: float, previous: float) -> float:
     if previous == 0:
         return 0.0
     return float((current - previous) / previous * 100.0)
+
 
 # Gas Fee Predictor helpers  (_gf_)
 # ==============================================
@@ -6057,6 +6061,7 @@ async def compute_token_velocity_nvt() -> dict:
         "tx_volume_24h_usd": round(tx_vol_now, 2),
         "description": desc,
     }
+
 
 # Layer 2 Metrics helpers  (_l2_) [duplicate removed]
 
@@ -6248,6 +6253,7 @@ def _nft_volume_zscore(current: float, history: list) -> float:
     if len(history) < 2:
         return 0.0
     import math
+
     mean = sum(history) / len(history)
     std = math.sqrt(sum((x - mean) ** 2 for x in history) / len(history))
     if std == 0:
@@ -6472,6 +6478,7 @@ async def compute_macro_liquidity_indicator() -> dict:
         "description": desc,
         "description": desc,
     }
+
 
 # Validator Activity helpers  (_va_)
 # ==============================================
@@ -7738,6 +7745,7 @@ async def compute_nft_market_pulse() -> dict:
         "history_7d": history_7d,
         "description": desc,
     }
+
 
 # BTC Dominance Tracker helpers  (_bd_)
 # ==============================================
@@ -9905,8 +9913,7 @@ async def compute_order_flow_toxicity() -> Dict:
     # Simulate a historical distribution of 200 VPIN values for percentile rank
     hist_rng = random.Random(20260321)
     historical_vpins = sorted(
-        round(max(0.0, min(1.0, hist_rng.gauss(0.35, 0.15))), 6)
-        for _ in range(200)
+        round(max(0.0, min(1.0, hist_rng.gauss(0.35, 0.15))), 6) for _ in range(200)
     )
     # Count how many historical values are <= current vpin_score
     n_below = sum(1 for v in historical_vpins if v <= vpin_score)
@@ -9929,8 +9936,16 @@ async def compute_order_flow_toxicity() -> Dict:
 
     # ── Top-10 symbol comparison ──────────────────────────────────────────────
     symbols = [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-        "ADAUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT", "LINKUSDT",
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "ADAUSDT",
+        "AVAXUSDT",
+        "DOTUSDT",
+        "MATICUSDT",
+        "LINKUSDT",
     ]
     sym_rng = random.Random(20260321)
     sym_vpins = []
@@ -11010,9 +11025,11 @@ async def compute_liquidation_heatmap(
 
 # ─── Exchange Flow Divergence (Wave 22 Task 5, Issue #109) ────────────────────
 
+
 def _pearson_correlation(xs: list, ys: list) -> float:
     """Compute Pearson correlation between two lists. Returns 0.0 on degenerate input."""
     import math as _math_pc
+
     n = min(len(xs), len(ys))
     if n < 2:
         return 0.0
@@ -11068,7 +11085,9 @@ def _compute_cvd_series(trades: list, bucket_seconds: int = 60) -> list:
     return cumulative
 
 
-def _lead_lag_cross_correlation(series_a: list, series_b: list, max_lag: int = 5) -> tuple:
+def _lead_lag_cross_correlation(
+    series_a: list, series_b: list, max_lag: int = 5
+) -> tuple:
     """
     Compute cross-correlation at lags -max_lag..+max_lag.
 
@@ -11085,10 +11104,10 @@ def _lead_lag_cross_correlation(series_a: list, series_b: list, max_lag: int = 5
         if lag > 0:
             # series_a leads by `lag` buckets
             a_shifted = series_a[lag:]
-            b_shifted = series_b[:len(series_a) - lag]
+            b_shifted = series_b[: len(series_a) - lag]
         else:
             # series_b leads (negative lag)
-            a_shifted = series_a[:len(series_a) + lag]
+            a_shifted = series_a[: len(series_a) + lag]
             b_shifted = series_b[-lag:]
         if len(a_shifted) < 2 or len(b_shifted) < 2:
             continue
@@ -11135,7 +11154,9 @@ async def compute_exchange_flow_divergence(
             qty = rng.uniform(0.1, 5.0)
             # Binance: 55% buy bias
             side = "buy" if rng.random() < 0.55 else "sell"
-            binance_trades.append({"ts": ts, "side": side, "qty": qty, "price": 50000.0})
+            binance_trades.append(
+                {"ts": ts, "side": side, "qty": qty, "price": 50000.0}
+            )
 
         # Generate Bybit trades: lagged version of Binance (10 buckets behind)
         for i in range(n_trades):
@@ -11161,14 +11182,18 @@ async def compute_exchange_flow_divergence(
 
     # ── Lead-lag cross-correlation (max ±5 buckets) ──
     max_lag_buckets = 5
-    best_lag, _ = _lead_lag_cross_correlation(b_series, bb_series, max_lag=max_lag_buckets)
+    best_lag, _ = _lead_lag_cross_correlation(
+        b_series, bb_series, max_lag=max_lag_buckets
+    )
     timestamp_lag = best_lag * bucket_seconds  # convert buckets → seconds
 
     # ── Determine leader ──
     if best_lag > 0:
-        leader = "binance"   # Binance leads (its series, shifted forward, correlates better)
+        leader = (
+            "binance"  # Binance leads (its series, shifted forward, correlates better)
+        )
     elif best_lag < 0:
-        leader = "bybit"     # Bybit leads
+        leader = "bybit"  # Bybit leads
     else:
         leader = None
 
@@ -11186,6 +11211,7 @@ async def compute_exchange_flow_divergence(
 
 
 # ─── Perpetual vs Spot Basis Monitor ─────────────────────────────────────────
+
 
 async def compute_perp_spot_basis(
     *,
@@ -11229,20 +11255,28 @@ async def compute_perp_spot_basis(
             # Use provided window directly
             basis_window = list(_basis_window_override[symbol])
             # Derive spot/perp from last basis value
-            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            spot_price = (
+                _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            )
             current_basis = basis_window[-1]
             perp_price = spot_price * (1 + current_basis / 10000)
         elif _force_flat_basis:
             # All basis values identical → z-score = 0
             flat_basis = 5.0
             basis_window = [flat_basis] * WINDOW
-            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            spot_price = (
+                _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            )
             perp_price = spot_price * (1 + flat_basis / 10000)
             current_basis = flat_basis
         else:
             # Seeded simulation
-            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
-            perp_price_default = _perp_overrides.get(symbol, None) if _perp_overrides else None
+            spot_price = (
+                _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            )
+            perp_price_default = (
+                _perp_overrides.get(symbol, None) if _perp_overrides else None
+            )
 
             # Generate 20-period basis history (small positive premium ~5-25 bps)
             hist_premiums = rng.uniform(0.0003, 0.0025, size=WINDOW)  # 3–25 bps range
@@ -11271,7 +11305,7 @@ async def compute_perp_spot_basis(
         arr = [float(x) for x in basis_window]
         mean = sum(arr) / len(arr)
         variance = sum((x - mean) ** 2 for x in arr) / len(arr)
-        std = variance ** 0.5
+        std = variance**0.5
         z_score = round((arr[-1] - mean) / std, 6) if std > 1e-12 else 0.0
 
         # Per-asset signal
@@ -11282,14 +11316,16 @@ async def compute_perp_spot_basis(
         else:
             signal = "neutral"
 
-        assets.append({
-            "symbol": symbol,
-            "basis_bps": basis_bps,
-            "z_score": float(z_score),
-            "signal": signal,
-            "perp_price": round(float(perp_price), 2),
-            "spot_price": round(float(spot_price), 2),
-        })
+        assets.append(
+            {
+                "symbol": symbol,
+                "basis_bps": basis_bps,
+                "z_score": float(z_score),
+                "signal": signal,
+                "perp_price": round(float(perp_price), 2),
+                "spot_price": round(float(spot_price), 2),
+            }
+        )
         all_basis_bps.append(basis_bps)
 
     # Average and market signal
@@ -11324,7 +11360,9 @@ _RNG_SEED = 42
 _rng_mrg = _np_mrg.random.default_rng(seed=_RNG_SEED)
 
 
-def _classify_market_regime(volatility: float, momentum: float, correlation: float) -> str:
+def _classify_market_regime(
+    volatility: float, momentum: float, correlation: float
+) -> str:
     """
     Pure classification logic (deterministic, no I/O).
 
@@ -11383,9 +11421,9 @@ def _regime_confidence(volatility: float, momentum: float, correlation: float) -
     abs_corr = abs(correlation)
 
     # Signal strength components
-    vol_strength = min(1.0, volatility / 0.10)          # 0→0.1 maps to 0→1
-    mom_strength = min(1.0, abs_mom / 0.10)             # 0→0.1 maps to 0→1
-    corr_strength = abs_corr                             # already 0→1
+    vol_strength = min(1.0, volatility / 0.10)  # 0→0.1 maps to 0→1
+    mom_strength = min(1.0, abs_mom / 0.10)  # 0→0.1 maps to 0→1
+    corr_strength = abs_corr  # already 0→1
 
     # Alignment bonus: momentum and volatility pointing the same way
     alignment = (vol_strength + mom_strength + corr_strength) / 3.0
@@ -11454,11 +11492,14 @@ async def compute_market_regime_v2(symbol: str = None) -> dict:
     # ── Cross-asset correlation (BTC vs primary symbol proxy) ────────────────
     # Use seeded RNG to simulate correlation when cross-asset data not available
     import collectors as _collectors_mrg
+
     syms = _collectors_mrg.get_symbols()
     if len(syms) >= 2 and len(closes) >= 5:
         # Try to get second symbol closes for correlation
         other_sym = syms[1] if syms[0] == (symbol or syms[0]) else syms[0]
-        ohlcv2 = await get_ohlcv(interval_seconds=60, window_seconds=1800, symbol=other_sym)
+        ohlcv2 = await get_ohlcv(
+            interval_seconds=60, window_seconds=1800, symbol=other_sym
+        )
         closes2 = []
         for c in ohlcv2:
             cp = c.get("close") or c.get("close_price") or c.get("open_price")
@@ -11535,6 +11576,7 @@ async def compute_protocol_revenue_card() -> dict:
 
 # ── Cross-Chain Bridge Monitor helpers ───────────────────────────────────────
 
+
 def _cb_net_flow(inflow: float, outflow: float) -> float:
     """Return net flow (inflow - outflow) for a chain."""
     return float(inflow - outflow)
@@ -11603,7 +11645,7 @@ def _cb_volume_zscore(current: float, history: list) -> float:
     variance = sum((x - mean) ** 2 for x in history) / n
     if variance == 0.0:
         return 0.0
-    std = variance ** 0.5
+    std = variance**0.5
     return float((current - mean) / std)
 
 
@@ -11626,6 +11668,7 @@ def _cb_congestion_label(avg_wait_seconds: int) -> str:
 
 # ── Derivatives Heatmap helpers ───────────────────────────────────────────────
 
+
 def _dh_parse_instrument(name: str):
     """
     Parse a Deribit-style option instrument name, e.g. 'BTC-27DEC24-95000-C'.
@@ -11645,7 +11688,12 @@ def _dh_parse_instrument(name: str):
     except ValueError:
         return None
     option_type = "call" if opt == "C" else "put"
-    return {"asset": asset, "expiry": expiry, "strike": strike, "option_type": option_type}
+    return {
+        "asset": asset,
+        "expiry": expiry,
+        "strike": strike,
+        "option_type": option_type,
+    }
 
 
 def _dh_total_payout(spot: float, calls: dict, puts: dict) -> float:
@@ -11668,9 +11716,11 @@ def _dh_max_pain(strikes: list, calls: dict, puts: dict) -> float:
     return float(min(strikes, key=lambda s: _dh_total_payout(s, calls, puts)))
 
 
-def _dh_gex_at_strike(gamma: float, oi: float, spot: float, contract_size: float = 1.0) -> float:
+def _dh_gex_at_strike(
+    gamma: float, oi: float, spot: float, contract_size: float = 1.0
+) -> float:
     """GEX = gamma * OI * contract_size * spot^2 / 1000"""
-    return float(gamma * oi * contract_size * spot ** 2 / 1000.0)
+    return float(gamma * oi * contract_size * spot**2 / 1000.0)
 
 
 def _dh_oi_concentration(oi_by_strike: dict) -> float:
@@ -11707,7 +11757,10 @@ def _dh_nearest_expiries(expiries: list, n: int) -> list:
 
 # ── Exchange Netflow Dashboard helpers ────────────────────────────────────────
 
-def _enf_net_flow_proxy(volume_btc: float, open_price: float, close_price: float) -> float:
+
+def _enf_net_flow_proxy(
+    volume_btc: float, open_price: float, close_price: float
+) -> float:
     """
     Net flow proxy from OHLCV candle.
     inflow_proxy  = volume × max(0, close - open)
@@ -11766,7 +11819,9 @@ def _enf_exchange_rank(exchanges: dict) -> list:
     """
     if not exchanges:
         return []
-    return sorted(exchanges.items(), key=lambda x: x[1].get("net_flow", 0.0), reverse=True)
+    return sorted(
+        exchanges.items(), key=lambda x: x[1].get("net_flow", 0.0), reverse=True
+    )
 
 
 def _enf_trend(values: list) -> str:
@@ -11806,10 +11861,11 @@ def _enf_zscore(current: float, history: list) -> float:
     variance = sum((x - mean) ** 2 for x in history) / n
     if variance == 0.0:
         return 0.0
-    return float((current - mean) / variance ** 0.5)
+    return float((current - mean) / variance**0.5)
 
 
 # ── Fear & Greed Composite helpers ────────────────────────────────────────────
+
 
 def _fg_clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value to [lo, hi]."""
@@ -11913,6 +11969,7 @@ def _fg_composite(scores: list, weights: list) -> float:
 
 # ── Network Health Score helpers ──────────────────────────────────────────────
 
+
 def _nh_normalize(value: float, lo: float, hi: float) -> float:
     """Normalize value to 0-100 within [lo, hi]. Returns 50 if lo==hi."""
     if lo == hi:
@@ -12012,6 +12069,7 @@ def _nh_trend(history: list) -> str:
 
 # ── On-chain Stablecoin Flow helpers ─────────────────────────────────────────
 
+
 def _sf_net_flow(current_supply: float, previous_supply: float) -> float:
     """Net flow = current - previous supply."""
     return float(current_supply - previous_supply)
@@ -12069,7 +12127,7 @@ def _sf_flow_zscore(current: float, history: list) -> float:
     variance = sum((x - mean) ** 2 for x in history) / n
     if variance == 0.0:
         return 0.0
-    return float((current - mean) / variance ** 0.5)
+    return float((current - mean) / variance**0.5)
 
 
 def _sf_combine_stables(stablecoins: dict) -> dict:
@@ -12089,6 +12147,7 @@ def _sf_combine_stables(stablecoins: dict) -> dict:
 
 # ── Perpetual Basis Tracker helpers ──────────────────────────────────────────
 
+
 def _pb_basis_pct(perp_price: float, spot_price: float) -> float:
     """
     Basis % = (perp - spot) / spot * 100.
@@ -12099,7 +12158,9 @@ def _pb_basis_pct(perp_price: float, spot_price: float) -> float:
     return float((perp_price - spot_price) / spot_price * 100.0)
 
 
-def _pb_annualized_from_price(basis_pct: float, funding_interval_hours: float = 8.0) -> float:
+def _pb_annualized_from_price(
+    basis_pct: float, funding_interval_hours: float = 8.0
+) -> float:
     """
     Annualized basis rate = basis_pct × (365 × 24 / funding_interval_hours).
     """
@@ -12160,10 +12221,11 @@ def _pb_basis_zscore(current_basis: float, history: list) -> float:
     variance = sum((x - mean) ** 2 for x in values) / n
     if variance == 0.0:
         return 0.0
-    return float((current_basis - mean) / variance ** 0.5)
+    return float((current_basis - mean) / variance**0.5)
 
 
 # ── Staking Yield Tracker helpers ─────────────────────────────────────────────
+
 
 def _sy_real_yield(apy: float, inflation_rate: float) -> float:
     """Real yield = APY - inflation rate."""
@@ -12191,7 +12253,7 @@ def _sy_concentration_risk(validator_stakes: list) -> float:
     if total == 0:
         return 0.0
     shares = [s / total for s in validator_stakes]
-    hhi = sum(s ** 2 for s in shares)
+    hhi = sum(s**2 for s in shares)
     # HHI ranges from 1/n (perfectly equal) to 1 (full concentration)
     n = len(shares)
     min_hhi = 1.0 / n if n > 0 else 0.0
@@ -12267,10 +12329,11 @@ def _sy_apy_zscore(current_apy: float, history: list) -> float:
     variance = sum((x - mean) ** 2 for x in history) / n
     if variance == 0.0:
         return 0.0
-    return float((current_apy - mean) / variance ** 0.5)
+    return float((current_apy - mean) / variance**0.5)
 
 
 # ── Whale Alert helpers ────────────────────────────────────────────────────────
+
 
 def _wa_classify_size(value_usd: float) -> str:
     """
@@ -12390,8 +12453,14 @@ def _wa_exchange_flow_summary(cluster_stats_list: list) -> dict:
     outflow_usd = sum(s.get("sell_usd", 0.0) for s in cluster_stats_list)
     net_usd = inflow_usd - outflow_usd
     direction = _wa_flow_direction(inflow_usd, outflow_usd)
-    net_direction = "positive" if net_usd > 0 else ("negative" if net_usd < 0 else "neutral")
-    dominant_side = "buy" if inflow_usd > outflow_usd else ("sell" if outflow_usd > inflow_usd else "neutral")
+    net_direction = (
+        "positive" if net_usd > 0 else ("negative" if net_usd < 0 else "neutral")
+    )
+    dominant_side = (
+        "buy"
+        if inflow_usd > outflow_usd
+        else ("sell" if outflow_usd > inflow_usd else "neutral")
+    )
     return {
         "direction": direction,
         "inflow_usd": float(inflow_usd),
@@ -12403,6 +12472,7 @@ def _wa_exchange_flow_summary(cluster_stats_list: list) -> dict:
 
 
 # ── Smart Money Flow Index ────────────────────────────────────────────────────
+
 
 async def compute_smart_money_flow(
     symbol: str = None,
@@ -12446,7 +12516,9 @@ async def compute_smart_money_flow(
     smart_trades, retail_trades = _split(trades)
 
     s_buy, s_sell, s_count, smf_index = _flow_stats(smart_trades, now - window_seconds)
-    r_buy, r_sell, r_count, retail_index = _flow_stats(retail_trades, now - window_seconds)
+    r_buy, r_sell, r_count, retail_index = _flow_stats(
+        retail_trades, now - window_seconds
+    )
 
     divergence = round(smf_index - retail_index, 4)
     total_smart_vol = s_buy + s_sell
@@ -12507,13 +12579,15 @@ async def compute_smart_money_flow(
         rb, rs, _, ri = _flow_stats(
             [t for t in retail_trades if t_start <= t["ts"] < t_end], t_start
         )
-        series.append({
-            "ts": t_end,
-            "smart_flow": round((sb - ss) / (sb + ss + 1e-9), 4),
-            "retail_flow": round((rb - rs) / (rb + rs + 1e-9), 4),
-            "smf_index": si,
-            "retail_index": ri,
-        })
+        series.append(
+            {
+                "ts": t_end,
+                "smart_flow": round((sb - ss) / (sb + ss + 1e-9), 4),
+                "retail_flow": round((rb - rs) / (rb + rs + 1e-9), 4),
+                "smf_index": si,
+                "retail_index": ri,
+            }
+        )
 
     sym = symbol or "ALL"
     description = (
@@ -12547,6 +12621,7 @@ async def compute_smart_money_flow(
 
 # ── Volatility Regime HMM ─────────────────────────────────────────────────────
 
+
 async def compute_vol_regime_hmm(
     symbol: str = None,
     window_seconds: int = 3600,
@@ -12568,7 +12643,9 @@ async def compute_vol_regime_hmm(
         pts = [t["price"] for t in trades_list if t_start <= t["ts"] < t_end]
         if len(pts) < 2:
             return 0.0
-        log_rets = [_math.log(pts[i] / pts[i - 1]) for i in range(1, len(pts)) if pts[i - 1] > 0]
+        log_rets = [
+            _math.log(pts[i] / pts[i - 1]) for i in range(1, len(pts)) if pts[i - 1] > 0
+        ]
         if len(log_rets) < 1:
             return 0.0
         mean_r = sum(log_rets) / len(log_rets)
@@ -12635,7 +12712,10 @@ async def compute_vol_regime_hmm(
             break
 
     # Transition matrix
-    transitions: Dict = {r: {"low": 0, "mid": 0, "high": 0, "extreme": 0} for r in ("low", "mid", "high", "extreme")}
+    transitions: Dict = {
+        r: {"low": 0, "mid": 0, "high": 0, "extreme": 0}
+        for r in ("low", "mid", "high", "extreme")
+    }
     for i in range(1, len(smoothed)):
         fr = smoothed[i - 1]["regime"]
         to = smoothed[i]["regime"]
@@ -12662,8 +12742,15 @@ async def compute_vol_regime_hmm(
         "regime_index": regime_index,
         "percentile": percentile,
         "rv_current": round(current_rv, 6),
-        "rv_history": [{"ts": b["ts"], "rv": round(b["rv"], 6), "regime": b["regime"]} for b in smoothed],
-        "boundaries": {"p25": round(p25, 6), "p50": round(p50, 6), "p75": round(p75, 6)},
+        "rv_history": [
+            {"ts": b["ts"], "rv": round(b["rv"], 6), "regime": b["regime"]}
+            for b in smoothed
+        ],
+        "boundaries": {
+            "p25": round(p25, 6),
+            "p50": round(p50, 6),
+            "p75": round(p75, 6),
+        },
         "transitions": transitions,
         "state_duration": state_duration,
         "smoothing_min_duration": smoothing_min_duration,
@@ -12672,6 +12759,7 @@ async def compute_vol_regime_hmm(
 
 
 # ── Social Sentiment Momentum ─────────────────────────────────────────────────
+
 
 async def compute_social_sentiment_momentum() -> Dict:
     """
@@ -12730,7 +12818,18 @@ async def compute_social_sentiment_momentum() -> Dict:
         fear_greed_label = "extreme_fear"
 
     # ── Top 5 trending tokens ─────────────────────────────────────────────────
-    _token_pool = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK"]
+    _token_pool = [
+        "BTC",
+        "ETH",
+        "SOL",
+        "BNB",
+        "XRP",
+        "ADA",
+        "DOGE",
+        "AVAX",
+        "DOT",
+        "LINK",
+    ]
     _selected = _rng.sample(_token_pool, 5)
 
     trending_tokens = []
@@ -12742,12 +12841,14 @@ async def compute_social_sentiment_momentum() -> Dict:
             direction = "down"
         else:
             direction = "flat"
-        trending_tokens.append({
-            "symbol": symbol,
-            "sentiment_shift": shift,
-            "direction": direction,
-            "rank": rank,
-        })
+        trending_tokens.append(
+            {
+                "symbol": symbol,
+                "sentiment_shift": shift,
+                "direction": direction,
+                "rank": rank,
+            }
+        )
 
     timestamp = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -12767,6 +12868,7 @@ async def compute_social_sentiment_momentum() -> Dict:
 
 
 # ── Wave 25 · Task 5 — Miner Flow Signals ─────────────────────────────────────
+
 
 async def compute_miner_flow_signals() -> dict:
     """Miner flow signals: wallet outflow rate, reserve ratio, price correlation,
@@ -12870,6 +12972,7 @@ async def compute_miner_flow_signals() -> dict:
 # Wave 25 — Derivatives Term Structure
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def compute_derivatives_term_structure() -> dict:
     """Derivatives term structure: perp/quarterly/bi-quarterly OI distribution,
     annualised basis per tenor, contango/backwardation indicator, roll cost.
@@ -12897,11 +13000,11 @@ async def compute_derivatives_term_structure() -> dict:
     }
 
     # ── Days to expiry ────────────────────────────────────────────────────────
-    qtr_dte: int = int(_rng.randint(7, 89))      # quarterly: 7–89 days
+    qtr_dte: int = int(_rng.randint(7, 89))  # quarterly: 7–89 days
     biqtr_dte: int = int(_rng.randint(90, 180))  # bi-quarterly: 90–180 days
 
     # ── Annualised basis (% pa) ───────────────────────────────────────────────
-    perp_basis: float = round(_rng.uniform(-2.0, 2.0), 4)    # perps have near-zero basis
+    perp_basis: float = round(_rng.uniform(-2.0, 2.0), 4)  # perps have near-zero basis
     qtr_basis: float = round(_rng.uniform(-5.0, 15.0), 4)
     biqtr_basis: float = round(_rng.uniform(-5.0, 20.0), 4)
 
@@ -13071,5 +13174,57 @@ async def compute_perpetual_funding_heatmap() -> dict:
         "funding_extremes": funding_extremes,
         "arbitrage_opportunities": arbitrage_opportunities,
         "avg_rates": avg_rates,
+        "timestamp": timestamp,
+    }
+
+
+async def compute_on_chain_active_addresses() -> dict:
+    """On-chain active addresses: daily active, 7d avg, growth rates, price correlation, sparkline."""
+    import random as _rng_ocaa
+    import datetime as _dt_ocaa
+
+    _rng = _rng_ocaa.Random(20260326)
+
+    # ── Active address counts ─────────────────────────────────────────────────
+    active_addresses_24h: int = _rng.randint(800_000, 1_200_000)
+    active_addresses_7d_avg: int = _rng.randint(900_000, 1_100_000)
+
+    # ── Growth rates ──────────────────────────────────────────────────────────
+    growth_rate_7d: float = round(_rng.uniform(-10.0, 15.0), 2)
+    growth_rate_30d: float = round(_rng.uniform(-5.0, 20.0), 2)
+
+    # ── Trend ─────────────────────────────────────────────────────────────────
+    trend: str = _rng.choice(["growing", "declining", "stable"])
+
+    # ── Price correlation ─────────────────────────────────────────────────────
+    price_correlation_30d: float = round(_rng.uniform(-1.0, 1.0), 4)
+
+    # ── Historical daily — 30 days ending 2026-03-17 ──────────────────────────
+    _base_count: int = _rng.randint(900_000, 1_000_000)
+    _today = _dt_ocaa.date(2026, 3, 17)
+    historical_daily = []
+    for _i in range(30):
+        _day = _today - _dt_ocaa.timedelta(days=29 - _i)
+        _count: int = _base_count + _rng.randint(-50_000, 50_000)
+        historical_daily.append({"date": _day.isoformat(), "count": _count})
+
+    # ── Network utilization (0–1) ─────────────────────────────────────────────
+    network_utilization: float = round(_rng.uniform(0.3, 0.95), 4)
+
+    # ── New addresses ratio (0–1) ─────────────────────────────────────────────
+    new_addresses_ratio: float = round(_rng.uniform(0.05, 0.40), 4)
+
+    timestamp: str = _dt_ocaa.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "active_addresses_24h": active_addresses_24h,
+        "active_addresses_7d_avg": active_addresses_7d_avg,
+        "growth_rate_7d": growth_rate_7d,
+        "growth_rate_30d": growth_rate_30d,
+        "trend": trend,
+        "price_correlation_30d": price_correlation_30d,
+        "historical_daily": historical_daily,
+        "network_utilization": network_utilization,
+        "new_addresses_ratio": new_addresses_ratio,
         "timestamp": timestamp,
     }
