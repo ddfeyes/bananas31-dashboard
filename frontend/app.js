@@ -5941,6 +5941,7 @@ function renderOnChainActiveAddresses(data) {
   }
 
   el.innerHTML = statsHtml;
+}
 
 // ── Volatility Regime Forecast ────────────────────────────────────────────────
 async function fetchVolatilityRegimeForecast() {
