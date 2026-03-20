@@ -1,4 +1,5 @@
 """SQLite storage layer using aiosqlite — multi-symbol."""
+
 import aiosqlite
 import asyncio
 import json
@@ -10,19 +11,24 @@ DB_PATH = os.getenv("DB_PATH", "data/bananas31.db")
 
 from contextlib import asynccontextmanager
 
+
 @asynccontextmanager
 async def open_db(path=None):
-    """Open SQLite with WAL + busy_timeout=5000ms."""
+    """Open SQLite with WAL + optimised read/write PRAGMAs."""
     p = path or DB_PATH
     import os
-    os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     async with aiosqlite.connect(p) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA busy_timeout=5000")
+        # 32 MB in-memory page cache (default is ~2 MB) — reduces disk I/O
+        await db.execute("PRAGMA cache_size=-32768")
+        # Keep temp tables in memory instead of on disk
+        await db.execute("PRAGMA temp_store=MEMORY")
         yield db
-
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -109,16 +115,28 @@ async def init_db():
         """)
 
         # Indexes for time-range queries
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_ob_ts ON orderbook_snapshots(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_ob_sym ON orderbook_snapshots(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ob_ts ON orderbook_snapshots(ts)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ob_sym ON orderbook_snapshots(symbol, ts)"
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_trades_sym ON trades(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trades_sym ON trades(symbol, ts)"
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oi_ts ON open_interest(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_oi_sym ON open_interest(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_oi_sym ON open_interest(symbol, ts)"
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_fr_ts ON funding_rate(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_fr_sym ON funding_rate(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fr_sym ON funding_rate(symbol, ts)"
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_ts ON liquidations(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_sym ON liquidations(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_liq_sym ON liquidations(symbol, ts)"
+        )
 
         # Dedicated spread history table for faster queries / less IO
         await db.execute("""
@@ -137,8 +155,12 @@ async def init_db():
                 ask_vol REAL
             )
         """)
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_spread_ts  ON spread_history(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_spread_sym ON spread_history(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_spread_ts  ON spread_history(ts)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_spread_sym ON spread_history(symbol, ts)"
+        )
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS alert_history (
@@ -152,7 +174,9 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_ts ON alert_history(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_alert_sym ON alert_history(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alert_sym ON alert_history(symbol, ts)"
+        )
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS whale_trades (
@@ -167,13 +191,54 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_whale_ts ON whale_trades(ts)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_whale_sym ON whale_trades(symbol, ts)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_whale_sym ON whale_trades(symbol, ts)"
+        )
+
+        # pattern_history — created eagerly so indexes are always present
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                pattern_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                signals TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pattern_ts  ON pattern_history(ts)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pattern_sym ON pattern_history(symbol, ts)"
+        )
+
+        # phase_snapshots — created eagerly so indexes are always present
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS phase_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                confidence REAL,
+                composite_score REAL,
+                signals TEXT
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_phase_ts  ON phase_snapshots(ts)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_phase_sym ON phase_snapshots(symbol, ts)"
+        )
 
         await db.commit()
 
 
 async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
     import json
+
     ts = time.time()
     best_bid = float(bids[0][0]) if bids else None
     best_ask = float(asks[0][0]) if asks else None
@@ -182,47 +247,95 @@ async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
 
     bid_vol = sum(float(b[1]) for b in bids[:10])
     ask_vol = sum(float(a[1]) for a in asks[:10])
-    imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
+    imbalance = (
+        (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0
+    )
 
     spread_pct = (spread / mid_price * 100) if (spread and mid_price) else None
     spread_bps = round(spread_pct * 100, 4) if spread_pct is not None else None
 
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO orderbook_snapshots
             (ts, exchange, symbol, bids, asks, best_bid, best_ask, mid_price, spread, bid_volume, ask_volume, imbalance)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (ts, exchange, symbol,
-              json.dumps(bids[:20]), json.dumps(asks[:20]),
-              best_bid, best_ask, mid_price, spread,
-              bid_vol, ask_vol, imbalance))
+        """,
+            (
+                ts,
+                exchange,
+                symbol,
+                json.dumps(bids[:20]),
+                json.dumps(asks[:20]),
+                best_bid,
+                best_ask,
+                mid_price,
+                spread,
+                bid_vol,
+                ask_vol,
+                imbalance,
+            ),
+        )
         # Also write to dedicated spread_history table for fast tracker queries
         if spread_pct is not None:
-            await db.execute("""
+            await db.execute(
+                """
                 INSERT INTO spread_history
                 (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """, (ts, symbol, exchange, round(spread_pct, 6), spread_bps,
-                  round(spread, 8) if spread else None,
-                  best_bid, best_ask, mid_price, bid_vol, ask_vol))
+            """,
+                (
+                    ts,
+                    symbol,
+                    exchange,
+                    round(spread_pct, 6),
+                    spread_bps,
+                    round(spread, 8) if spread else None,
+                    best_bid,
+                    best_ask,
+                    mid_price,
+                    bid_vol,
+                    ask_vol,
+                ),
+            )
         await db.commit()
 
 
 async def insert_spread(
-    symbol: str, exchange: str,
-    spread_pct: float, spread_bps: float,
+    symbol: str,
+    exchange: str,
+    spread_pct: float,
+    spread_bps: float,
     spread_abs: float = None,
-    bid: float = None, ask: float = None, mid: float = None,
-    bid_vol: float = None, ask_vol: float = None,
+    bid: float = None,
+    ask: float = None,
+    mid: float = None,
+    bid_vol: float = None,
+    ask_vol: float = None,
 ):
     """Explicit spread insert (for external callers)."""
     ts = time.time()
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO spread_history
             (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol))
+        """,
+            (
+                ts,
+                symbol,
+                exchange,
+                spread_pct,
+                spread_bps,
+                spread_abs,
+                bid,
+                ask,
+                mid,
+                bid_vol,
+                ask_vol,
+            ),
+        )
         await db.commit()
 
 
@@ -249,14 +362,18 @@ async def get_spread_history(
             return [dict(r) for r in rows]
 
 
-async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None) -> Dict:
+async def get_spread_stats(
+    symbol: str, window: int = 1800, exchange: str = None
+) -> Dict:
     """Return current, avg, max spread and alert status."""
     since = time.time() - window
-    rows = await get_spread_history(symbol=symbol, since=since, exchange=exchange, limit=5000)
+    rows = await get_spread_history(
+        symbol=symbol, since=since, exchange=exchange, limit=5000
+    )
     if not rows:
         return {"symbol": symbol, "count": 0}
     bps_vals = [r["spread_bps"] for r in rows if r["spread_bps"] is not None]
-    pct_vals  = [r["spread_pct"] for r in rows if r["spread_pct"] is not None]
+    pct_vals = [r["spread_pct"] for r in rows if r["spread_pct"] is not None]
     if not bps_vals:
         return {"symbol": symbol, "count": 0}
     current_bps = bps_vals[-1]
@@ -268,14 +385,22 @@ async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None
     alert = None
     # Alert: current > 0.5% spread OR > 2x avg
     if current_pct is not None and current_pct > 0.5:
-        alert = {"level": "high", "reason": "spread_pct_threshold",
-                 "message": f"Spread {current_pct:.4f}% exceeds 0.5% threshold",
-                 "current_pct": round(current_pct, 4), "current_bps": round(current_bps, 2)}
+        alert = {
+            "level": "high",
+            "reason": "spread_pct_threshold",
+            "message": f"Spread {current_pct:.4f}% exceeds 0.5% threshold",
+            "current_pct": round(current_pct, 4),
+            "current_bps": round(current_bps, 2),
+        }
     elif avg_bps > 0 and current_bps > avg_bps * 2:
-        alert = {"level": "medium", "reason": "spread_widening",
-                 "message": f"Spread widened: {current_bps:.1f} bps (avg {avg_bps:.1f} bps, {current_bps/avg_bps:.1f}x)",
-                 "current_bps": round(current_bps, 2), "avg_bps": round(avg_bps, 2),
-                 "ratio": round(current_bps / avg_bps, 2)}
+        alert = {
+            "level": "medium",
+            "reason": "spread_widening",
+            "message": f"Spread widened: {current_bps:.1f} bps (avg {avg_bps:.1f} bps, {current_bps/avg_bps:.1f}x)",
+            "current_bps": round(current_bps, 2),
+            "avg_bps": round(avg_bps, 2),
+            "ratio": round(current_bps / avg_bps, 2),
+        }
     latest = rows[-1]
     return {
         "symbol": symbol,
@@ -297,44 +422,69 @@ async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None
     }
 
 
-async def insert_trade(exchange: str, symbol: str, price: float, qty: float, side: str, trade_id: str = None):
+async def insert_trade(
+    exchange: str,
+    symbol: str,
+    price: float,
+    qty: float,
+    side: str,
+    trade_id: str = None,
+):
     ts = time.time()
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO trades (ts, exchange, symbol, price, qty, side, trade_id)
             VALUES (?,?,?,?,?,?,?)
-        """, (ts, exchange, symbol, price, qty, side, trade_id))
+        """,
+            (ts, exchange, symbol, price, qty, side, trade_id),
+        )
         await db.commit()
 
 
-async def insert_oi(exchange: str, symbol: str, oi_value: float, oi_contracts: float = None):
+async def insert_oi(
+    exchange: str, symbol: str, oi_value: float, oi_contracts: float = None
+):
     ts = time.time()
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO open_interest (ts, exchange, symbol, oi_value, oi_contracts)
             VALUES (?,?,?,?,?)
-        """, (ts, exchange, symbol, oi_value, oi_contracts))
+        """,
+            (ts, exchange, symbol, oi_value, oi_contracts),
+        )
         await db.commit()
 
 
-async def insert_funding(exchange: str, symbol: str, rate: float, next_ts: float = None):
+async def insert_funding(
+    exchange: str, symbol: str, rate: float, next_ts: float = None
+):
     ts = time.time()
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO funding_rate (ts, exchange, symbol, rate, next_funding_ts)
             VALUES (?,?,?,?,?)
-        """, (ts, exchange, symbol, rate, next_ts))
+        """,
+            (ts, exchange, symbol, rate, next_ts),
+        )
         await db.commit()
 
 
-async def insert_liquidation(exchange: str, symbol: str, side: str, price: float, qty: float):
+async def insert_liquidation(
+    exchange: str, symbol: str, side: str, price: float, qty: float
+):
     ts = time.time()
     value = price * qty
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO liquidations (ts, exchange, symbol, side, price, qty, value)
             VALUES (?,?,?,?,?,?,?)
-        """, (ts, exchange, symbol, side, price, qty, value))
+        """,
+            (ts, exchange, symbol, side, price, qty, value),
+        )
         await db.commit()
 
 
@@ -353,7 +503,9 @@ def _build_query(base: str, filters: list, order: str, limit: int) -> tuple:
     return base, params
 
 
-def _build_query_with_since(base: str, since: float, symbol: Optional[str], order: str, limit: int) -> tuple:
+def _build_query_with_since(
+    base: str, since: float, symbol: Optional[str], order: str, limit: int
+) -> tuple:
     params = [since]
     q = base + " WHERE ts > ?"
     if symbol:
@@ -365,9 +517,7 @@ def _build_query_with_since(base: str, since: float, symbol: Optional[str], orde
 
 
 async def get_latest_orderbook(
-    exchange: str = None,
-    symbol: str = None,
-    limit: int = 1
+    exchange: str = None, symbol: str = None, limit: int = 1
 ) -> List[Dict]:
     q = "SELECT * FROM orderbook_snapshots"
     params = []
@@ -453,7 +603,9 @@ async def get_recent_liquidations(
             return [dict(r) for r in rows]
 
 
-async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_size: float = None) -> List[Dict]:
+async def get_trades_for_volume_profile(
+    since: float, symbol: str = None, tick_size: float = None
+) -> List[Dict]:
     """
     Return aggregated volume per price level for volume profile.
     tick_size controls price resolution (default: auto-detected from data).
@@ -476,6 +628,7 @@ async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_s
 
         # Pick tick size as ~0.05% of avg price, rounded to a nice number
         import math
+
         magnitude = 10 ** math.floor(math.log10(avg_price * 0.0005))
         tick_size = round(avg_price * 0.0005 / magnitude) * magnitude
         tick_size = max(tick_size, 1e-8)
@@ -567,18 +720,8 @@ async def get_ohlcv(
     if symbol:
         full_params.append(symbol)
 
-    async with open_db() as db:
-        db.row_factory = aiosqlite.Row
-        # We need open/close as first/last prices — get them in a separate pass
-        async with db.execute(q, full_params) as cur:
-            rows = await cur.fetchall()
-            buckets = [dict(r) for r in rows]
-
-    if not buckets:
-        return []
-
-    # Fetch first/last price per bucket for true open/close
-    # Use window functions if SQLite supports them (3.25+), otherwise fallback
+    # Fetch first/last price per bucket for true open/close.
+    # Use window functions (SQLite 3.25+) — both queries share one connection.
     q2 = f"""
         SELECT
             CAST(ts / ? AS INTEGER) * ? AS bucket,
@@ -589,17 +732,27 @@ async def get_ohlcv(
         WHERE ts > ?{sym_filter}
         GROUP BY bucket
     """
-    try:
-        oc_params: list = [interval, interval, interval, interval, since]
-        if symbol:
-            oc_params.append(symbol)
-        async with open_db() as db:
-            db.row_factory = aiosqlite.Row
+    oc_params: list = [interval, interval, interval, interval, since]
+    if symbol:
+        oc_params.append(symbol)
+
+    async with open_db() as db:
+        db.row_factory = aiosqlite.Row
+        # Main aggregation
+        async with db.execute(q, full_params) as cur:
+            rows = await cur.fetchall()
+            buckets = [dict(r) for r in rows]
+
+        if not buckets:
+            return []
+
+        # Open/close via window functions — same connection, no extra overhead
+        try:
             async with db.execute(q2, oc_params) as cur:
                 oc_rows = await cur.fetchall()
                 oc_map = {r["bucket"]: (r["open"], r["close"]) for r in oc_rows}
-    except Exception:
-        oc_map = {}
+        except Exception:
+            oc_map = {}
 
     # Compute cumulative VWAP across all candles
     cum_pv = 0.0
@@ -610,21 +763,23 @@ async def get_ohlcv(
         o, c = oc_map.get(bucket, (b["open_price"], b["close_price"]))
         typical_price = (b["high"] + b["low"] + c) / 3.0
         vol = b["volume"] or 0
-        cum_pv  += typical_price * vol
+        cum_pv += typical_price * vol
         cum_vol += vol
         vwap = cum_pv / cum_vol if cum_vol > 0 else None
-        result.append({
-            "ts": bucket,
-            "open": o,
-            "high": b["high"],
-            "low": b["low"],
-            "close": c,
-            "volume": b["volume"],
-            "buy_volume": b["buy_volume"],
-            "sell_volume": b["sell_volume"],
-            "trade_count": b["trade_count"],
-            "vwap": round(vwap, 8) if vwap else None,
-        })
+        result.append(
+            {
+                "ts": bucket,
+                "open": o,
+                "high": b["high"],
+                "low": b["low"],
+                "close": c,
+                "volume": b["volume"],
+                "buy_volume": b["buy_volume"],
+                "sell_volume": b["sell_volume"],
+                "trade_count": b["trade_count"],
+                "vwap": round(vwap, 8) if vwap else None,
+            }
+        )
     return result
 
 
@@ -690,15 +845,21 @@ async def get_orderbook_snapshots_for_heatmap(
     return sampled
 
 
-async def insert_alert(symbol: str, alert_type: str, severity: str, description: str, data: dict = None):
+async def insert_alert(
+    symbol: str, alert_type: str, severity: str, description: str, data: dict = None
+):
     """Persist a fired alert to history."""
     import json
+
     ts = time.time()
     async with open_db() as db:
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO alert_history (ts, symbol, alert_type, severity, description, data)
             VALUES (?,?,?,?,?,?)
-        """, (ts, symbol, alert_type, severity, description, json.dumps(data or {})))
+        """,
+            (ts, symbol, alert_type, severity, description, json.dumps(data or {})),
+        )
         await db.commit()
 
 
@@ -727,9 +888,12 @@ async def get_alert_history(
             return [dict(r) for r in rows]
 
 
-async def insert_pattern(symbol: str, pattern_type: str, confidence: float, signals: dict, description: str):
+async def insert_pattern(
+    symbol: str, pattern_type: str, confidence: float, signals: dict, description: str
+):
     """Persist a detected market pattern to history."""
     import json
+
     ts = time.time()
     async with open_db() as db:
         await db.execute("""
@@ -745,7 +909,7 @@ async def insert_pattern(symbol: str, pattern_type: str, confidence: float, sign
         """)
         await db.execute(
             "INSERT INTO pattern_history (ts, symbol, pattern_type, confidence, signals, description) VALUES (?,?,?,?,?,?)",
-            (ts, symbol, pattern_type, confidence, json.dumps(signals), description)
+            (ts, symbol, pattern_type, confidence, json.dumps(signals), description),
         )
         await db.commit()
 
@@ -758,6 +922,7 @@ async def get_pattern_history(
 ) -> List[Dict]:
     """Fetch recent pattern detections."""
     import json
+
     since = since or (time.time() - 86400)
     params: list = [since]
     q = "SELECT * FROM pattern_history WHERE ts > ?"
@@ -802,11 +967,17 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
         for table in ["trades", "open_interest", "funding_rate", "liquidations"]:
             await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         # Keep orderbook only last 30 minutes (enough for heatmap)
-        await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 1800,))
+        await db.execute(
+            "DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 1800,)
+        )
         # Keep spread history 4 hours (1s resolution → ~14400 rows/symbol → manageable)
-        await db.execute("DELETE FROM spread_history WHERE ts < ?", (time.time() - 14400,))
+        await db.execute(
+            "DELETE FROM spread_history WHERE ts < ?", (time.time() - 14400,)
+        )
         # Keep alert history 30 days
-        await db.execute("DELETE FROM alert_history WHERE ts < ?", (time.time() - 86400 * 30,))
+        await db.execute(
+            "DELETE FROM alert_history WHERE ts < ?", (time.time() - 86400 * 30,)
+        )
         await db.commit()
     # Reclaim space (VACUUM requires its own connection)
     async with open_db() as db2:
@@ -814,17 +985,26 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
         await db2.execute("ANALYZE")
 
 
-async def insert_whale_trade(symbol: str, price: float, qty: float, side: str, value_usd: float, exchange: str = "binance"):
+async def insert_whale_trade(
+    symbol: str,
+    price: float,
+    qty: float,
+    side: str,
+    value_usd: float,
+    exchange: str = "binance",
+):
     """Log a whale trade (value > threshold) to persistent storage."""
     async with open_db() as db:
         await db.execute(
             "INSERT INTO whale_trades (ts, symbol, price, qty, side, value_usd, exchange) VALUES (?,?,?,?,?,?,?)",
-            (time.time(), symbol, price, qty, side, value_usd, exchange)
+            (time.time(), symbol, price, qty, side, value_usd, exchange),
         )
         await db.commit()
 
 
-async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = None, min_usd: float = 50000) -> list:
+async def get_whale_trades(
+    limit: int = 100, since: float = None, symbol: str = None, min_usd: float = 50000
+) -> list:
     """Fetch recent whale trades, optionally filtered by symbol and time window."""
     params = [min_usd]
     q = "SELECT * FROM whale_trades WHERE value_usd >= ?"
@@ -843,11 +1023,16 @@ async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = 
             return [dict(r) for r in rows]
 
 
-async def insert_phase_snapshot(symbol: str, phase: str, confidence: float, signals: dict, composite_score: float = None):
+async def insert_phase_snapshot(
+    symbol: str,
+    phase: str,
+    confidence: float,
+    signals: dict,
+    composite_score: float = None,
+):
     """Store a periodic market phase snapshot for historical replay."""
     async with open_db() as db:
-        await db.execute(
-            """CREATE TABLE IF NOT EXISTS phase_snapshots (
+        await db.execute("""CREATE TABLE IF NOT EXISTS phase_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts REAL NOT NULL,
                 symbol TEXT NOT NULL,
@@ -855,12 +1040,17 @@ async def insert_phase_snapshot(symbol: str, phase: str, confidence: float, sign
                 confidence REAL,
                 composite_score REAL,
                 signals TEXT
-            )"""
-        )
+            )""")
         await db.execute(
             "INSERT INTO phase_snapshots (ts, symbol, phase, confidence, composite_score, signals) VALUES (?,?,?,?,?,?)",
-            (time.time(), symbol, phase, confidence, composite_score,
-             json.dumps(signals) if signals else None)
+            (
+                time.time(),
+                symbol,
+                phase,
+                confidence,
+                composite_score,
+                json.dumps(signals) if signals else None,
+            ),
         )
         await db.commit()
 
@@ -874,8 +1064,7 @@ async def get_phase_snapshots(
     """Fetch phase snapshots for historical replay."""
     async with open_db() as db:
         # Ensure table exists
-        await db.execute(
-            """CREATE TABLE IF NOT EXISTS phase_snapshots (
+        await db.execute("""CREATE TABLE IF NOT EXISTS phase_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts REAL NOT NULL,
                 symbol TEXT NOT NULL,
@@ -883,8 +1072,7 @@ async def get_phase_snapshots(
                 confidence REAL,
                 composite_score REAL,
                 signals TEXT
-            )"""
-        )
+            )""")
         params = []
         q = "SELECT * FROM phase_snapshots WHERE 1=1"
         if symbol:
