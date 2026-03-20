@@ -140,6 +140,21 @@ class TestTpsWindows:
         r = _run([_buy(-1.0)])
         assert r["buy_tps_1s"] == 0.0
 
+    def test_future_trades_ignored_all_windows(self):
+        # trades with ts > now must not be counted in any window
+        future = [_buy(1.0), _sell(5.0), _buy(100.0)]
+        r = _run(future)
+        assert r["buy_tps_1s"] == 0.0
+        assert r["sell_tps_1s"] == 0.0
+        assert r["buy_tps_5s"] == 0.0
+        assert r["sell_tps_5s"] == 0.0
+        assert r["buy_tps_30s"] == 0.0
+        assert r["sell_tps_30s"] == 0.0
+
+    def test_future_trades_excluded_from_buckets(self):
+        r = _run([_buy(1.0), _sell(10.0)])
+        assert all(b["total_tps"] == 0.0 for b in r["buckets"])
+
     def test_mix_buy_sell_30s(self):
         trades = [_buy(-5.0), _buy(-10.0), _sell(-15.0)]
         r = _run(trades)

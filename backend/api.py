@@ -2001,6 +2001,7 @@ async def tape_speed_endpoint(
 
 
 @router.get("/tape-speed-tps")
+@cache_result(ttl_seconds=2)
 async def tape_speed_tps_endpoint(
     symbol: Optional[str] = None,
 ):

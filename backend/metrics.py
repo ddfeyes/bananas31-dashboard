@@ -4517,6 +4517,8 @@ def compute_tape_speed_tps(
         cutoff = now - window_s
         buys = sells = 0
         for t in trades:
+            if t["ts"] > now:
+                continue
             if t["ts"] <= cutoff:
                 continue
             side = (t.get("side") or "").lower()
@@ -4548,6 +4550,8 @@ def compute_tape_speed_tps(
     bucket_map: Dict[int, Dict[str, int]] = {}
     for t in trades:
         ts = t["ts"]
+        if ts > now:
+            continue
         if ts <= since_60s:
             continue
         bk = int(ts)
