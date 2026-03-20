@@ -267,6 +267,7 @@ async def data_freshness():
 
 
 @router.get("/stats/summary")
+@cache_result(ttl_seconds=30)
 async def stats_summary():
     """24h aggregate stats for all symbols."""
     import aiosqlite
@@ -412,6 +413,7 @@ async def liquidations_recent(
 
 
 @router.get("/cvd/history")
+@cache_result(ttl_seconds=10)
 async def cvd_history(
     window: int = Query(default=3600, le=86400),
     symbol: Optional[str] = None,
@@ -448,6 +450,7 @@ async def volume_profile(
 
 
 @router.get("/volume-profile/adaptive")
+@cache_result(ttl_seconds=30)
 async def volume_profile_adaptive(
     bins: int = Query(default=0, ge=0, le=200),
     symbol: Optional[str] = None,
@@ -819,6 +822,7 @@ async def kalman_price_endpoint(
 
 
 @router.get("/aggressor-ratio")
+@cache_result(ttl_seconds=10)
 async def aggressor_ratio_endpoint(
     symbol: Optional[str] = None,
     window: int = Query(default=1800, ge=300, le=14400),
@@ -836,6 +840,7 @@ async def aggressor_ratio_endpoint(
 
 
 @router.get("/aggressor-streak")
+@cache_result(ttl_seconds=10)
 async def aggressor_streak_endpoint(
     symbol: Optional[str] = None,
     window: int = Query(default=1800, ge=300, le=14400),
@@ -975,6 +980,7 @@ async def cvd_momentum_endpoint(
 
 
 @router.get("/market-regime")
+@cache_result(ttl_seconds=30)
 async def market_regime_endpoint(
     symbol: Optional[str] = None,
 ):
@@ -992,6 +998,7 @@ async def market_regime_endpoint(
 
 
 @router.get("/market-regime/all")
+@cache_result(ttl_seconds=30)
 async def market_regime_all():
     """Composite regime score for all tracked symbols."""
     syms = get_symbols()
@@ -1852,6 +1859,7 @@ async def _sym_summary(sym: str) -> dict:
 
 
 @router.get("/multi-summary")
+@cache_result(ttl_seconds=15)
 async def multi_summary():
     """Quick stats for all tracked symbols — for overview bar."""
     syms = get_symbols()
@@ -1963,6 +1971,7 @@ async def trade_count_rate(
 
 
 @router.get("/tape-speed")
+@cache_result(ttl_seconds=5)
 async def tape_speed_endpoint(
     window: int = Query(default=1800, ge=60, le=7200),
     bucket: int = Query(default=60, ge=10, le=300),
@@ -2198,6 +2207,7 @@ async def momentum_table():
 
 
 @router.get("/correlations")
+@cache_result(ttl_seconds=60)
 async def price_correlations(window: int = Query(default=3600, le=86400)):
     """
     Pearson correlation matrix between all tracked symbols based on 1-min OHLCV close prices.

@@ -1,13 +1,16 @@
 """Entry point: FastAPI app + background collectors + pollers."""
+
 import asyncio
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Load .env — supports DOTENV_PATH env var (for Docker), fallback to ~/.lain-secrets/.env
 from dotenv import load_dotenv
+
 _dotenv_path = os.environ.get("DOTENV_PATH")
 if _dotenv_path and Path(_dotenv_path).exists():
     load_dotenv(_dotenv_path)
@@ -22,6 +25,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from cache import cache_clear
 from storage import init_db, cleanup_old_data, insert_pattern, insert_phase_snapshot
@@ -37,6 +41,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _timing_middleware(request, call_next):
+    """Add X-Response-Time header and warn on slow (>500ms) endpoints."""
+    t0 = time.monotonic()
+    response = await call_next(request)
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    response.headers["X-Response-Time"] = f"{elapsed_ms:.1f}ms"
+    if elapsed_ms > 500:
+        logger.warning(
+            "SLOW %s %s %.0fms", request.method, request.url.path, elapsed_ms
+        )
+    return response
+
+
 async def cleanup_loop():
     while True:
         await asyncio.sleep(3600)
@@ -50,10 +67,11 @@ async def cleanup_loop():
 async def pattern_detection_loop():
     """Periodically detect accumulation/distribution patterns and persist them."""
     from metrics import detect_accumulation_distribution_pattern
+
     await asyncio.sleep(60)  # warm-up: wait for data to arrive
-    _last_pattern: dict = {}   # symbol -> last persisted pattern type+ts
-    PERSIST_INTERVAL = 120     # only save if pattern changed or 2 min passed
-    DETECT_INTERVAL  = 30      # run detection every 30s
+    _last_pattern: dict = {}  # symbol -> last persisted pattern type+ts
+    PERSIST_INTERVAL = 120  # only save if pattern changed or 2 min passed
+    DETECT_INTERVAL = 30  # run detection every 30s
 
     while True:
         try:
@@ -67,7 +85,7 @@ async def pattern_detection_loop():
                     # Only persist non-balanced patterns with reasonable confidence
                     if pattern != "balanced" and confidence >= 0.35:
                         last = _last_pattern.get(sym, {})
-                        last_ts   = last.get("ts", 0)
+                        last_ts = last.get("ts", 0)
                         last_type = last.get("pattern")
                         now = result["ts"]
 
@@ -81,7 +99,9 @@ async def pattern_detection_loop():
                                 description=result.get("description", ""),
                             )
                             _last_pattern[sym] = {"pattern": pattern, "ts": now}
-                            logger.info(f"Pattern persisted: {sym} {pattern} conf={confidence:.2f}")
+                            logger.info(
+                                f"Pattern persisted: {sym} {pattern} conf={confidence:.2f}"
+                            )
                 except Exception as e:
                     logger.warning(f"Pattern detection failed for {sym}: {e}")
 
@@ -96,6 +116,7 @@ async def pattern_detection_loop():
 async def phase_snapshot_loop():
     """Periodically snapshot market phase for all symbols (historical replay data)."""
     from metrics import classify_market_phase, compute_market_regime
+
     await asyncio.sleep(45)  # wait for collectors to warm up
     SNAP_INTERVAL = 30  # snapshot every 30s
 
@@ -109,7 +130,11 @@ async def phase_snapshot_loop():
                     phase = phase_result.get("phase", "unknown")
                     confidence = phase_result.get("confidence", 0.0)
                     signals = phase_result.get("signals", {})
-                    composite = regime_result.get("composite_score") if isinstance(regime_result, dict) else None
+                    composite = (
+                        regime_result.get("composite_score")
+                        if isinstance(regime_result, dict)
+                        else None
+                    )
                     await insert_phase_snapshot(
                         symbol=sym,
                         phase=phase,
@@ -166,6 +191,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(BaseHTTPMiddleware, dispatch=_timing_middleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -178,6 +204,7 @@ app.include_router(router)
 # Serve frontend
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():
+
     @app.get("/")
     async def serve_index():
         return FileResponse(str(frontend_dir / "index.html"))
@@ -188,6 +215,7 @@ if frontend_dir.exists():
 @app.get("/health")
 async def health():
     from collectors import get_symbols
+
     return {"status": "ok", "symbols": get_symbols()}
 
 
@@ -195,6 +223,7 @@ async def health():
 async def smart_money_patterns(symbol: str = None):
     """Detect smart money behavior patterns (accumulation, distribution, absorption)."""
     from metrics import detect_smart_money_patterns
+
     return await detect_smart_money_patterns(symbol=symbol)
 
 
@@ -202,8 +231,8 @@ async def smart_money_patterns(symbol: str = None):
 async def realized_vol_surface():
     """Compute realized volatility surface: 8 symbols × 4 time windows."""
     from metrics import compute_realized_vol_surface
-    return await compute_realized_vol_surface()
 
+    return await compute_realized_vol_surface()
 
 
 @app.get("/api/aggressor-streak/{symbol}")
@@ -212,6 +241,7 @@ async def aggressor_streak(symbol: str):
     import time
     from metrics import compute_aggressor_imbalance_streak
     from storage import get_recent_trades
+
     since = time.time() - 30 * 60
     trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
     return compute_aggressor_imbalance_streak(trades)
@@ -220,11 +250,13 @@ async def aggressor_streak(symbol: str):
 @app.get("/api/cross-market-correlation")
 async def cross_market_correlation():
     from metrics import compute_cross_market_correlation
+
     return await compute_cross_market_correlation()
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")
     uvicorn.run("main:app", host=host, port=port, reload=False)
