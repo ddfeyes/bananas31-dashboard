@@ -1047,6 +1047,35 @@ async function renderMicrostructure() {
 }
 
 // ── WebSocket: Alerts ─────────────────────────────────────────────────────────
+let _alertsPollingInterval = null;
+
+function _startAlertsPolling() {
+  // Fallback: poll /alerts every 10s when WebSocket is unavailable
+  const statusEl = document.getElementById('header-status');
+  if (statusEl) {
+    statusEl.textContent = 'polling (WS unavailable)';
+    statusEl.className = 'disconnected';
+  }
+  if (_alertsPollingInterval) return; // already polling
+  let _lastAlertTs = 0;
+  const poll = async () => {
+    const data = await apiFetch('/alerts?limit=20');
+    if (!data || !data.data) return;
+    for (const a of data.data) {
+      if ((a.ts || 0) > _lastAlertTs) {
+        _lastAlertTs = a.ts || 0;
+        const text = a.description || a.message || null;
+        if (text) {
+          showAlertBanner(text);
+          appendAlertFeed(a);
+        }
+      }
+    }
+  };
+  poll();
+  _alertsPollingInterval = setInterval(poll, 10000);
+}
+
 function connectAlerts() {
   if (wsAlerts) {
     wsAlerts.close();
@@ -1054,16 +1083,24 @@ function connectAlerts() {
   }
 
   const url = WS + '/api/ws/alerts';
+  let wsOk = false;
+
   try {
     wsAlerts = new WebSocket(url);
   } catch (e) {
     console.warn('[WS] failed to create WebSocket:', e);
+    _startAlertsPolling();
     return;
   }
 
   const statusEl = document.getElementById('header-status');
 
   wsAlerts.onopen = () => {
+    wsOk = true;
+    if (_alertsPollingInterval) {
+      clearInterval(_alertsPollingInterval);
+      _alertsPollingInterval = null;
+    }
     if (statusEl) {
       statusEl.textContent = 'connected';
       statusEl.className = 'connected';
@@ -1087,7 +1124,13 @@ function connectAlerts() {
       statusEl.textContent = 'disconnected — reconnecting…';
       statusEl.className = 'disconnected';
     }
-    setTimeout(connectAlerts, 5000);
+    if (wsOk) {
+      // WS was working before — retry with backoff
+      setTimeout(connectAlerts, 5000);
+    } else {
+      // WS never connected (nginx not upgraded) — fall back to polling
+      _startAlertsPolling();
+    }
   };
 
   wsAlerts.onerror = (e) => {
@@ -5134,7 +5177,7 @@ async function renderFundingArbScanner() {
   if (!el) return;
 
   try {
-    const data = await apiFetch("/api/funding-arb-scanner");
+    const data = await apiFetch("/funding-arb-scanner");
     if (!data) { setErr('funding-arb-scanner-content'); return; }
 
     const { top_pairs, avg_spread_bps, extreme_count } = data;
