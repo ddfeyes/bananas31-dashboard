@@ -355,7 +355,8 @@ class TestFrontendJs:
         assert "renderFundingArbScanner" in js_content
 
     def test_api_endpoint_wired(self, js_content):
-        assert "/api/funding-arb-scanner" in js_content
+        # Path must not include /api prefix since apiFetch() prepends it automatically
+        assert "/funding-arb-scanner" in js_content
 
     def test_badge_id_referenced(self, js_content):
         assert "funding-arb-scanner-badge" in js_content
