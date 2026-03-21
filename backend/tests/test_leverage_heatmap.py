@@ -322,7 +322,7 @@ def test_html_card_present():
     html_path = os.path.join(_ROOT, "frontend", "index.html")
     with open(html_path, encoding="utf-8") as f:
         content = f.read()
-    assert "card-leverage-heatmap" in content
+    assert "card-leverage-ratio-heatmap" in content
 
 
 def test_html_badge_present():
@@ -343,11 +343,11 @@ def test_js_render_function_present():
     js_path = os.path.join(_ROOT, "frontend", "app.js")
     with open(js_path, encoding="utf-8") as f:
         content = f.read()
-    assert "renderLeverageHeatmap" in content
+    assert "renderLeverageRatioHeatmap" in content
 
 
 def test_js_wired_into_refresh():
     js_path = os.path.join(_ROOT, "frontend", "app.js")
     with open(js_path, encoding="utf-8") as f:
         content = f.read()
-    assert "safe(renderLeverageHeatmap)" in content
+    assert "safe(renderLeverageRatioHeatmap)" in content
