@@ -6371,6 +6371,7 @@ async function renderActiveAddresses() {
     <div style="font-size:10px;color:var(--muted)">
       growth: <b style="color:${growthCol}">${growthStr}</b>
       &nbsp;·&nbsp; 30 daily points
+      &nbsp;·&nbsp; <span title="Placeholder: deterministic mock data (seed 20260326). Will be replaced with real on-chain data when self-hosted nodes are available.">⚠️ mock</span>
     </div>`;
 
   if (badge) {

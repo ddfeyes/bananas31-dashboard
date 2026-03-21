@@ -13700,7 +13700,11 @@ async def compute_active_addresses() -> list:
         count       — daily active address count (int)
         growth_rate — % change from previous day (float, 0.0 for day 1)
 
-    Uses deterministic RNG seeded with 20260326 for reproducibility.
+    NOTE: Placeholder implementation using deterministic mock data (seed 20260326).
+    Real on-chain active addresses for BANANAS31/COS/DEXE/LYN do not exist (CEX perp pairs).
+    This serves as a macro BTC/ETH network health indicator proxy.
+    Replace with Coin Metrics Community API (assets=btc&metrics=AdrActCnt) when
+    self-hosted nodes are available.
     """
     _rng = _rng_aa.Random(20260326)
     _today = _dt_aa.date(2026, 3, 20)
