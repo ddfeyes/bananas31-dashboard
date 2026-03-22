@@ -7281,6 +7281,7 @@ def _gf_moving_average(values: list, window: int) -> list:
 
 async def compute_gas_fee_predictor() -> dict:
     import random  # noqa: PLC0415
+    import datetime  # noqa: PLC0415
     """
     Gas Fee Predictor — EIP-1559 base fee trend, priority fee percentiles,
     next-block estimate, and spike detection.
