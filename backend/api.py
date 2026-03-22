@@ -136,6 +136,9 @@ from metrics import (
     compute_volatility_regime_forecast,
     compute_stablecoin_dominance_signal,
     compute_active_addresses,
+    compute_defi_tvl_tracker,
+    compute_gas_fee_predictor,
+    compute_validator_activity,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
