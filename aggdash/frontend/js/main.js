@@ -3,7 +3,7 @@
  * Handles state, polling, chart updates, header stats
  */
 
-const TF_SECS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
+// TF_SECS is defined in api.js (shared)
 const POLL_FAST_MS = 2000;   // prices, liquidations
 const POLL_SLOW_MS = 10000;  // series charts, OI, funding
 
@@ -246,8 +246,13 @@ function buildOHLCV(ticks, intervalSecs, windowSecs) {
   return Object.values(bars).sort((a, b) => a.timestamp - b.timestamp);
 }
 
-// Bootstrap on DOM ready
-document.addEventListener('DOMContentLoaded', () => {
+// Bootstrap on DOM ready (handle case where DOMContentLoaded already fired)
+function _initDashboard() {
   window.dashboard = new Dashboard();
   window.dashboard.init();
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initDashboard);
+} else {
+  _initDashboard();
+}
