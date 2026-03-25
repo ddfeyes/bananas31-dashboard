@@ -1,0 +1,32 @@
+fragment_id: L3-013-aggdash
+project: aggdash
+status: WORKING
+current_module: 1
+started: "2026-03-25"
+
+modules:
+  - id: 1
+    name: Backend collectors
+    status: PENDING
+    notes: ""
+  - id: 2
+    name: Core analytics engine
+    status: PENDING
+    notes: ""
+  - id: 3
+    name: Frontend charts
+    status: PENDING
+    notes: ""
+  - id: 4
+    name: Alerts
+    status: PENDING
+    notes: ""
+  - id: 5
+    name: Docker + deploy
+    status: PENDING
+    notes: ""
+
+repo: github.com/ddfeyes/aggdash
+deploy_url: https://aggdash.111miniapp.com
+last_activity: "2026-03-25T15:14:00Z"
+blockers: []
