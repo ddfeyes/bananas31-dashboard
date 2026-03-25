@@ -28,7 +28,8 @@ class SignalEngine:
     """Compute real-time signals from analytics snapshot."""
 
     def __init__(self, ring_buffer=None):
-        self.ring_buffer = ring_buffer
+        # ring_buffer reserved for future tick-level signal logic (e.g. CVD divergence)
+        self._ring_buffer = ring_buffer
         self._start_time = time.time()
 
     def _has_enough_data(self) -> bool:
@@ -50,28 +51,28 @@ class SignalEngine:
             if sig:
                 signals.append(sig)
         except Exception as e:
-            logger.debug("squeeze_risk error: %s", e)
+            logger.warning("squeeze_risk error: %s", e)
 
         try:
             sig = self._arb_opportunity(snapshot)
             if sig:
                 signals.append(sig)
         except Exception as e:
-            logger.debug("arb_opportunity error: %s", e)
+            logger.warning("arb_opportunity error: %s", e)
 
         try:
             sig = self._oi_accumulation(snapshot)
             if sig:
                 signals.append(sig)
         except Exception as e:
-            logger.debug("oi_accumulation error: %s", e)
+            logger.warning("oi_accumulation error: %s", e)
 
         try:
             sig = self._deleveraging(snapshot)
             if sig:
                 signals.append(sig)
         except Exception as e:
-            logger.debug("deleveraging error: %s", e)
+            logger.warning("deleveraging error: %s", e)
 
         return signals
 
@@ -154,13 +155,15 @@ class SignalEngine:
         # Price change: use basis trend as proxy (flat spot price)
         price_delta_pct = _extract_price_delta(basis_data)
 
+        # Require price data — without it we can't confirm "flat" condition
+        if price_delta_pct is None:
+            return None
+
         if oi_delta_pct > OI_ACCUMULATION_THRESHOLD:
-            price_info = ""
-            if price_delta_pct is not None:
-                is_flat = abs(price_delta_pct) < PRICE_FLAT_THRESHOLD
-                if not is_flat:
-                    return None  # price moving, not pure accumulation
-                price_info = f", price flat ({price_delta_pct*100:.2f}%)"
+            is_flat = abs(price_delta_pct) < PRICE_FLAT_THRESHOLD
+            if not is_flat:
+                return None  # price moving, not pure accumulation
+            price_info = f", price flat ({price_delta_pct*100:.2f}%)"
 
             return {
                 "id": "oi_accumulation",

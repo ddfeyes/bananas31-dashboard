@@ -85,6 +85,20 @@ def test_arb_no_fire_small_deviation():
     assert "arb_opportunity" not in ids
 
 
+def test_oi_accumulation_no_fire_without_price_data():
+    """OI accumulation does NOT fire when price data is absent (spec requirement)."""
+    engine = make_engine()
+    snap = {
+        "basis": {},  # no spot_price_change_pct
+        "funding": {},
+        "dex_cex_spread": {},
+        "oi_delta": {"total_delta_pct": 0.08},  # 8% OI spike
+    }
+    sigs = engine.compute_signals(snap)
+    ids = [s["id"] for s in sigs]
+    assert "oi_accumulation" not in ids, "Must not fire without price data"
+
+
 def test_oi_accumulation_fires_flat_price():
     """OI accumulation fires when OI spike + price flat."""
     engine = make_engine()

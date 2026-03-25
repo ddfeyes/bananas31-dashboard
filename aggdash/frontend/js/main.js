@@ -95,16 +95,14 @@ class Dashboard {
   }
 
   async fastPoll() {
-    const [prices, aggPrices, liqs, signals] = await Promise.all([
+    const [prices, aggPrices, liqs] = await Promise.all([
       window.api.getPrices(),
       window.api.getAggPrices(),
       window.api.getLiquidations(50),
-      window.api.getSignals(),
     ]);
 
-    if (prices)  this.updateHeaderPrices(prices, aggPrices);
-    if (liqs)    this.feed.update(liqs);
-    if (signals) this.updateSignalsBanner(signals);
+    if (prices) this.updateHeaderPrices(prices, aggPrices);
+    if (liqs)   this.feed.update(liqs);
   }
 
   updateSignalsBanner(data) {
@@ -113,26 +111,44 @@ class Dashboard {
     const sigs = data.signals || [];
     if (sigs.length === 0) {
       banner.classList.add('hidden');
+      banner.textContent = '';
       return;
     }
     banner.classList.remove('hidden');
-    banner.innerHTML = '<span class="signals-banner-label">⚡ Signals</span>' +
-      sigs.map(s =>
-        `<span class="signal-item ${s.severity}"><span class="signal-dot"></span>${s.name}: ${s.message}</span>`
-      ).join('');
+    // Build DOM nodes to avoid innerHTML injection from API content
+    banner.textContent = '';
+    const label = document.createElement('span');
+    label.className = 'signals-banner-label';
+    label.textContent = '⚡ Signals';
+    banner.appendChild(label);
+    for (const s of sigs) {
+      const item = document.createElement('span');
+      // severity is constrained to info/warning/alert by API schema
+      const safeClass = ['info', 'warning', 'alert'].includes(s.severity) ? s.severity : 'info';
+      item.className = 'signal-item ' + safeClass;
+      const dot = document.createElement('span');
+      dot.className = 'signal-dot';
+      item.appendChild(dot);
+      // name and message are set as textContent (no HTML injection)
+      item.appendChild(document.createTextNode(
+        String(s.name || '').slice(0, 64) + ': ' + String(s.message || '').slice(0, 128)
+      ));
+      banner.appendChild(item);
+    }
   }
 
   async slowPoll() {
     const windowSecs = TF_SECS[this.timeframe] * 12; // 12x timeframe window
     const intervalSecs = TF_SECS[this.timeframe];
 
-    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi] = await Promise.all([
+    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi, signals] = await Promise.all([
       window.api.getBasisSeries(intervalSecs, windowSecs),
       window.api.getCVDSeries(intervalSecs, windowSecs),
       window.api.getDexCexSpreadSeries(intervalSecs, windowSecs),
       window.api.getOIDeltaSeries(windowSecs),
       window.api.getFundingSummary(),
       window.api.getOI(),
+      window.api.getSignals(),
     ]);
 
     if (basisSeries)  this.charts.basis.update(basisSeries);
@@ -140,6 +156,7 @@ class Dashboard {
     if (spreadSeries) this.charts.spread.update(spreadSeries);
     if (oiDeltaSeries) this.charts.oi.update(oiDeltaSeries);
     if (funding)      this.fundingPanel.update(funding);
+    if (signals)      this.updateSignalsBanner(signals);
 
     // Update header stats from OI / funding
     if (oi)      this.updateOIStats(oi);
