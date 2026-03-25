@@ -3,7 +3,8 @@
  * Polls backend REST endpoints and caches data for charts.
  */
 
-const API_BASE = window.location.protocol + '//' + window.location.hostname + ':8000';
+// Use relative URLs so the nginx frontend proxy handles routing (works behind any reverse proxy)
+const API_BASE = '';
 
 // Timeframe → seconds
 const TF_SECS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
@@ -52,6 +53,10 @@ class AggdashAPI {
   async getOI() { return this.get('/api/oi'); }
   async getFunding() { return this.get('/api/funding'); }
   async getLiquidations(limit = 50) { return this.get(`/api/liquidations?limit=${limit}`); }
+
+  // DEX
+  async getDex() { return this.get('/api/dex'); }
+  async getDexHistory(limit = 100) { return this.get(`/api/dex/history?limit=${limit}`); }
 
   // Analytics
   async getSnapshot() { return this.get('/api/analytics/snapshot'); }
