@@ -24,12 +24,45 @@ from collectors import (
 from analytics_engine import AnalyticsEngine
 from signals import SignalEngine
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# Configure structured JSON logging
+import json
+from pythonjsonlogger import jsonlogger
+
+_log_handler = logging.StreamHandler()
+_formatter = jsonlogger.JsonFormatter(
+    fmt='%(asctime)s %(name)s %(levelname)s %(message)s',
+    datefmt='%Y-%m-%dT%H:%M:%S',
+    rename_fields={'asctime': 'timestamp', 'name': 'logger', 'levelname': 'level'},
 )
+_log_handler.setFormatter(_formatter)
+logging.root.setLevel(getattr(logging, LOG_LEVEL))
+logging.root.handlers = [_log_handler]
 logger = logging.getLogger(__name__)
+
+# Uvicorn log config for JSON output
+UVICORN_LOG_CONFIG = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'json': {
+            '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
+            'fmt': '%(asctime)s %(name)s %(levelname)s %(message)s',
+            'rename_fields': {'asctime': 'timestamp', 'name': 'logger', 'levelname': 'level'},
+        }
+    },
+    'handlers': {
+        'default': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'json',
+            'stream': 'ext://sys.stdout',
+        }
+    },
+    'loggers': {
+        'uvicorn': {'handlers': ['default'], 'level': 'INFO', 'propagate': False},
+        'uvicorn.error': {'handlers': ['default'], 'level': 'INFO', 'propagate': False},
+        'uvicorn.access': {'handlers': ['default'], 'level': 'INFO', 'propagate': False},
+    },
+}
 
 # Global state
 ring_buffer: RingBuffer = None
@@ -394,4 +427,4 @@ if __name__ == "__main__":
     import uvicorn
 
     logger.info("Starting server on %s:%d", API_HOST, API_PORT)
-    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1)
+    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)

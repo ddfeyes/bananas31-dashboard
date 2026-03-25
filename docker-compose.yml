@@ -1,4 +1,15 @@
 services:
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: aggdash-autoheal
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=60
+      - AUTOHEAL_START_PERIOD=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
   aggdash-backend:
     build:
       context: ./aggdash/backend
@@ -16,6 +27,11 @@ services:
       - BSC_WSS_RPC=${BSC_WSS_RPC:-wss://bsc-mainnet.nodereal.io/ws/v1/4138a0b4c2044d54aca77d92d0bc7947}
       - BSC_POOL=${BSC_POOL:-0x7f51bbf34156ba802deb0e38b7671dc4fa32041d}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8768/health')"]
       interval: 30s
@@ -32,6 +48,11 @@ services:
     volumes:
       - ./aggdash/frontend:/usr/share/nginx/html:ro
       - ./aggdash/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
     depends_on:
       - aggdash-backend
 
