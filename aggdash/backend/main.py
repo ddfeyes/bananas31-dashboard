@@ -1,13 +1,12 @@
 """Main FastAPI application for aggdash backend."""
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS
@@ -42,28 +41,28 @@ oi_funding_poller: OIFundingPoller = None
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
     global ring_buffer, ohlcv_aggregator, analytics_engine, collectors, oi_funding_poller
-    
+
     logger.info("Starting up aggdash backend...")
-    
+
     # Initialize database
     init_db()
     logger.info("Database initialized")
-    
+
     # Initialize ring buffer and aggregator
     ring_buffer = RingBuffer()
     ohlcv_aggregator = OHLCVAggregator(ring_buffer, OHLCV_INTERVAL_SECS)
     # Analytics engine wired in after oi_funding_poller is created
-    
+
     # Create callbacks
     async def on_tick(tick):
         """Callback for new tick."""
         await ring_buffer.add_tick(tick)
         await ohlcv_aggregator.process_tick(tick)
-    
+
     async def on_liquidation(liq):
         """Callback for liquidation."""
         logger.debug("Liquidation: %s", liq)
-    
+
     # Initialize collectors
     collectors = [
         BinancePerpCollector(on_tick, on_liquidation),
@@ -72,7 +71,7 @@ async def lifespan(app: FastAPI):
         BybitSpotCollector(on_tick),
         BSCPancakeSwapCollector(on_tick),
     ]
-    
+
     # Initialize OI + Funding poller
     oi_funding_poller = OIFundingPoller(oi_interval_secs=30, funding_interval_secs=60)
 
@@ -83,9 +82,9 @@ async def lifespan(app: FastAPI):
     _orig_poll_oi = oi_funding_poller._poll_oi if hasattr(oi_funding_poller, '_poll_oi') else None
 
     # Start all collectors
-    collector_tasks = [asyncio.create_task(c.start()) for c in collectors]
-    oi_funding_task = asyncio.create_task(oi_funding_poller.start())
-    
+    [asyncio.create_task(c.start()) for c in collectors]
+    asyncio.create_task(oi_funding_poller.start())
+
     # Start OHLCV flush task
     async def flush_ohlcv_periodically():
         while True:
@@ -94,19 +93,19 @@ async def lifespan(app: FastAPI):
                 await ohlcv_aggregator.flush_incomplete_bars()
             except Exception as e:
                 logger.error("Error flushing OHLCV: %s", e)
-    
-    flush_task = asyncio.create_task(flush_ohlcv_periodically())
-    
+
+    asyncio.create_task(flush_ohlcv_periodically())
+
     logger.info("All collectors started")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down...")
     for c in collectors:
         await c.stop()
     await oi_funding_poller.stop()
-    
+
     await asyncio.sleep(1)  # Allow graceful shutdown
     logger.info("Shutdown complete")
 
@@ -141,12 +140,12 @@ async def health():
 async def get_prices():
     """Get current prices from all sources."""
     prices = {}
-    
+
     for source in ["binance-spot", "binance-perp", "bybit-spot", "bybit-perp", "bsc-pancakeswap"]:
         latest = await ohlcv_aggregator.get_current_price(source)
         if latest:
             prices[source] = latest
-    
+
     return {
         "timestamp": asyncio.get_event_loop().time(),
         "prices": prices,
@@ -157,7 +156,7 @@ async def get_aggregated_prices():
     """Get aggregated prices."""
     spot_price = await ohlcv_aggregator.get_aggregated_spot_price()
     perp_price = await ohlcv_aggregator.get_aggregated_perp_price()
-    
+
     return {
         "timestamp": asyncio.get_event_loop().time(),
         "spot_price": spot_price,
@@ -328,6 +327,6 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     logger.info("Starting server on %s:%d", API_HOST, API_PORT)
     uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1)
