@@ -1,0 +1,4 @@
+aggdash/backend/__pycache__/
+aggdash/backend/tests/__pycache__/
+*.pyc
+*.db
