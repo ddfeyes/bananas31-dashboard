@@ -95,14 +95,31 @@ class Dashboard {
   }
 
   async fastPoll() {
-    const [prices, aggPrices, liqs] = await Promise.all([
+    const [prices, aggPrices, liqs, signals] = await Promise.all([
       window.api.getPrices(),
       window.api.getAggPrices(),
       window.api.getLiquidations(50),
+      window.api.getSignals(),
     ]);
 
-    if (prices) this.updateHeaderPrices(prices, aggPrices);
-    if (liqs)   this.feed.update(liqs);
+    if (prices)  this.updateHeaderPrices(prices, aggPrices);
+    if (liqs)    this.feed.update(liqs);
+    if (signals) this.updateSignalsBanner(signals);
+  }
+
+  updateSignalsBanner(data) {
+    const banner = document.getElementById('signals-banner');
+    if (!banner) return;
+    const sigs = data.signals || [];
+    if (sigs.length === 0) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.classList.remove('hidden');
+    banner.innerHTML = '<span class="signals-banner-label">⚡ Signals</span>' +
+      sigs.map(s =>
+        `<span class="signal-item ${s.severity}"><span class="signal-dot"></span>${s.name}: ${s.message}</span>`
+      ).join('');
   }
 
   async slowPoll() {

@@ -57,6 +57,7 @@ class AggdashAPI {
   // DEX
   async getDex() { return this.get('/api/dex'); }
   async getDexHistory(limit = 100) { return this.get(`/api/dex/history?limit=${limit}`); }
+  async getSignals() { return this.get('/api/signals'); }
 
   // Analytics
   async getSnapshot() { return this.get('/api/analytics/snapshot'); }

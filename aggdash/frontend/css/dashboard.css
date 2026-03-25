@@ -498,3 +498,49 @@ body {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ── Signals Banner ──────────────────────────────────────────────────── */
+.signals-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: rgba(255, 107, 43, 0.12);
+  border-bottom: 1px solid rgba(255, 107, 43, 0.3);
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.signals-banner.hidden { display: none; }
+
+.signals-banner-label {
+  color: var(--accent-orange, #ff6b2b);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.signal-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.signal-item.info    { background: rgba(0, 212, 255, 0.15); color: #00d4ff; }
+.signal-item.warning { background: rgba(255, 200, 0, 0.15); color: #ffc800; }
+.signal-item.alert   { background: rgba(255, 60, 60, 0.15);  color: #ff3c3c; }
+
+.signal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
