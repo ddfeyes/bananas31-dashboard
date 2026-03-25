@@ -289,6 +289,22 @@ def _decode_sqrt_price(hex_result: str) -> float:
     return price
 
 
+async def _fetch_bnb_price_usd() -> Optional[float]:
+    """Fetch BNB/USDT price from Binance REST (cheap, fast, reliable)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": "BNBUSDT"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                data = await resp.json()
+                return float(data["price"])
+    except Exception as exc:
+        logger.debug("BNB price fetch error: %s", exc)
+        return None
+
+
 class BSCPancakeSwapCollector:
     """Polls PancakeSwap V3 pool slot0 every 30s to get current price + liquidity.
 
@@ -385,7 +401,7 @@ class BSCPancakeSwapCollector:
             },
             {
                 "jsonrpc": "2.0", "id": 2, "method": "eth_call",
-                "params": [{"to": self.POOL_ADDR, "data": "0xab5d8943"}, "latest"],  # liquidity()
+                "params": [{"to": self.POOL_ADDR, "data": "0x1a686502"}, "latest"],  # liquidity()
             },
         ]
         async with aiohttp.ClientSession() as session:
@@ -416,7 +432,12 @@ class BSCPancakeSwapCollector:
         if sqrt_price_x96 == 0:
             return None
 
-        price = (sqrt_price_x96 / (2 ** 96)) ** 2
+        # price = WBNB per BANANAS31 (token0=BANANAS31, token1=WBNB, both 18 dec)
+        price_wbnb = (sqrt_price_x96 / (2 ** 96)) ** 2
+
+        # Convert to USD using BNB/USDT from Binance
+        bnb_usd = await _fetch_bnb_price_usd()
+        price = price_wbnb * bnb_usd if bnb_usd else price_wbnb
 
         # Parse liquidity
         liq_res = next((r for r in results if r.get("id") == 2), None)
