@@ -42,7 +42,7 @@ oi_funding_poller: OIFundingPoller = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    global ring_buffer, ohlcv_aggregator, analytics_engine, collectors, oi_funding_poller
+    global ring_buffer, ohlcv_aggregator, analytics_engine, signal_engine, collectors, oi_funding_poller
 
     logger.info("Starting up aggdash backend...")
 
