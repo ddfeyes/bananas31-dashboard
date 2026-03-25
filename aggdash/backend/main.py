@@ -22,6 +22,7 @@ from collectors import (
     OIFundingPoller,
 )
 from analytics_engine import AnalyticsEngine
+from signals_engine import run_signals_loop, get_current_signals
 
 # Configure logging
 logging.basicConfig(
@@ -95,6 +96,9 @@ async def lifespan(app: FastAPI):
                 logger.error("Error flushing OHLCV: %s", e)
 
     asyncio.create_task(flush_ohlcv_periodically())
+
+    # Start signals evaluation loop
+    asyncio.create_task(run_signals_loop())
 
     logger.info("All collectors started")
 
@@ -361,6 +365,12 @@ async def get_dex_history(limit: int = 100):
 # ── Static frontend serving ────────────────────────────────────────────
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+
+@app.get("/api/signals")
+async def get_signals():
+    """Return the current state of all market signals."""
+    return get_current_signals()
+
 
 if FRONTEND_DIR.exists():
     # Mount static assets (js, css)

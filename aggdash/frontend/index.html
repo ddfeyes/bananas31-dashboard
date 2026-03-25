@@ -240,10 +240,34 @@
     </div>
 
   </div><!-- /dashboard -->
+
+  <!-- Signals Panel -->
+  <div class="signals-panel" id="signals-panel">
+    <div class="signals-header">⚡ Market Signals</div>
+    <div class="signals-grid" id="signals-grid">
+      <div class="signal-card loading" id="sig-SQUEEZE_RISK">
+        <span class="signal-icon">🔴</span>
+        <span class="signal-label">SQUEEZE RISK</span>
+        <span class="signal-status">–</span>
+      </div>
+      <div class="signal-card loading" id="sig-ARB_OPPTY">
+        <span class="signal-icon">🟡</span>
+        <span class="signal-label">ARB OPPTY</span>
+        <span class="signal-status">–</span>
+      </div>
+      <div class="signal-card loading" id="sig-OI_ACCUMULATION">
+        <span class="signal-icon">🟢</span>
+        <span class="signal-label">OI ACCUM</span>
+        <span class="signal-status">–</span>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /app -->
 
 <script src="js/api.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/main.js"></script>
+<script src="js/signals.js"></script>
 </body>
 </html>

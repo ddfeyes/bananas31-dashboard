@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS liquidations (
     price     REAL
 );
 
+CREATE TABLE IF NOT EXISTS signals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    type          TEXT NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_signals_type_ts ON signals(type, created_at);
+
 INSERT OR IGNORE INTO exchanges VALUES
     ('binance-spot',    'Binance Spot',        1),
     ('binance-perp',    'Binance Perp',        1),

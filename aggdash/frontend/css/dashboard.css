@@ -498,3 +498,71 @@ body {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ── Signals Panel (Module 4) ────────────────────────────── */
+.signals-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 12px 16px 20px;
+  padding: 12px 16px;
+}
+
+.signals-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.signals-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.signal-card {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.signal-card.loading { opacity: 0.5; }
+
+.signal-card.inactive {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.signal-card.active {
+  opacity: 1;
+  filter: none;
+}
+
+.signal-icon { font-size: 18px; }
+
+.signal-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.signal-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  text-align: center;
+  word-break: break-all;
+}
