@@ -3,7 +3,7 @@
  * Handles state, polling, chart updates, header stats
  */
 
-const TF_SECS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
+// TF_SECS is defined in api.js (shared)
 const POLL_FAST_MS = 2000;   // prices, liquidations
 const POLL_SLOW_MS = 10000;  // series charts, OI, funding
 
@@ -105,17 +105,50 @@ class Dashboard {
     if (liqs)   this.feed.update(liqs);
   }
 
+  updateSignalsBanner(data) {
+    const banner = document.getElementById('signals-banner');
+    if (!banner) return;
+    const sigs = data.signals || [];
+    if (sigs.length === 0) {
+      banner.classList.add('hidden');
+      banner.textContent = '';
+      return;
+    }
+    banner.classList.remove('hidden');
+    // Build DOM nodes to avoid innerHTML injection from API content
+    banner.textContent = '';
+    const label = document.createElement('span');
+    label.className = 'signals-banner-label';
+    label.textContent = '⚡ Signals';
+    banner.appendChild(label);
+    for (const s of sigs) {
+      const item = document.createElement('span');
+      // severity is constrained to info/warning/alert by API schema
+      const safeClass = ['info', 'warning', 'alert'].includes(s.severity) ? s.severity : 'info';
+      item.className = 'signal-item ' + safeClass;
+      const dot = document.createElement('span');
+      dot.className = 'signal-dot';
+      item.appendChild(dot);
+      // name and message are set as textContent (no HTML injection)
+      item.appendChild(document.createTextNode(
+        String(s.name || '').slice(0, 64) + ': ' + String(s.message || '').slice(0, 128)
+      ));
+      banner.appendChild(item);
+    }
+  }
+
   async slowPoll() {
     const windowSecs = TF_SECS[this.timeframe] * 12; // 12x timeframe window
     const intervalSecs = TF_SECS[this.timeframe];
 
-    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi] = await Promise.all([
+    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi, signals] = await Promise.all([
       window.api.getBasisSeries(intervalSecs, windowSecs),
       window.api.getCVDSeries(intervalSecs, windowSecs),
       window.api.getDexCexSpreadSeries(intervalSecs, windowSecs),
       window.api.getOIDeltaSeries(windowSecs),
       window.api.getFundingSummary(),
       window.api.getOI(),
+      window.api.getSignals(),
     ]);
 
     if (basisSeries)  this.charts.basis.update(basisSeries);
@@ -123,6 +156,7 @@ class Dashboard {
     if (spreadSeries) this.charts.spread.update(spreadSeries);
     if (oiDeltaSeries) this.charts.oi.update(oiDeltaSeries);
     if (funding)      this.fundingPanel.update(funding);
+    if (signals)      this.updateSignalsBanner(signals);
 
     // Update header stats from OI / funding
     if (oi)      this.updateOIStats(oi);
@@ -246,8 +280,13 @@ function buildOHLCV(ticks, intervalSecs, windowSecs) {
   return Object.values(bars).sort((a, b) => a.timestamp - b.timestamp);
 }
 
-// Bootstrap on DOM ready
-document.addEventListener('DOMContentLoaded', () => {
+// Bootstrap on DOM ready (handle case where DOMContentLoaded already fired)
+function _initDashboard() {
   window.dashboard = new Dashboard();
   window.dashboard.init();
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initDashboard);
+} else {
+  _initDashboard();
+}

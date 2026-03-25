@@ -22,6 +22,7 @@ from collectors import (
     OIFundingPoller,
 )
 from analytics_engine import AnalyticsEngine
+from signals import SignalEngine
 
 # Configure logging
 logging.basicConfig(
@@ -34,13 +35,14 @@ logger = logging.getLogger(__name__)
 ring_buffer: RingBuffer = None
 ohlcv_aggregator: OHLCVAggregator = None
 analytics_engine: AnalyticsEngine = None
+signal_engine: SignalEngine = None
 collectors: list = []
 oi_funding_poller: OIFundingPoller = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    global ring_buffer, ohlcv_aggregator, analytics_engine, collectors, oi_funding_poller
+    global ring_buffer, ohlcv_aggregator, analytics_engine, signal_engine, collectors, oi_funding_poller
 
     logger.info("Starting up aggdash backend...")
 
@@ -77,6 +79,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize analytics engine (needs ring_buffer + poller)
     analytics_engine = AnalyticsEngine(ring_buffer, oi_funding_poller)
+    signal_engine = SignalEngine(ring_buffer)
 
     # Wire OI updates into analytics engine for delta tracking
     _orig_poll_oi = oi_funding_poller._poll_oi if hasattr(oi_funding_poller, '_poll_oi') else None
@@ -356,6 +359,16 @@ async def get_dex_history(limit: int = 100):
     finally:
         conn.close()
     return {"count": len(rows), "history": rows}
+
+
+@app.get("/api/signals")
+async def get_signals():
+    """Get active real-time signals (squeeze risk, arb, OI accumulation, deleveraging)."""
+    if analytics_engine is None or signal_engine is None:
+        return {"timestamp": 0, "signals": [], "count": 0}
+    snap = await analytics_engine.snapshot()
+    sigs = signal_engine.compute_signals(snap)
+    return {"timestamp": snap.get("timestamp", 0), "signals": sigs, "count": len(sigs)}
 
 
 # ── Static frontend serving ────────────────────────────────────────────
