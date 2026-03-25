@@ -1,11 +1,14 @@
 """Main FastAPI application for aggdash backend."""
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS
 from db import init_db
@@ -302,6 +305,25 @@ async def get_oi_delta_series(window_secs: int = 3600):
 async def get_funding_summary():
     """Aggregated funding rate summary."""
     return await analytics_engine.get_funding_summary()
+
+
+# ── Static frontend serving ────────────────────────────────────────────
+
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+
+if FRONTEND_DIR.exists():
+    # Mount static assets (js, css)
+    app.mount("/js", StaticFiles(directory=str(FRONTEND_DIR / "js")), name="js")
+    app.mount("/css", StaticFiles(directory=str(FRONTEND_DIR / "css")), name="css")
+
+    @app.get("/")
+    async def serve_index():
+        """Serve the dashboard frontend."""
+        return FileResponse(str(FRONTEND_DIR / "index.html"))
+else:
+    @app.get("/")
+    async def serve_index_placeholder():
+        return {"message": "aggdash backend running. Frontend not found."}
 
 
 if __name__ == "__main__":
