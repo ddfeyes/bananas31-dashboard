@@ -290,22 +290,53 @@ def _decode_sqrt_price(hex_result: str) -> float:
 
 
 class BSCPancakeSwapCollector:
-    """Polls PancakeSwap V3 pool slot0 every 30s to get current price."""
+    """Polls PancakeSwap V3 pool slot0 every 30s to get current price + liquidity.
+
+    Also writes to dex_price table with deviation_pct relative to CEX spot average.
+    Falls back to The Graph subgraph if RPC fails.
+    """
 
     POLL_INTERVAL = 30  # seconds
+    SUBGRAPH_URL = (
+        "https://proxy-worker.pancake-swap.workers.dev/bsc-exchange"
+    )
+    SUBGRAPH_FALLBACK_URL = (
+        "https://api.thegraph.com/subgraphs/name/pancakeswap/exchange-v3-bsc"
+    )
+    POOL_ADDR = BSC_POOL
 
-    def __init__(self, on_tick: Callable) -> None:
+    def __init__(self, on_tick: Callable, get_cex_spot: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
+        self._get_cex_spot = get_cex_spot  # optional callback to get CEX spot avg
         self._stop = asyncio.Event()
         self.running = False
+        self.last_price: Optional[float] = None
+        self.last_liquidity: Optional[int] = None
 
     async def start(self) -> None:
         self.running = True
         logger.info("BSCPancakeSwap poller started (poll every %ds)", self.POLL_INTERVAL)
         while not self._stop.is_set():
             try:
-                price = await self._fetch_price()
-                if price is not None and price > 0:
+                result = await self._fetch_slot0()
+                if result:
+                    price, liquidity = result
+                    self.last_price = price
+                    self.last_liquidity = liquidity
+
+                    # Calculate deviation from CEX spot avg if available
+                    deviation_pct = None
+                    if self._get_cex_spot:
+                        try:
+                            cex_spot = await self._get_cex_spot()
+                            if cex_spot and cex_spot > 0:
+                                deviation_pct = (price - cex_spot) / cex_spot * 100
+                        except Exception:
+                            pass
+
+                    # Write to dex_price table
+                    self._persist_dex_price(price, liquidity, deviation_pct)
+
                     tick = Tick(
                         source="bsc-pancakeswap",
                         price=price,
@@ -314,7 +345,26 @@ class BSCPancakeSwapCollector:
                         timestamp=time.time(),
                     )
                     await self._on_tick(tick)
-                    logger.debug("BSC price: %.8f", price)
+                    logger.debug(
+                        "BSC price: %.8f liquidity: %s dev: %s%%",
+                        price, liquidity, f"{deviation_pct:.4f}" if deviation_pct is not None else "N/A",
+                    )
+                else:
+                    # RPC failed — try subgraph fallback
+                    fallback_price = await self._fetch_subgraph_price()
+                    if fallback_price:
+                        self.last_price = fallback_price
+                        self._persist_dex_price(fallback_price, None, None)
+                        tick = Tick(
+                            source="bsc-pancakeswap",
+                            price=fallback_price,
+                            volume=0.0,
+                            is_buy=True,
+                            timestamp=time.time(),
+                        )
+                        await self._on_tick(tick)
+                        logger.info("BSC fallback (subgraph) price: %.8f", fallback_price)
+
             except Exception as exc:
                 logger.warning("BSCPancakeSwap poll error: %s", exc)
 
@@ -325,31 +375,40 @@ class BSCPancakeSwapCollector:
 
         self.running = False
 
-    async def _fetch_price(self) -> Optional[float]:
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_call",
-            "params": [
-                {"to": BSC_POOL, "data": SLOT0_SELECTOR},
-                "latest",
-            ],
-        }
+    async def _fetch_slot0(self) -> Optional[tuple]:
+        """Fetch slot0 + liquidity from PancakeSwap V3 pool. Returns (price, liquidity) or None."""
+        # Call slot0() and liquidity() in one batch
+        batch = [
+            {
+                "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                "params": [{"to": self.POOL_ADDR, "data": SLOT0_SELECTOR}, "latest"],
+            },
+            {
+                "jsonrpc": "2.0", "id": 2, "method": "eth_call",
+                "params": [{"to": self.POOL_ADDR, "data": "0xab5d8943"}, "latest"],  # liquidity()
+            },
+        ]
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 BSC_HTTP_RPC,
-                json=payload,
+                json=batch,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
-                data = await resp.json()
+                results = await resp.json()
 
-        result = data.get("result", "0x")
-        if not result or result == "0x":
+        if not isinstance(results, list) or len(results) < 1:
             return None
 
-        # slot0 returns (sqrtPriceX96 uint160, tick int24, ...)
-        # ABI-encoded: each word is 32 bytes, first word = sqrtPriceX96 (right-padded to 32 bytes)
-        hex_data = result[2:] if result.startswith("0x") else result
+        # Parse slot0
+        slot0_res = next((r for r in results if r.get("id") == 1), None)
+        if not slot0_res:
+            return None
+
+        hex_data = slot0_res.get("result", "0x")
+        if not hex_data or hex_data == "0x":
+            return None
+
+        hex_data = hex_data[2:] if hex_data.startswith("0x") else hex_data
         if len(hex_data) < 64:
             return None
 
@@ -358,9 +417,64 @@ class BSCPancakeSwapCollector:
             return None
 
         price = (sqrt_price_x96 / (2 ** 96)) ** 2
-        # PancakeSwap V3: token0=BANANAS31 (18 dec), token1=BUSD/WBNB (18 dec)
-        # price = token1/token0 (i.e. BUSD per BANANAS31) — no decimal adjustment needed for same decimals
-        return price
+
+        # Parse liquidity
+        liq_res = next((r for r in results if r.get("id") == 2), None)
+        liquidity = None
+        if liq_res:
+            liq_hex = liq_res.get("result", "0x")
+            if liq_hex and liq_hex != "0x":
+                liq_hex = liq_hex[2:] if liq_hex.startswith("0x") else liq_hex
+                if liq_hex:
+                    liquidity = int(liq_hex, 16)
+
+        return price, liquidity
+
+    async def _fetch_subgraph_price(self) -> Optional[float]:
+        """Fallback: get price from The Graph subgraph for PancakeSwap V3."""
+        query = {
+            "query": """
+            {
+              pool(id: "%s") {
+                token0Price
+                token1Price
+                liquidity
+              }
+            }
+            """ % self.POOL_ADDR.lower()
+        }
+        for url in [self.SUBGRAPH_URL, self.SUBGRAPH_FALLBACK_URL]:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url,
+                        json=query,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        data = await resp.json()
+                pool = data.get("data", {}).get("pool")
+                if pool:
+                    # token0Price = price of token0 in terms of token1 (BANANAS31/BUSD)
+                    price = float(pool.get("token0Price", 0))
+                    if price > 0:
+                        return price
+            except Exception as exc:
+                logger.debug("Subgraph %s error: %s", url, exc)
+        return None
+
+    def _persist_dex_price(
+        self, price: float, liquidity: Optional[int], deviation_pct: Optional[float]
+    ) -> None:
+        try:
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO dex_price(timestamp,price,liquidity,deviation_pct) VALUES(?,?,?,?)",
+                (time.time(), price, float(liquidity) if liquidity is not None else None, deviation_pct),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            logger.error("Persist dex_price error: %s", exc)
 
     async def stop(self) -> None:
         self._stop.set()

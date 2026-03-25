@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS
-from db import init_db
+from db import init_db, get_db
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
 from collectors import (
@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
         BinanceSpotCollector(on_tick),
         BybitPerpCollector(on_tick, on_liquidation),
         BybitSpotCollector(on_tick),
-        BSCPancakeSwapCollector(on_tick),
+        BSCPancakeSwapCollector(on_tick, get_cex_spot=ohlcv_aggregator.get_aggregated_spot_price),
     ]
 
     # Initialize OI + Funding poller
@@ -304,6 +304,58 @@ async def get_oi_delta_series(window_secs: int = 3600):
 async def get_funding_summary():
     """Aggregated funding rate summary."""
     return await analytics_engine.get_funding_summary()
+
+
+@app.get("/api/dex")
+async def get_dex():
+    """Get latest DEX price, liquidity, and deviation from CEX spot."""
+    # Latest from ring buffer
+    bsc_collector = next(
+        (c for c in collectors if c.__class__.__name__ == "BSCPancakeSwapCollector"), None
+    )
+    last_price = bsc_collector.last_price if bsc_collector else None
+    last_liquidity = bsc_collector.last_liquidity if bsc_collector else None
+
+    # Latest from DB
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT timestamp, price, liquidity, deviation_pct FROM dex_price ORDER BY timestamp DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    cex_spot = await ohlcv_aggregator.get_aggregated_spot_price()
+    deviation_pct = None
+    if last_price and cex_spot and cex_spot > 0:
+        deviation_pct = (last_price - cex_spot) / cex_spot * 100
+
+    return {
+        "timestamp": asyncio.get_event_loop().time(),
+        "dex_price": last_price,
+        "liquidity": last_liquidity,
+        "cex_spot_avg": cex_spot,
+        "deviation_pct": deviation_pct,
+        "last_db_record": dict(row) if row else None,
+    }
+
+
+@app.get("/api/dex/history")
+async def get_dex_history(limit: int = 100):
+    """Get DEX price history from dex_price table."""
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT timestamp, price, liquidity, deviation_pct FROM dex_price ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+    return {"count": len(rows), "history": rows}
 
 
 # ── Static frontend serving ────────────────────────────────────────────
