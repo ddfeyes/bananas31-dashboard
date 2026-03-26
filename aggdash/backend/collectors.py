@@ -358,6 +358,7 @@ class BSCPancakeSwapCollector:
 
     Also writes to dex_price table with deviation_pct relative to CEX spot average.
     Falls back to The Graph subgraph if RPC fails.
+    Collects real swap volume via eth_getLogs on PancakeSwap V3 Swap events.
     """
 
     POLL_INTERVAL = 30  # seconds
@@ -368,6 +369,11 @@ class BSCPancakeSwapCollector:
         "https://api.thegraph.com/subgraphs/name/pancakeswap/exchange-v3-bsc"
     )
     POOL_ADDR = BSC_POOL
+    # PancakeSwap V3 Swap event topic0 (different from Uniswap V3)
+    # keccak256("Swap(address,address,int256,int256,uint160,int24,uint128,uint128)")
+    PCS_V3_SWAP_TOPIC = "0x19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83"
+    # BANANAS31 token decimals (BEP-20 standard = 18)
+    TOKEN0_DECIMALS = 18
 
     def __init__(self, on_tick: Callable, get_cex_spot: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
@@ -378,6 +384,7 @@ class BSCPancakeSwapCollector:
         self.last_liquidity: Optional[int] = None
         self.last_sqrt_price_x96: Optional[int] = None  # for liquidity_usd calc (#15)
         self.last_bnb_usd: Optional[float] = None
+        self._last_log_block: Optional[int] = None  # last block scanned for swap events
 
     async def start(self) -> None:
         self.running = True
@@ -399,6 +406,9 @@ class BSCPancakeSwapCollector:
                     self.last_price = price
                     self.last_liquidity = liquidity
 
+                    # Fetch real swap volume since last poll (~30s window, ~10 blocks)
+                    swap_volume_token0 = await self._fetch_swap_volume_since_last()
+
                     # Calculate deviation from CEX spot avg if available
                     deviation_pct = None
                     if self._get_cex_spot:
@@ -415,14 +425,16 @@ class BSCPancakeSwapCollector:
                     tick = Tick(
                         source="bsc-pancakeswap",
                         price=price,
-                        volume=0.0,
+                        volume=swap_volume_token0,  # real volume in BANANAS31 tokens
                         is_buy=True,
                         timestamp=time.time(),
                     )
                     await self._on_tick(tick)
                     logger.debug(
-                        "BSC price: %.8f liquidity: %s dev: %s%%",
-                        price, liquidity, f"{deviation_pct:.4f}" if deviation_pct is not None else "N/A",
+                        "BSC price: %.8f liquidity: %s dev: %s%% vol_token0: %.2f",
+                        price, liquidity,
+                        f"{deviation_pct:.4f}" if deviation_pct is not None else "N/A",
+                        swap_volume_token0,
                     )
                 else:
                     # RPC failed — try subgraph fallback
@@ -449,6 +461,73 @@ class BSCPancakeSwapCollector:
                 pass
 
         self.running = False
+
+    async def _fetch_swap_volume_since_last(self) -> float:
+        """Fetch real swap volume (BANANAS31 token0 units) since last poll via eth_getLogs.
+
+        Scans Swap events in blocks since self._last_log_block (or last ~10 blocks if first poll).
+        Returns total absolute token0 amount across all swaps.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Get latest block number
+                async with session.post(
+                    BSC_HTTP_RPC,
+                    json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    data = await resp.json()
+                latest_block = int(data["result"], 16)
+
+                # From block: last scanned +1, or fallback to ~10 blocks back
+                from_block = (self._last_log_block + 1) if self._last_log_block else (latest_block - 10)
+                from_block = max(from_block, latest_block - 200)  # cap at 200 blocks (~10min)
+
+                # eth_getLogs for PCS V3 Swap events in this window
+                async with session.post(
+                    BSC_HTTP_RPC,
+                    json={
+                        "jsonrpc": "2.0", "id": 2, "method": "eth_getLogs",
+                        "params": [{
+                            "address": self.POOL_ADDR,
+                            "topics": [self.PCS_V3_SWAP_TOPIC],
+                            "fromBlock": hex(from_block),
+                            "toBlock": hex(latest_block),
+                        }],
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    log_data = await resp.json()
+
+            self._last_log_block = latest_block
+
+            logs = log_data.get("result", [])
+            if not logs or "error" in log_data:
+                return 0.0
+
+            total_volume = 0.0
+            for log in logs:
+                # PCS V3 Swap data layout (non-indexed):
+                # [0:64]   amount0 (int256, token0 = BANANAS31)
+                # [64:128] amount1 (int256, token1 = WBNB)
+                # remaining: sqrtPriceX96, tick, protocolFees...
+                raw = log.get("data", "0x")[2:]
+                if len(raw) < 128:
+                    continue
+                amount0_hex = raw[0:64]
+                v = int(amount0_hex, 16)
+                # int256: if >= 2^255 it's negative (two's complement)
+                if v >= 2 ** 255:
+                    v -= 2 ** 256
+                # Volume = absolute amount0, normalized by 18 decimals
+                total_volume += abs(v) / (10 ** self.TOKEN0_DECIMALS)
+
+            logger.debug("DEX swap volume (token0, blocks %d-%d): %.2f", from_block, latest_block, total_volume)
+            return total_volume
+
+        except Exception as exc:
+            logger.debug("DEX swap volume fetch error: %s", exc)
+            return 0.0
 
     async def _fetch_slot0(self) -> Optional[tuple]:
         """Fetch slot0 + liquidity from PancakeSwap V3 pool. Returns (price, liquidity) or None."""
