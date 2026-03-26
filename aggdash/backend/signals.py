@@ -88,16 +88,20 @@ class SignalEngine:
         basis_data = snapshot.get("basis", {})
         funding_data = snapshot.get("funding", {})
 
-        # Aggregated basis (perp - spot) / spot
-        agg_basis = basis_data.get("agg_basis_pct")
-        if agg_basis is None:
-            # Try to compute from raw basis value
-            agg_basis_raw = basis_data.get("agg_basis")
-            spot_price = basis_data.get("spot_price")
-            if agg_basis_raw is not None and spot_price and spot_price > 0:
-                agg_basis = agg_basis_raw / spot_price
-            else:
-                return None
+        # Aggregated basis — snapshot uses basis_data["aggregated"]["basis_pct"]
+        agg_basis_pct = None
+        aggregated = basis_data.get("aggregated", {})
+        if aggregated:
+            agg_basis_pct = aggregated.get("basis_pct")
+        # Fallback: legacy flat keys
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+        # Convert from percent (0.09%) to fraction (0.0009) for threshold comparison
+        agg_basis = agg_basis_pct / 100.0 if agg_basis_pct > 1 else agg_basis_pct / 100.0
+        # Note: basis_pct is already in % units (e.g. 0.09 means 0.09%), threshold is 2% = 0.02 fraction
+        agg_basis = agg_basis_pct / 100.0
 
         # Average funding rate across exchanges
         avg_funding = _extract_avg_funding(funding_data)
@@ -122,12 +126,14 @@ class SignalEngine:
         """
         spread_data = snapshot.get("dex_cex_spread", {})
 
-        deviation_pct = spread_data.get("deviation_pct")
+        # Snapshot uses "spread_pct" not "deviation_pct"
+        deviation_pct = spread_data.get("deviation_pct") or spread_data.get("spread_pct")
         if deviation_pct is None:
             return None
 
-        # deviation_pct is already a percentage (0.02 = 2%)
-        abs_dev = abs(deviation_pct)
+        # spread_pct is in percent units (e.g. 0.037 means 0.037%)
+        # Convert to fraction for threshold (ARB_DEVIATION_THRESHOLD = 0.01 = 1%)
+        abs_dev = abs(deviation_pct) / 100.0
 
         if abs_dev > ARB_DEVIATION_THRESHOLD:
             direction = "premium" if deviation_pct > 0 else "discount"
@@ -136,7 +142,7 @@ class SignalEngine:
                 "name": "DEX Arbitrage",
                 "severity": "warning",
                 "message": f"DEX {direction} {abs_dev*100:.2f}% vs CEX avg → arbitrage opportunity",
-                "value": deviation_pct,
+                "value": abs_dev,
                 "threshold": ARB_DEVIATION_THRESHOLD,
             }
         return None
@@ -148,22 +154,22 @@ class SignalEngine:
         oi_data = snapshot.get("oi_delta", {})
         basis_data = snapshot.get("basis", {})
 
+        # snapshot oi_delta uses aggregated.delta_pct not total_delta_pct
         oi_delta_pct = oi_data.get("total_delta_pct")
+        if oi_delta_pct is None:
+            agg = oi_data.get("aggregated", {}) or {}
+            oi_delta_pct = agg.get("delta_pct")
         if oi_delta_pct is None:
             return None
 
         # Price change: use basis trend as proxy (flat spot price)
         price_delta_pct = _extract_price_delta(basis_data)
 
-        # Require price data — without it we can't confirm "flat" condition
-        if price_delta_pct is None:
-            return None
-
         if oi_delta_pct > OI_ACCUMULATION_THRESHOLD:
-            is_flat = abs(price_delta_pct) < PRICE_FLAT_THRESHOLD
+            is_flat = price_delta_pct is None or abs(price_delta_pct) < PRICE_FLAT_THRESHOLD
             if not is_flat:
                 return None  # price moving, not pure accumulation
-            price_info = f", price flat ({price_delta_pct*100:.2f}%)"
+            price_info = f", price flat ({price_delta_pct*100:.2f}%)" if price_delta_pct is not None else ""
 
             return {
                 "id": "oi_accumulation",
@@ -183,6 +189,9 @@ class SignalEngine:
         basis_data = snapshot.get("basis", {})
 
         oi_delta_pct = oi_data.get("total_delta_pct")
+        if oi_delta_pct is None:
+            agg = oi_data.get("aggregated", {}) or {}
+            oi_delta_pct = agg.get("delta_pct")
         if oi_delta_pct is None:
             return None
 
@@ -213,20 +222,21 @@ def _extract_avg_funding(funding_data: Dict) -> Optional[float]:
     if not funding_data or "error" in funding_data:
         return None
 
-    # Try per_exchange dict
-    per_exchange = funding_data.get("per_exchange", {})
-    if per_exchange:
+    # snapshot funding uses per_source not per_exchange
+    per_source = funding_data.get("per_source") or funding_data.get("per_exchange", {})
+    if per_source:
         rates = []
-        for ex, data in per_exchange.items():
+        for ex, data in per_source.items():
             if isinstance(data, dict):
-                rate = data.get("funding_rate")
+                # rate_8h key (from OIFundingPoller)
+                rate = data.get("rate_8h") or data.get("funding_rate")
                 if rate is not None:
                     rates.append(float(rate))
         if rates:
             return sum(rates) / len(rates)
 
-    # Fallback: top-level funding_rate
-    rate = funding_data.get("funding_rate")
+    # Fallback: average_rate already computed
+    rate = funding_data.get("average_rate") or funding_data.get("funding_rate")
     if rate is not None:
         return float(rate)
 

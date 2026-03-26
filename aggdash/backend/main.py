@@ -366,6 +366,46 @@ async def get_funding_summary():
     return await analytics_engine.get_funding_summary()
 
 
+@app.get("/api/analytics/volume/series")
+async def get_volume_series(interval_secs: int = 60, window_secs: int = 3600):
+    """Volume series per exchange over a time window, bucketed by interval."""
+    from db import get_db
+    now = __import__("time").time()
+    since = now - window_secs
+    bucket = interval_secs
+
+    db = get_db()
+    exchanges = ["binance-spot", "binance-perp", "bybit-perp"]
+    result: dict = {}
+
+    for exch in exchanges:
+        rows = db.execute(
+            """
+            SELECT CAST((timestamp / ?) AS INTEGER) * ? AS ts,
+                   SUM(volume) AS vol
+            FROM price_feed
+            WHERE exchange_id = ? AND timestamp >= ?
+            GROUP BY ts
+            ORDER BY ts ASC
+            """,
+            (bucket, bucket, exch, since),
+        ).fetchall()
+        result[exch] = [{"timestamp": r[0], "volume": r[1] or 0.0} for r in rows]
+
+    return {
+        "per_exchange": result,
+        "interval_secs": interval_secs,
+        "window_secs": window_secs,
+    }
+
+
+@app.get("/api/oi/delta")
+async def get_oi_delta_snapshot():
+    """Latest OI delta: current vs 30 min ago (from snapshot)."""
+    snap = await analytics_engine.snapshot()
+    return snap.get("oi_delta", {})
+
+
 @app.get("/api/analytics/ohlcv")
 async def get_ohlcv(exchange_id: str = "binance-spot", minutes: int = 1440):
     """Get OHLCV bars from the price_feed table for a given exchange and time range."""
