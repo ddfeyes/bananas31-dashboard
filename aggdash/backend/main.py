@@ -64,6 +64,9 @@ UVICORN_LOG_CONFIG = {
     },
 }
 
+# Track application start time for uptime reporting
+_app_start_time = time.time()
+
 # Global state
 ring_buffer: RingBuffer = None
 ohlcv_aggregator: OHLCVAggregator = None
@@ -287,6 +290,55 @@ async def get_status():
         "ohlcv_bars": sum(  # fixes #16: count bars from DB, not just in-progress current_bars
             1 for _ in ohlcv_aggregator.current_bars.values()
         ) + len(getattr(ohlcv_aggregator, "_completed_bars", {})),
+    }
+
+
+# ── /api/stats — concise health + stats snapshot ──────────────────────
+
+@app.get("/api/stats")
+async def get_stats():
+    """Concise health and statistics snapshot for monitoring."""
+    rb_size = await ring_buffer.size()
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute("SELECT count(*) FROM price_feed")
+        price_feed_rows = cursor.fetchone()[0]
+        cursor.execute("SELECT count(*) FROM oi")
+        oi_rows = cursor.fetchone()[0]
+        cursor.execute("SELECT count(*) FROM liquidations")
+        liq_rows = cursor.fetchone()[0]
+        db.close()
+    except Exception:
+        price_feed_rows = oi_rows = liq_rows = -1
+
+    # Latest tick timestamp
+    all_ticks = await ring_buffer.get_ticks()
+    last_tick_ts = all_ticks[-1].timestamp if all_ticks else None
+
+    # Signal count from signal engine
+    try:
+        snapshot = await analytics_engine.snapshot()
+        active_signals = signal_engine.compute_signals(snapshot)
+        signal_count = len(active_signals)
+    except Exception:
+        signal_count = 0
+
+    return {
+        "status": "ok",
+        "uptime_secs": round(time.time() - _app_start_time),
+        "ring_buffer_size": rb_size,
+        "signal_count": signal_count,
+        "last_tick_ts": last_tick_ts,
+        "collectors": [
+            {"name": c.__class__.__name__, "running": c.running}
+            for c in collectors
+        ],
+        "db": {
+            "price_feed_rows": price_feed_rows,
+            "oi_rows": oi_rows,
+            "liquidations_rows": liq_rows,
+        },
     }
 
 
