@@ -413,6 +413,7 @@ class AnalyticsEngine:
 
         per_source: Dict[str, List[dict]] = {}
         agg_by_ts: Dict[int, float] = defaultdict(float)
+        agg_oi_by_ts: Dict[int, float] = defaultdict(float)  # absolute OI per bucket
 
         for src in ["binance-perp", "bybit-perp"]:
             history = get_latest_oi_history(src, limit=int(window_secs / 30) + 10)
@@ -433,10 +434,14 @@ class AnalyticsEngine:
                     "delta": delta,
                 })
                 agg_by_ts[bar_ts] += delta
+                agg_oi_by_ts[bar_ts] += curr["oi"]  # sum OI across exchanges
 
             per_source[src] = series
 
-        agg_series = [{"timestamp": ts, "delta": delta} for ts, delta in sorted(agg_by_ts.items())]
+        agg_series = [
+            {"timestamp": ts, "oi": agg_oi_by_ts.get(ts, 0.0), "delta": delta}
+            for ts, delta in sorted(agg_by_ts.items())
+        ]
         return {"per_source": per_source, "aggregated": agg_series, "window_secs": window_secs}
 
     # ------------------------------------------------------------------ #

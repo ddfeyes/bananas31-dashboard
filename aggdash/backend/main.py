@@ -190,7 +190,7 @@ async def get_prices():
             prices[source] = latest
 
     return {
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),
         "prices": prices,
     }
 
@@ -201,7 +201,7 @@ async def get_aggregated_prices():
     perp_price = await ohlcv_aggregator.get_aggregated_perp_price()
 
     return {
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),
         "spot_price": spot_price,
         "perp_price": perp_price,
         "basis": (perp_price - spot_price) if spot_price and perp_price else None,
@@ -232,7 +232,7 @@ async def get_oi():
     aggregated = oi_funding_poller.get_aggregated_oi()
     total = aggregated if aggregated else None
     return {
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),
         "per_source": per_source,
         "aggregated": aggregated,
         # Aliases for frontend / tests
@@ -253,7 +253,7 @@ async def get_funding():
     avg_rate = sum(rate_8h_values) / len(rate_8h_values) if rate_8h_values else None
     annualized = avg_rate * 3 * 365 * 100 if avg_rate is not None else None
     return {
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),
         "rates": rates,
         "average_rate": avg_rate,
         "annualized_pct": annualized,
@@ -441,7 +441,7 @@ async def get_dex():
         deviation_pct = (last_price - cex_spot) / cex_spot * 100
 
     return {
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),
         "dex_price": last_price,
         "liquidity": last_liquidity,
         "cex_spot_avg": cex_spot,
