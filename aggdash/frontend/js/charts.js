@@ -540,13 +540,14 @@ class FundingPanel {
 
     let html = '';
     for (const [src, info] of Object.entries(cells)) {
-      const r = info.rate;
-      const cls = r === null ? '' : (r >= 0 ? 'positive' : 'negative');
-      const annual = r !== null ? (r * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
+      const rObj = info.rate;
+      const r = rObj && typeof rObj === 'object' ? rObj.rate_8h : rObj;
+      const cls = r == null ? '' : (r >= 0 ? 'positive' : 'negative');
+      const annual = r != null ? (r * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
       html += `
         <div class="funding-cell">
           <div class="funding-exchange">${info.label}</div>
-          <div class="funding-rate ${cls}">${r !== null ? (r * 100).toFixed(4) + '%' : '–'}</div>
+          <div class="funding-rate ${cls}">${r != null ? (r * 100).toFixed(4) + '%' : '–'}</div>
           <div class="funding-annual">${annual}</div>
         </div>
       `;

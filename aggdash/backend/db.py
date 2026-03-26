@@ -1,6 +1,7 @@
 """SQLite schema and helper utilities for aggdash."""
 import logging
 import sqlite3
+import time
 from pathlib import Path
 
 from config import DB_PATH
@@ -95,3 +96,32 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_latest_ohlcv(exchange_id: str, minutes: int = 60) -> list:
+    """Return OHLCV rows for the given exchange from the last N minutes."""
+    cutoff = time.time() - minutes * 60
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            'SELECT exchange_id, timestamp, open, high, low, close, volume '
+            'FROM price_feed WHERE exchange_id = ? AND timestamp >= ? ORDER BY timestamp ASC',
+            (exchange_id, cutoff),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_latest_oi_history(exchange_id: str, limit: int = 120) -> list:
+    """Return the most recent OI rows for the given exchange."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            'SELECT exchange_id, timestamp, open_interest as oi, funding_rate '
+            'FROM oi WHERE exchange_id = ? ORDER BY timestamp DESC LIMIT ?',
+            (exchange_id, limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+    finally:
+        conn.close()

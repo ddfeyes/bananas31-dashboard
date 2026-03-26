@@ -404,6 +404,14 @@ async def get_signals():
     return {"timestamp": snap.get("timestamp", 0), "signals": sigs, "count": len(sigs)}
 
 
+@app.get("/api/analytics/ohlcv")
+async def get_ohlcv_series(exchange_id: str, minutes: int = 60):
+    """Return OHLCV bars from DB for a given exchange_id."""
+    from db import get_latest_ohlcv
+    bars = get_latest_ohlcv(exchange_id, minutes=minutes)
+    return {"exchange_id": exchange_id, "bars": bars, "count": len(bars)}
+
+
 # ── Static frontend serving ────────────────────────────────────────────
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"

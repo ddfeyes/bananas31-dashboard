@@ -448,8 +448,9 @@ class AnalyticsEngine:
             return {"error": "OI/funding poller not available"}
 
         rates = self.oi_funding_poller.get_latest_funding()
-        values = [v for v in rates.values() if v is not None]
-        avg_rate = sum(values) / len(values) if values else None
+        # rates is Dict[str, Dict] with keys rate_8h, rate_1h
+        rate_8h_values = [v['rate_8h'] for v in rates.values() if isinstance(v, dict) and v.get('rate_8h') is not None]
+        avg_rate = sum(rate_8h_values) / len(rate_8h_values) if rate_8h_values else None
         annualized = avg_rate * 3 * 365 * 100 if avg_rate is not None else None  # 3 periods/day
 
         return {

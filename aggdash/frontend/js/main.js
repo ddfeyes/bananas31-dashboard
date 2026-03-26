@@ -167,25 +167,19 @@ class Dashboard {
   }
 
   async refreshOHLCV(intervalSecs, windowSecs) {
-    // We'll query the individual price endpoints + build synthetic OHLCV from ticks
-    // For now use the ticks endpoint to build per-source OHLCV
+    // Use DB-backed OHLCV — persists across container restarts, no ring-buffer dependency
     const srcList = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bsc-pancakeswap'];
+    const minutes = Math.ceil(windowSecs / 60);
     const ohlcvBySrc = {};
 
-    for (const src of srcList) {
-      const ticks = await window.api.get(`/api/ticks?source=${encodeURIComponent(src)}`);
-      if (ticks && ticks.ticks && ticks.ticks.length) {
-        ohlcvBySrc[src] = buildOHLCV(ticks.ticks, intervalSecs, windowSecs);
-      }
-    }
+    const results = await Promise.all(
+      srcList.map(src => window.api.get(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(src)}&minutes=${minutes}`))
+    );
 
-    // Add aggregated lines from basis series
-    const basisSeries = await window.api.getBasisSeries(intervalSecs, windowSecs);
-    if (basisSeries) {
-      // Reconstruct agg-spot + agg-perp time series from basis aggregated
-      if (basisSeries.aggregated && basisSeries.aggregated.length) {
-        // We don't have raw agg OHLCV but we can use the spot price from prices endpoint
-        // So skip these for now — they'll show up as separate datasets when we have DB OHLCV
+    for (let i = 0; i < srcList.length; i++) {
+      const res = results[i];
+      if (res && res.bars && res.bars.length) {
+        ohlcvBySrc[srcList[i]] = bucketBars(res.bars, intervalSecs);
       }
     }
 
@@ -255,6 +249,25 @@ class Dashboard {
       el.className = 'stat-value ' + (avg >= 0 ? 'positive' : 'negative');
     }
   }
+}
+
+// Re-bucket DB OHLCV bars into desired interval
+function bucketBars(bars, intervalSecs) {
+  if (!bars || !bars.length) return [];
+  const bucketed = {};
+  for (const b of bars) {
+    const bk = Math.floor(b.timestamp / intervalSecs) * intervalSecs;
+    if (!bucketed[bk]) {
+      bucketed[bk] = { timestamp: bk, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 };
+    } else {
+      const ex = bucketed[bk];
+      ex.high = Math.max(ex.high, b.high);
+      ex.low  = Math.min(ex.low, b.low);
+      ex.close = b.close;
+      ex.volume += b.volume || 0;
+    }
+  }
+  return Object.values(bucketed).sort((a, b) => a.timestamp - b.timestamp);
 }
 
 // Build OHLCV bars from raw ticks
