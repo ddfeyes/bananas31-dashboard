@@ -15,8 +15,12 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from ring_buffer import RingBuffer, Tick
+import db as _db
 
 logger = logging.getLogger(__name__)
+
+# Sources for which we persist OHLCV to price_feed (DB fallback for CVD)
+_OHLCV_SOURCES = ["binance-spot", "binance-perp", "bybit-perp", "bsc-pancakeswap"]
 
 # Source classification
 SPOT_SOURCES = ["binance-spot"]
@@ -112,10 +116,27 @@ class AnalyticsEngine:
         """
         Compute CVD as a time-series (cumulative sum of per-bar VD).
         Returns {source: [{timestamp, cvd}, ...], aggregated: [...]}
+
+        Strategy:
+        1. Try ring buffer (in-memory ticks). If it covers >= 80% of requested window → use it.
+        2. Fallback: compute approximate CVD from price_feed DB bars (sign(close-open)*volume).
+           Less accurate than tick-level CVD but covers historical windows (1D, 7D).
         """
         all_ticks = await self.ring_buffer.get_ticks(source)
         cutoff = time.time() - window_secs
         ticks = [t for t in all_ticks if t.timestamp >= cutoff]
+
+        # Check ring buffer coverage — use DB fallback if < 80% covered
+        oldest_tick_ts = ticks[0].timestamp if ticks else None
+        ring_coverage = ((time.time() - oldest_tick_ts) / window_secs) if oldest_tick_ts else 0
+        use_db_fallback = ring_coverage < 0.80
+
+        if use_db_fallback:
+            return await self._compute_cvd_series_from_db(
+                interval_secs=interval_secs,
+                window_secs=window_secs,
+                source=source,
+            )
 
         if not ticks:
             return {"per_source": {}, "aggregated": []}
@@ -161,6 +182,80 @@ class AnalyticsEngine:
             "aggregated": agg_series,
             "interval_secs": interval_secs,
             "window_secs": window_secs,
+        }
+
+    async def _compute_cvd_series_from_db(
+        self,
+        interval_secs: int = 300,
+        window_secs: int = 86400,
+        source: Optional[str] = None,
+    ) -> Dict:
+        """
+        Approximate CVD from price_feed OHLCV bars in DB.
+        CVD bar delta = sign(close - open) * volume (standard OHLCV approximation).
+        Groups bars by interval_secs buckets.
+        """
+        srcs = [source] if source else _OHLCV_SOURCES
+        minutes = int(window_secs / 60) + 1
+
+        per_source_series: Dict[str, List[dict]] = {}
+        all_bar_keys: set = set()
+        bars_by_src: Dict[str, Dict[int, dict]] = {}
+
+        for src in srcs:
+            try:
+                ohlcv = await asyncio.get_event_loop().run_in_executor(
+                    None, _db.get_latest_ohlcv, src, minutes
+                )
+            except Exception as e:
+                logger.warning("DB CVD fallback error for %s: %s", src, e)
+                ohlcv = []
+
+            bucketed: Dict[int, dict] = {}
+            for bar in ohlcv:
+                bk = int(bar["timestamp"] // interval_secs) * interval_secs
+                if bk not in bucketed:
+                    bucketed[bk] = {"vol_buy": 0.0, "vol_sell": 0.0}
+                vol = bar.get("volume") or 0.0
+                if bar.get("close", 0) >= bar.get("open", 0):
+                    bucketed[bk]["vol_buy"] += vol
+                else:
+                    bucketed[bk]["vol_sell"] += vol
+                all_bar_keys.add(bk)
+            bars_by_src[src] = bucketed
+
+        sorted_keys = sorted(all_bar_keys)
+        aggregated_delta: Dict[int, float] = defaultdict(float)
+
+        for src in srcs:
+            bucketed = bars_by_src.get(src, {})
+            if not bucketed:
+                continue
+            series = []
+            cumulative = 0.0
+            for bk in sorted_keys:
+                b = bucketed.get(bk)
+                if b:
+                    delta = b["vol_buy"] - b["vol_sell"]
+                else:
+                    delta = 0.0
+                cumulative += delta
+                series.append({"timestamp": bk, "cvd": cumulative, "delta": delta})
+                aggregated_delta[bk] += delta
+            per_source_series[src] = series
+
+        agg_series = []
+        agg_cum = 0.0
+        for bk in sorted_keys:
+            agg_cum += aggregated_delta[bk]
+            agg_series.append({"timestamp": bk, "cvd": agg_cum, "delta": aggregated_delta[bk]})
+
+        return {
+            "per_source": per_source_series,
+            "aggregated": agg_series,
+            "interval_secs": interval_secs,
+            "window_secs": window_secs,
+            "source": "db_ohlcv_approx",
         }
 
     # ------------------------------------------------------------------ #
