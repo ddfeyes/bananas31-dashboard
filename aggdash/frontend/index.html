@@ -656,6 +656,42 @@ body {
   .toggle-btn { padding: 3px 6px; font-size: 10px; }
 }
 
+/* ── Patterns Bar (Bug 8) ────────────────────────────────────────── */
+.patterns-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.patterns-bar.hidden { display: none; }
+.patterns-bar-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  flex-shrink: 0;
+}
+.pattern-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.pattern-badge.high   { background: rgba(255,61,92,0.12); color: #ff3d5c; border-color: rgba(255,61,92,0.25); }
+.pattern-badge.medium { background: rgba(255,122,53,0.12); color: #ff7a35; border-color: rgba(255,122,53,0.25); }
+.pattern-badge.low    { background: rgba(128,138,158,0.12); color: #8892a4; border-color: rgba(128,138,158,0.25); }
+
 /* ── Helpers ─────────────────────────────────────────────────────── */
 .positive { color: var(--accent-green) !important; }
 .negative { color: var(--accent-red) !important; }
@@ -685,8 +721,8 @@ body {
         <span class="stat-value" id="stat-bn-perp" style="color:var(--color-bn-perp)">–</span>
       </div>
       <div class="stat-item">
-        <span class="stat-label">BB Spot</span>
-        <span class="stat-value" id="stat-bb-spot" style="color:var(--color-bb-spot)">–</span>
+        <span class="stat-label">BB Basis</span>
+        <span class="stat-value" id="stat-bb-basis" style="color:var(--color-bb-spot)">–</span>
       </div>
       <div class="stat-item">
         <span class="stat-label">BB Perp</span>
@@ -721,6 +757,9 @@ body {
   <!-- Signals banner (hidden by default) -->
   <div id="signals-banner" class="signals-banner hidden"></div>
 
+  <!-- Patterns section (Bug 8) -->
+  <div id="patterns-bar" class="patterns-bar hidden"></div>
+
   <!-- ── Controls ────────────────────────────────────────────────────── -->
   <div class="controls-bar">
     <div class="controls-section">
@@ -741,9 +780,7 @@ body {
       <button class="toggle-btn binance-perp active" data-source="binance-perp">
         <span class="dot"></span>BN Perp
       </button>
-      <button class="toggle-btn bybit-spot active" data-source="bybit-spot">
-        <span class="dot"></span>BB Spot
-      </button>
+      <!-- BybitSpot removed: BANANAS31USDT not listed on Bybit Spot -->
       <button class="toggle-btn bybit-perp active" data-source="bybit-perp">
         <span class="dot"></span>BB Perp
       </button>
@@ -761,6 +798,12 @@ body {
       <div class="panel-header">
         <span class="panel-title">Price</span>
         <div class="panel-stats">
+          <div class="btn-group" id="chart-range-group" style="margin-right:12px">
+            <button data-range="60">1H</button>
+            <button data-range="240">4H</button>
+            <button data-range="1440" class="active">1D</button>
+            <button data-range="10080">7D</button>
+          </div>
           <div class="panel-stat">
             <span class="panel-stat-label">Agg Spot</span>
             <span class="panel-stat-value" id="ps-agg-spot">–</span>

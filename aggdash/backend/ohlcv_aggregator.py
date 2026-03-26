@@ -10,7 +10,7 @@ from ring_buffer import RingBuffer, Tick
 
 logger = logging.getLogger(__name__)
 
-SPOT_SOURCES = ("binance-spot", "bybit-spot")
+SPOT_SOURCES = ("binance-spot",)
 PERP_SOURCES = ("binance-perp", "bybit-perp")
 
 

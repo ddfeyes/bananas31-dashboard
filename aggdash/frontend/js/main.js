@@ -7,11 +7,12 @@
 const POLL_FAST_MS = 2000;   // prices, liquidations
 const POLL_SLOW_MS = 10000;  // series charts, OI, funding
 
-const SOURCES_ALL = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bsc-pancakeswap', 'agg-spot', 'agg-perp'];
+const SOURCES_ALL = ['binance-spot', 'binance-perp', 'bybit-perp', 'bsc-pancakeswap', 'agg-spot', 'agg-perp'];
 
 class Dashboard {
   constructor() {
     this.timeframe = '5m';
+    this.chartRangeMinutes = 1440; // default 1D
     this.activeFilters = [...SOURCES_ALL];
     this.charts = {};
     this.feed = null;
@@ -45,6 +46,16 @@ class Dashboard {
         document.querySelectorAll('[data-tf]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         this.refreshSeries();
+      });
+    });
+
+    // Chart range buttons (Bug 9)
+    document.querySelectorAll('[data-range]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.chartRangeMinutes = parseInt(btn.dataset.range, 10);
+        document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.refreshPriceChart();
       });
     });
 
@@ -137,11 +148,62 @@ class Dashboard {
     }
   }
 
+  updatePatternsBar(data) {
+    const bar = document.getElementById('patterns-bar');
+    if (!bar) return;
+    const patterns = data.patterns || [];
+    if (patterns.length === 0) {
+      bar.classList.add('hidden');
+      bar.textContent = '';
+      return;
+    }
+    bar.classList.remove('hidden');
+    bar.textContent = '';
+    const label = document.createElement('span');
+    label.className = 'patterns-bar-label';
+    label.textContent = 'Patterns';
+    bar.appendChild(label);
+    for (const p of patterns) {
+      const badge = document.createElement('span');
+      const sev = ['high', 'medium', 'low'].includes(p.severity) ? p.severity : 'low';
+      badge.className = 'pattern-badge ' + sev;
+      badge.textContent = String(p.name || '').slice(0, 32) + (p.description ? ': ' + String(p.description).slice(0, 80) : '');
+      bar.appendChild(badge);
+    }
+  }
+
+  async refreshPriceChart() {
+    const minutes = this.chartRangeMinutes;
+    const srcList = ['binance-spot', 'binance-perp', 'bybit-perp', 'bsc-pancakeswap'];
+    const ohlcvBySrc = {};
+    const results = await Promise.all(
+      srcList.map(src =>
+        window.api.get(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(src)}&minutes=${minutes}`)
+          .then(data => [src, data])
+      )
+    );
+    for (const [src, data] of results) {
+      if (data && Array.isArray(data) && data.length) {
+        ohlcvBySrc[src] = data;
+      } else if (data && data.bars && data.bars.length) {
+        ohlcvBySrc[src] = data.bars;
+      }
+    }
+    // Fallback: if OHLCV endpoint doesn't return data, use cached ticks
+    if (Object.keys(ohlcvBySrc).length === 0 && Object.keys(this.ohlcvCache).length > 0) {
+      this.charts.price.update(this.ohlcvCache, this.activeFilters);
+      return;
+    }
+    this.ohlcvCache = ohlcvBySrc;
+    this.charts.price.update(ohlcvBySrc, this.activeFilters);
+    this.charts.volume.update(ohlcvBySrc, this.activeFilters);
+  }
+
   async slowPoll() {
     const windowSecs = TF_SECS[this.timeframe] * 12; // 12x timeframe window
     const intervalSecs = TF_SECS[this.timeframe];
 
-    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi, signals] = await Promise.all([
+    const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi, signals, patterns] = await Promise.all([
       window.api.getBasisSeries(intervalSecs, windowSecs),
       window.api.getCVDSeries(intervalSecs, windowSecs),
       window.api.getDexCexSpreadSeries(intervalSecs, windowSecs),
@@ -149,6 +211,7 @@ class Dashboard {
       window.api.getFundingSummary(),
       window.api.getOI(),
       window.api.getSignals(),
+      window.api.getPatterns(),
     ]);
 
     if (basisSeries)  this.charts.basis.update(basisSeries);
@@ -157,6 +220,7 @@ class Dashboard {
     if (oiDeltaSeries) this.charts.oi.update(oiDeltaSeries);
     if (funding)      this.fundingPanel.update(funding);
     if (signals)      this.updateSignalsBanner(signals);
+    if (patterns)     this.updatePatternsBar(patterns);
 
     // Update header stats from OI / funding
     if (oi)      this.updateOIStats(oi);
@@ -167,25 +231,30 @@ class Dashboard {
   }
 
   async refreshOHLCV(intervalSecs, windowSecs) {
-    // We'll query the individual price endpoints + build synthetic OHLCV from ticks
-    // For now use the ticks endpoint to build per-source OHLCV
-    const srcList = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bsc-pancakeswap'];
+    // Use DB OHLCV endpoint with current chart range
+    const minutes = this.chartRangeMinutes || Math.ceil(windowSecs / 60);
+    const srcList = ['binance-spot', 'binance-perp', 'bybit-perp', 'bsc-pancakeswap'];
     const ohlcvBySrc = {};
 
-    for (const src of srcList) {
-      const ticks = await window.api.get(`/api/ticks?source=${encodeURIComponent(src)}`);
-      if (ticks && ticks.ticks && ticks.ticks.length) {
-        ohlcvBySrc[src] = buildOHLCV(ticks.ticks, intervalSecs, windowSecs);
+    const results = await Promise.all(
+      srcList.map(src =>
+        window.api.get(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(src)}&minutes=${minutes}`)
+      )
+    );
+    for (let i = 0; i < srcList.length; i++) {
+      const data = results[i];
+      if (data && data.bars && data.bars.length) {
+        ohlcvBySrc[srcList[i]] = data.bars;
       }
     }
 
-    // Add aggregated lines from basis series
-    const basisSeries = await window.api.getBasisSeries(intervalSecs, windowSecs);
-    if (basisSeries) {
-      // Reconstruct agg-spot + agg-perp time series from basis aggregated
-      if (basisSeries.aggregated && basisSeries.aggregated.length) {
-        // We don't have raw agg OHLCV but we can use the spot price from prices endpoint
-        // So skip these for now — they'll show up as separate datasets when we have DB OHLCV
+    // Fallback to tick-based OHLCV if DB has no data
+    if (Object.keys(ohlcvBySrc).length === 0) {
+      for (const src of srcList) {
+        const ticks = await window.api.get(`/api/ticks?source=${encodeURIComponent(src)}`);
+        if (ticks && ticks.ticks && ticks.ticks.length) {
+          ohlcvBySrc[src] = buildOHLCV(ticks.ticks, intervalSecs, windowSecs);
+        }
       }
     }
 
@@ -219,10 +288,13 @@ class Dashboard {
     }
 
     // Per-source prices in mini stats
+    // BB Basis = bybit_perp - binance_spot (Bug 1)
+    const bbBasis = (p['bybit-perp'] != null && p['binance-spot'] != null)
+      ? p['bybit-perp'] - p['binance-spot'] : null;
     const statMap = {
       'bn-spot': p['binance-spot'],
       'bn-perp': p['binance-perp'],
-      'bb-spot': p['bybit-spot'],
+      'bb-basis': bbBasis,
       'bb-perp': p['bybit-perp'],
       'dex':     p['bsc-pancakeswap'],
       'basis':   aggPrices && aggPrices.basis,
@@ -231,8 +303,9 @@ class Dashboard {
     for (const [id, val] of Object.entries(statMap)) {
       const el2 = document.getElementById('stat-' + id);
       if (el2) {
-        el2.textContent = (id === 'basis') ? fmtBasis(val) : fmtPrice(val);
-        if (id === 'basis' && val !== null) {
+        const isBasisLike = (id === 'basis' || id === 'bb-basis');
+        el2.textContent = isBasisLike ? fmtBasis(val) : fmtPrice(val);
+        if (isBasisLike && val !== null) {
           el2.className = 'stat-value ' + (val >= 0 ? 'positive' : 'negative');
         }
       }

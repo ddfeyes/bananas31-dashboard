@@ -130,7 +130,7 @@ class PriceChart {
   }
 
   update(ohlcvBySource, activeFilters) {
-    const sources = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bsc-pancakeswap', 'agg-spot', 'agg-perp'];
+    const sources = ['binance-spot', 'binance-perp', 'bybit-perp', 'bsc-pancakeswap', 'agg-spot', 'agg-perp'];
     const datasets = [];
 
     for (const src of sources) {
@@ -239,7 +239,7 @@ class VolumeChart {
   }
 
   update(ohlcvBySource, activeFilters) {
-    const spotSrcs = ['binance-spot', 'bybit-spot', 'bsc-pancakeswap'];
+    const spotSrcs = ['binance-spot', 'bsc-pancakeswap'];
     const perpSrcs = ['binance-perp', 'bybit-perp'];
     const datasets = [];
 
@@ -470,9 +470,10 @@ class LiqFeed {
 
       const div = document.createElement('div');
       div.className = 'liq-item';
-      const side = liq.side === 'buy' ? 'LONG' : 'SHORT'; // liquidated longs = buy orders
+      const sideNorm = (liq.side || '').toUpperCase();
+      const side = sideNorm === 'BUY' ? 'LONG' : 'SHORT';
       div.innerHTML = `
-        <span class="liq-side ${liq.side === 'sell' ? 'long' : 'short'}">${side}</span>
+        <span class="liq-side ${sideNorm === 'SELL' ? 'long' : 'short'}">${side}</span>
         <span class="liq-exchange">${liq.source.replace('-perp','').replace('-spot','')}</span>
         <span class="liq-price">${fmtPrice(liq.price)}</span>
         <span class="liq-qty">${fmtLarge(liq.quantity)}</span>
@@ -486,10 +487,11 @@ class LiqFeed {
       this.feedEl.removeChild(this.feedEl.lastChild);
     }
 
-    // Heatmap: aggregate by exchange+side in last 100 events
+    // Heatmap: aggregate by exchange+side in last 100 events (Bug 5: normalize side to lowercase)
     const counts = {};
     for (const liq of items) {
-      const key = `${liq.source}|${liq.side}`;
+      const side = (liq.side || '').toLowerCase();
+      const key = `${liq.source}|${side}`;
       counts[key] = (counts[key] || 0) + 1;
     }
     this.renderHeatmap(counts, items.length);
@@ -534,19 +536,21 @@ class FundingPanel {
     if (!funding) return;
     const rates = funding.per_source || {};
     const cells = {
-      'binance-perp': { label: 'Binance Perp', rate: rates['binance-perp'] },
-      'bybit-perp':   { label: 'Bybit Perp',   rate: rates['bybit-perp'] },
+      'binance-perp': { label: 'Binance Perp', rateObj: rates['binance-perp'] },
+      'bybit-perp':   { label: 'Bybit Perp',   rateObj: rates['bybit-perp'] },
     };
 
     let html = '';
     for (const [src, info] of Object.entries(cells)) {
-      const r = info.rate;
-      const cls = r === null ? '' : (r >= 0 ? 'positive' : 'negative');
-      const annual = r !== null ? (r * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
+      // Extract rate_8h from the rate object (Bug 4 fix)
+      const rObj = info.rateObj;
+      const r = (rObj && typeof rObj === 'object') ? rObj.rate_8h : rObj;
+      const cls = r == null ? '' : (r >= 0 ? 'positive' : 'negative');
+      const annual = r != null ? (r * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
       html += `
         <div class="funding-cell">
           <div class="funding-exchange">${info.label}</div>
-          <div class="funding-rate ${cls}">${r !== null ? (r * 100).toFixed(4) + '%' : '–'}</div>
+          <div class="funding-rate ${cls}">${r != null ? (r * 100).toFixed(4) + '%' : '–'}</div>
           <div class="funding-annual">${annual}</div>
         </div>
       `;
@@ -554,12 +558,13 @@ class FundingPanel {
 
     // Avg
     const avg = funding.average_rate;
-    const avgCls = avg === null ? '' : (avg >= 0 ? 'positive' : 'negative');
-    const avgAnnual = avg !== null ? (avg * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
+    const avgR = (avg && typeof avg === 'object') ? avg.rate_8h : avg;
+    const avgCls = avgR == null ? '' : (avgR >= 0 ? 'positive' : 'negative');
+    const avgAnnual = avgR != null ? (avgR * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
     html += `
       <div class="funding-cell" style="grid-column:1/-1;background:#111318">
         <div class="funding-exchange">Average</div>
-        <div class="funding-rate ${avgCls}">${avg !== null ? (avg * 100).toFixed(4) + '%' : '–'}</div>
+        <div class="funding-rate ${avgCls}">${avgR != null ? (avgR * 100).toFixed(4) + '%' : '–'}</div>
         <div class="funding-annual">${avgAnnual}</div>
       </div>
     `;

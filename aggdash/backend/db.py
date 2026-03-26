@@ -95,3 +95,33 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_latest_ohlcv(exchange_id: str, minutes: int = 60) -> list:
+    """Return recent OHLCV bars for the given exchange from price_feed."""
+    import time
+    cutoff = time.time() - minutes * 60
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT timestamp, open, high, low, close, volume FROM price_feed "
+            "WHERE exchange_id = ? AND timestamp > ? ORDER BY timestamp",
+            (exchange_id, cutoff),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_latest_oi_history(exchange_id: str, limit: int = 200) -> list:
+    """Return recent OI history for the given exchange from oi table."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT timestamp, open_interest AS oi FROM oi "
+            "WHERE exchange_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (exchange_id, limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+    finally:
+        conn.close()

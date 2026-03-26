@@ -19,16 +19,16 @@ from ring_buffer import RingBuffer, Tick
 logger = logging.getLogger(__name__)
 
 # Source classification
-SPOT_SOURCES = ["binance-spot", "bybit-spot"]
+SPOT_SOURCES = ["binance-spot"]
 PERP_SOURCES = ["binance-perp", "bybit-perp"]
 DEX_SOURCES = ["bsc-pancakeswap"]
-ALL_CEX_SPOT = ["binance-spot", "bybit-spot"]
+ALL_CEX_SPOT = ["binance-spot"]
 ALL_CEX_PERP = ["binance-perp", "bybit-perp"]
 
 # Exchange mapping (exchange name → spot source, perp source)
+# Bybit only has perp for BANANAS31USDT (no spot)
 EXCHANGE_MAP = {
     "binance": ("binance-spot", "binance-perp"),
-    "bybit": ("bybit-spot", "bybit-perp"),
 }
 
 

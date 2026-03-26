@@ -78,6 +78,9 @@ class AggdashAPI {
     return this.get(`/api/analytics/oi-delta/series?window_secs=${windowSecs}`);
   }
   async getFundingSummary() { return this.get('/api/analytics/funding'); }
+  async getPatterns() { return this.get('/api/patterns'); }
+  async getOISeries(minutes) { return this.get(`/api/oi/series?minutes=${minutes}`); }
+  async getOHLCV(exchangeId, minutes) { return this.get(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(exchangeId)}&minutes=${minutes}`); }
 }
 
 window.api = new AggdashAPI();

@@ -1,10 +1,12 @@
 """Main FastAPI application for aggdash backend."""
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+import aiohttp
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +19,6 @@ from collectors import (
     BinancePerpCollector,
     BinanceSpotCollector,
     BybitPerpCollector,
-    BybitSpotCollector,
     BSCPancakeSwapCollector,
     OIFundingPoller,
 )
@@ -98,12 +99,11 @@ async def lifespan(app: FastAPI):
         """Callback for liquidation."""
         logger.debug("Liquidation: %s", liq)
 
-    # Initialize collectors
+    # Initialize collectors (BybitSpot removed — BANANAS31USDT only exists as perp on Bybit)
     collectors = [
         BinancePerpCollector(on_tick, on_liquidation),
         BinanceSpotCollector(on_tick),
         BybitPerpCollector(on_tick, on_liquidation),
-        BybitSpotCollector(on_tick),
         BSCPancakeSwapCollector(on_tick, get_cex_spot=ohlcv_aggregator.get_aggregated_spot_price),
     ]
 
@@ -120,6 +120,9 @@ async def lifespan(app: FastAPI):
     # Start all collectors
     [asyncio.create_task(c.start()) for c in collectors]
     asyncio.create_task(oi_funding_poller.start())
+
+    # Backfill historical data if DB is sparse (Bug 6)
+    asyncio.create_task(_backfill_historical_data())
 
     # Start OHLCV flush task
     async def flush_ohlcv_periodically():
@@ -177,7 +180,7 @@ async def get_prices():
     """Get current prices from all sources."""
     prices = {}
 
-    for source in ["binance-spot", "binance-perp", "bybit-spot", "bybit-perp", "bsc-pancakeswap"]:
+    for source in ["binance-spot", "binance-perp", "bybit-perp", "bsc-pancakeswap"]:
         latest = await ohlcv_aggregator.get_current_price(source)
         if latest:
             prices[source] = latest
@@ -342,6 +345,14 @@ async def get_funding_summary():
     return await analytics_engine.get_funding_summary()
 
 
+@app.get("/api/analytics/ohlcv")
+async def get_ohlcv(exchange_id: str = "binance-spot", minutes: int = 1440):
+    """Get OHLCV bars from the price_feed table for a given exchange and time range."""
+    from db import get_latest_ohlcv
+    bars = get_latest_ohlcv(exchange_id, minutes=minutes)
+    return {"bars": bars, "count": len(bars), "exchange_id": exchange_id}
+
+
 @app.get("/api/dex")
 async def get_dex():
     """Get latest DEX price, liquidity, and deviation from CEX spot."""
@@ -402,6 +413,293 @@ async def get_signals():
     snap = await analytics_engine.snapshot()
     sigs = signal_engine.compute_signals(snap)
     return {"timestamp": snap.get("timestamp", 0), "signals": sigs, "count": len(sigs)}
+
+
+# ── /api/dex/price (Bug 2) ─────────────────────────────────────────────
+
+@app.get("/api/dex/price")
+async def get_dex_price():
+    """Get latest DEX price from dex_price table."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT timestamp, price, liquidity, deviation_pct FROM dex_price ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(404, "no data")
+    return {"timestamp": row[0], "price": row[1], "liquidity": row[2], "deviation_pct": row[3]}
+
+
+# ── /api/oi/series (Bug 3) ────────────────────────────────────────────
+
+@app.get("/api/oi/series")
+async def get_oi_series(minutes: int = 60):
+    """Get OI time-series from the oi DB table."""
+    cutoff = time.time() - minutes * 60
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT exchange_id, timestamp, open_interest FROM oi WHERE timestamp > ? ORDER BY timestamp",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    per_source = {}
+    for row in rows:
+        src = row[0]
+        if src not in per_source:
+            per_source[src] = []
+        per_source[src].append({"timestamp": row[1], "open_interest": row[2]})
+    return {"per_source": per_source}
+
+
+# ── /api/patterns (Bug 7) ─────────────────────────────────────────────
+
+@app.get("/api/patterns")
+async def get_patterns():
+    """Detect structural patterns in current DB data."""
+    patterns = []
+    now = time.time()
+    conn = get_db()
+    try:
+        # 1. OI_ACCUMULATION: last 4h OI rose >5% while price change <0.5%
+        oi_rows = conn.execute(
+            "SELECT open_interest FROM oi WHERE exchange_id='binance-perp' AND timestamp > ? ORDER BY timestamp",
+            (now - 4 * 3600,),
+        ).fetchall()
+        if len(oi_rows) >= 2:
+            oi_first = oi_rows[0][0]
+            oi_last = oi_rows[-1][0]
+            if oi_first and oi_first > 0:
+                oi_change_pct = (oi_last - oi_first) / oi_first * 100
+                # Check price change
+                price_rows = conn.execute(
+                    "SELECT close FROM price_feed WHERE exchange_id='binance-spot' AND timestamp > ? ORDER BY timestamp",
+                    (now - 4 * 3600,),
+                ).fetchall()
+                price_change_pct = 0
+                if len(price_rows) >= 2:
+                    p_first = price_rows[0][0]
+                    p_last = price_rows[-1][0]
+                    if p_first and p_first > 0:
+                        price_change_pct = abs((p_last - p_first) / p_first * 100)
+                if oi_change_pct > 5 and price_change_pct < 0.5:
+                    patterns.append({
+                        "name": "OI_ACCUMULATION",
+                        "confidence": min(oi_change_pct / 10, 1.0),
+                        "description": f"OI rose {oi_change_pct:.1f}% in 4h while price moved only {price_change_pct:.2f}%",
+                        "severity": "high" if oi_change_pct > 10 else "medium",
+                        "detected_at": now,
+                    })
+
+        # 2. LIQUIDATION_CASCADE: >5 liquidations in any 5-min window in last 1h
+        liq_rows = conn.execute(
+            "SELECT timestamp FROM liquidations WHERE timestamp > ? ORDER BY timestamp",
+            (now - 3600,),
+        ).fetchall()
+        if liq_rows:
+            liq_times = [r[0] for r in liq_rows]
+            max_in_window = 0
+            for i, t in enumerate(liq_times):
+                count = sum(1 for t2 in liq_times[i:] if t2 - t <= 300)
+                max_in_window = max(max_in_window, count)
+            if max_in_window > 5:
+                patterns.append({
+                    "name": "LIQUIDATION_CASCADE",
+                    "confidence": min(max_in_window / 15, 1.0),
+                    "description": f"{max_in_window} liquidations in a 5-min window (last 1h)",
+                    "severity": "high" if max_in_window > 10 else "medium",
+                    "detected_at": now,
+                })
+
+        # 3. DEX_PREMIUM: current dex_price > avg(binance-spot last 5min) * 1.01
+        dex_row = conn.execute(
+            "SELECT price FROM dex_price ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        spot_avg_row = conn.execute(
+            "SELECT AVG(close) FROM price_feed WHERE exchange_id='binance-spot' AND timestamp > ?",
+            (now - 300,),
+        ).fetchone()
+        if dex_row and spot_avg_row and dex_row[0] and spot_avg_row[0] and spot_avg_row[0] > 0:
+            dex_p = dex_row[0]
+            spot_avg = spot_avg_row[0]
+            if dex_p > spot_avg * 1.01:
+                prem_pct = (dex_p - spot_avg) / spot_avg * 100
+                patterns.append({
+                    "name": "DEX_PREMIUM",
+                    "confidence": min(prem_pct / 5, 1.0),
+                    "description": f"DEX price {prem_pct:.2f}% above CEX spot average",
+                    "severity": "medium",
+                    "detected_at": now,
+                })
+
+        # 4. VOLUME_DIVERGENCE: spot_volume_1h / perp_volume_1h > 3
+        spot_vol_row = conn.execute(
+            "SELECT SUM(volume) FROM price_feed WHERE exchange_id='binance-spot' AND timestamp > ?",
+            (now - 3600,),
+        ).fetchone()
+        perp_vol_row = conn.execute(
+            "SELECT SUM(volume) FROM price_feed WHERE exchange_id='binance-perp' AND timestamp > ?",
+            (now - 3600,),
+        ).fetchone()
+        spot_vol = (spot_vol_row[0] or 0) if spot_vol_row else 0
+        perp_vol = (perp_vol_row[0] or 0) if perp_vol_row else 0
+        if perp_vol > 0 and spot_vol / perp_vol > 3:
+            ratio = spot_vol / perp_vol
+            patterns.append({
+                "name": "VOLUME_DIVERGENCE",
+                "confidence": min(ratio / 10, 1.0),
+                "description": f"Spot/Perp volume ratio {ratio:.1f}x in last 1h",
+                "severity": "medium",
+                "detected_at": now,
+            })
+
+        # 5. BASIS_SQUEEZE: basis > 0.3% AND funding_rate > 0
+        spot_price_row = conn.execute(
+            "SELECT close FROM price_feed WHERE exchange_id='binance-spot' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        perp_price_row = conn.execute(
+            "SELECT close FROM price_feed WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        funding_row = conn.execute(
+            "SELECT rate_8h FROM funding_rates WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if spot_price_row and perp_price_row and spot_price_row[0] and spot_price_row[0] > 0:
+            basis_pct = (perp_price_row[0] - spot_price_row[0]) / spot_price_row[0] * 100
+            funding_rate = funding_row[0] if funding_row else 0
+            if basis_pct > 0.3 and funding_rate and funding_rate > 0:
+                patterns.append({
+                    "name": "BASIS_SQUEEZE",
+                    "confidence": min(basis_pct / 1.0, 1.0),
+                    "description": f"Basis {basis_pct:.3f}% with positive funding {funding_rate*100:.4f}% — squeeze risk",
+                    "severity": "high" if basis_pct > 0.5 else "medium",
+                    "detected_at": now,
+                })
+    finally:
+        conn.close()
+
+    return {"patterns": patterns}
+
+
+# ── Historical backfill (Bug 6) ───────────────────────────────────────
+
+async def _backfill_historical_data():
+    """Fetch last 7 days of Binance data if DB is sparse."""
+    try:
+        conn = get_db()
+        spot_count = conn.execute(
+            "SELECT COUNT(*) FROM price_feed WHERE exchange_id='binance-spot'"
+        ).fetchone()[0]
+        perp_count = conn.execute(
+            "SELECT COUNT(*) FROM price_feed WHERE exchange_id='binance-perp'"
+        ).fetchone()[0]
+        conn.close()
+
+        async with aiohttp.ClientSession() as session:
+            # Binance spot klines (7 days, 1m interval — max 1500 per request)
+            if spot_count < 1000:
+                logger.info("Backfilling Binance spot klines...")
+                for start_offset in range(0, 10080, 1500):
+                    limit = min(1500, 10080 - start_offset)
+                    start_time = int((time.time() - 7 * 86400 + start_offset * 60) * 1000)
+                    try:
+                        async with session.get(
+                            "https://api.binance.com/api/v3/klines",
+                            params={"symbol": "BANANAS31USDT", "interval": "1m", "startTime": start_time, "limit": limit},
+                            timeout=aiohttp.ClientTimeout(total=15),
+                        ) as resp:
+                            klines = await resp.json()
+                            if isinstance(klines, list) and klines:
+                                conn = get_db()
+                                for k in klines:
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO price_feed(exchange_id,timestamp,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)",
+                                        ("binance-spot", k[0] / 1000, float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])),
+                                    )
+                                conn.commit()
+                                conn.close()
+                                logger.info("Backfilled %d spot klines (batch %d)", len(klines), start_offset // 1500)
+                    except Exception as exc:
+                        logger.warning("Spot kline backfill error: %s", exc)
+                    await asyncio.sleep(0.5)
+
+            # Binance perp klines
+            if perp_count < 1000:
+                logger.info("Backfilling Binance perp klines...")
+                try:
+                    async with session.get(
+                        "https://fapi.binance.com/fapi/v1/klines",
+                        params={"symbol": "BANANAS31USDT", "interval": "1m", "limit": 1500},
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        klines = await resp.json()
+                        if isinstance(klines, list) and klines:
+                            conn = get_db()
+                            for k in klines:
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO price_feed(exchange_id,timestamp,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)",
+                                    ("binance-perp", k[0] / 1000, float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])),
+                                )
+                            conn.commit()
+                            conn.close()
+                            logger.info("Backfilled %d perp klines", len(klines))
+                except Exception as exc:
+                    logger.warning("Perp kline backfill error: %s", exc)
+
+            # Binance OI history
+            oi_count = get_db().execute("SELECT COUNT(*) FROM oi").fetchone()[0]
+            if oi_count < 100:
+                logger.info("Backfilling Binance OI history...")
+                try:
+                    async with session.get(
+                        "https://fapi.binance.com/futures/data/openInterestHist",
+                        params={"symbol": "BANANAS31USDT", "period": "5m", "limit": 500},
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        data = await resp.json()
+                        if isinstance(data, list) and data:
+                            conn = get_db()
+                            for item in data:
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO oi(exchange_id,timestamp,open_interest) VALUES(?,?,?)",
+                                    ("binance-perp", item["timestamp"] / 1000, float(item["sumOpenInterest"])),
+                                )
+                            conn.commit()
+                            conn.close()
+                            logger.info("Backfilled %d OI records", len(data))
+                except Exception as exc:
+                    logger.warning("OI backfill error: %s", exc)
+
+            # Binance funding history
+            funding_count = get_db().execute("SELECT COUNT(*) FROM funding_rates").fetchone()[0]
+            if funding_count < 50:
+                logger.info("Backfilling Binance funding history...")
+                try:
+                    async with session.get(
+                        "https://fapi.binance.com/fapi/v1/fundingRate",
+                        params={"symbol": "BANANAS31USDT", "limit": 100},
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        data = await resp.json()
+                        if isinstance(data, list) and data:
+                            conn = get_db()
+                            for item in data:
+                                rate = float(item["fundingRate"])
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO funding_rates(exchange_id,timestamp,rate_8h,rate_1h) VALUES(?,?,?,?)",
+                                    ("binance-perp", item["fundingTime"] / 1000, rate, rate / 8),
+                                )
+                            conn.commit()
+                            conn.close()
+                            logger.info("Backfilled %d funding records", len(data))
+                except Exception as exc:
+                    logger.warning("Funding backfill error: %s", exc)
+
+        logger.info("Historical backfill complete")
+    except Exception as exc:
+        logger.error("Backfill error: %s", exc)
 
 
 # ── Static frontend serving ────────────────────────────────────────────
