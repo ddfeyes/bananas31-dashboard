@@ -538,26 +538,51 @@ async def get_oi_series(minutes: int = 60):
             per_source[src] = []
         per_source[src].append({"timestamp": row[1], "open_interest": row[2]})
 
-    # Build aggregated series: sum OI across sources at each timestamp
-    # Use round-to-nearest-60s to align polls that arrive within ~1s of each other.
-    # Floor-based 30s buckets split adjacent polls (e.g. ts=...089.8 and ...090.1).
-    BUCKET_SECS = 60
-    ts_map: dict = {}
-    for src, pts in per_source.items():
-        for pt in pts:
-            # round to nearest 60s bucket
-            bucket = round(pt["timestamp"] / BUCKET_SECS) * BUCKET_SECS
-            if bucket not in ts_map:
-                ts_map[bucket] = {}
-            # keep latest value per source in each bucket (overwrite older)
-            ts_map[bucket][src] = pt["open_interest"]
-    # Emit only buckets where ALL known sources contributed
-    all_sources = set(per_source.keys())
+    # Build aggregated series using neighbor-join: for each Binance point,
+    # find the nearest Bybit point within MAX_JOIN_SECS and sum them.
+    # This is robust to any fixed-boundary edge cases with rounding.
+    MAX_JOIN_SECS = 5.0  # polls arrive within ~0.5s; 5s window is very safe
+    all_sources = sorted(per_source.keys())  # deterministic order
     aggregated = []
-    for bucket, src_vals in sorted(ts_map.items()):
-        if src_vals.keys() >= all_sources:
-            total = sum(src_vals.values())
-            aggregated.append({"timestamp": float(bucket), "open_interest": total})
+    if len(all_sources) == 0:
+        pass
+    elif len(all_sources) == 1:
+        # Only one source: emit directly
+        src = all_sources[0]
+        aggregated = [
+            {"timestamp": pt["timestamp"], "open_interest": pt["open_interest"]}
+            for pt in per_source[src]
+        ]
+    else:
+        # Multi-source: join on nearest timestamp within MAX_JOIN_SECS
+        # Use first source as anchor, find nearest in each other source
+        anchor_src = all_sources[0]
+        other_srcs = all_sources[1:]
+        # Build sorted arrays for each other source
+        other_sorted = {s: sorted(per_source[s], key=lambda x: x["timestamp"]) for s in other_srcs}
+        # Pointer per source for O(n) scan
+        ptrs = {s: 0 for s in other_srcs}
+        for anchor_pt in sorted(per_source[anchor_src], key=lambda x: x["timestamp"]):
+            ts_anchor = anchor_pt["timestamp"]
+            total = anchor_pt["open_interest"]
+            valid = True
+            for s in other_srcs:
+                arr = other_sorted[s]
+                if not arr:
+                    valid = False
+                    break
+                ptr = ptrs[s]
+                # Advance pointer to nearest
+                while ptr + 1 < len(arr) and abs(arr[ptr + 1]["timestamp"] - ts_anchor) < abs(arr[ptr]["timestamp"] - ts_anchor):
+                    ptr += 1
+                ptrs[s] = ptr
+                nearest = arr[ptr]
+                if abs(nearest["timestamp"] - ts_anchor) > MAX_JOIN_SECS:
+                    valid = False
+                    break
+                total += nearest["open_interest"]
+            if valid:
+                aggregated.append({"timestamp": ts_anchor, "open_interest": total})
 
     return {"per_source": per_source, "aggregated": aggregated}
 
