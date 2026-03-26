@@ -82,7 +82,7 @@ class OHLCVAggregator:
         try:
             conn = get_db()
             conn.execute(
-                """INSERT INTO price_feed
+                """INSERT OR REPLACE INTO price_feed
                    (exchange_id, timestamp, open, high, low, close, volume)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (bar.exchange_id, bar.bar_start, bar.open, bar.high,

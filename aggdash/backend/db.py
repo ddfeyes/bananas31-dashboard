@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS price_feed (
     high        REAL,
     low         REAL,
     close       REAL,
-    volume      REAL
+    volume      REAL,
+    UNIQUE(exchange_id, timestamp)
 );
 CREATE INDEX IF NOT EXISTS idx_price_feed ON price_feed(exchange_id, timestamp);
 
