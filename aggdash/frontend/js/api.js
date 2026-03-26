@@ -125,3 +125,11 @@ async function fetchDexPrice() {
 async function fetchOI() {
   return apiGet('/api/oi');
 }
+
+async function fetchSignals() {
+  return apiGet('/api/signals');
+}
+
+async function fetchPatterns() {
+  return apiGet('/api/patterns');
+}

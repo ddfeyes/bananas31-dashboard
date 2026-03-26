@@ -42,13 +42,20 @@ async function updateStatsBar() {
     setText('stat-dex', fmtPrice(p['bsc-pancakeswap']));
   }
 
-  if (fundingData) {
-    const el = document.getElementById('stat-funding');
-    const avg = fundingData.average_rate;
-    if (el && avg != null) {
-      el.textContent = (avg * 100).toFixed(4) + '%';
-      el.className = 'stat-value ' + (avg >= 0 ? 'positive' : 'negative');
-    }
+  if (fundingData && fundingData.rates) {
+    const rates = fundingData.rates;
+    const bnRate = rates['binance-perp'];
+    const bbRate = rates['bybit-perp'];
+    const setFundEl = (id, rate) => {
+      const el = document.getElementById(id);
+      if (el && rate != null) {
+        const v = rate.rate_8h * 100;
+        el.textContent = (v >= 0 ? '+' : '') + v.toFixed(4) + '%';
+        el.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
+      }
+    };
+    if (bnRate) setFundEl('stat-bn-fund', bnRate);
+    if (bbRate) setFundEl('stat-bb-fund', bbRate);
   }
 
   if (oiData) {
@@ -195,6 +202,49 @@ async function updateVolume() {
 
 // ── Liquidation markers on price chart ──────────────────────────────
 
+const SIGNAL_CLASSES = {
+  squeeze_risk:     { cls: 'badge-squeeze',    icon: '🔴', label: 'SQUEEZE RISK' },
+  arb_opportunity:  { cls: 'badge-arb',        icon: '🟡', label: 'ARB OPPTY'   },
+  oi_accumulation:  { cls: 'badge-accum',      icon: '🔵', label: 'OI ACCUM'    },
+  deleveraging:     { cls: 'badge-deleverage', icon: '🟠', label: 'DELEVERAGE'  },
+};
+
+const PATTERN_LABELS = {
+  OI_ACCUMULATION:    '📈 OI ACCUM',
+  LIQUIDATION_CASCADE:'💥 LIQ CASCADE',
+  DEX_PREMIUM:        '↔️ DEX PREMIUM',
+  BASIS_SQUEEZE:      '⚡ BASIS SQUEEZE',
+};
+
+async function updateSignals() {
+  const data = await fetchSignals();
+  const el = document.getElementById('signals-content');
+  if (!el) return;
+  if (!data || !data.signals || data.signals.length === 0) {
+    el.innerHTML = '<span class="badge-quiet">No active signals</span>';
+    return;
+  }
+  el.innerHTML = data.signals.map(s => {
+    const cfg = SIGNAL_CLASSES[s.type] || { cls: 'badge-accum', icon: '⚪', label: s.type };
+    const detail = s.value != null ? ` ${s.value > 0 ? '+' : ''}${s.value.toFixed(2)}%` : '';
+    return `<span class="alert-badge ${cfg.cls}">${cfg.icon} ${cfg.label}${detail}</span>`;
+  }).join(' ');
+}
+
+async function updatePatterns() {
+  const data = await fetchPatterns();
+  const el = document.getElementById('patterns-content');
+  if (!el) return;
+  if (!data || !data.patterns || data.patterns.length === 0) {
+    el.innerHTML = '<span class="badge-quiet">—</span>';
+    return;
+  }
+  el.innerHTML = data.patterns.map(p => {
+    const label = PATTERN_LABELS[p.name] || p.name;
+    return `<span class="alert-badge badge-pattern">${label}</span>`;
+  }).join(' ');
+}
+
 async function updateLiquidationMarkers() {
   const liqs = await fetchLiquidations(currentMinutes);
   if (!liqs.length) return;
@@ -226,18 +276,20 @@ function setupTimeframeButtons() {
 // ── Bootstrap ────────────────────────────────────────────────────────
 
 function boot() {
-  // Measure actual topbar height so charts-container fills remaining viewport exactly
-  const topBar = document.querySelector('.top-bar');
-  if (topBar) {
-    const h = topBar.getBoundingClientRect().height;
+  // Measure combined topbar + alert-bar height so charts-container fills remaining viewport
+  const measureHeaderHeight = () => {
+    const topBar = document.querySelector('.top-bar');
+    const alertBar = document.getElementById('alert-bar');
+    const h = (topBar ? topBar.getBoundingClientRect().height : 0)
+            + (alertBar ? alertBar.getBoundingClientRect().height : 0);
     document.documentElement.style.setProperty('--topbar-h', h + 'px');
-    // Re-measure on resize (e.g. stats-row wraps)
-    const ro = new ResizeObserver(() => {
-      const newH = topBar.getBoundingClientRect().height;
-      document.documentElement.style.setProperty('--topbar-h', newH + 'px');
-    });
-    ro.observe(topBar);
-  }
+  };
+  measureHeaderHeight();
+  const ro = new ResizeObserver(measureHeaderHeight);
+  const topBar = document.querySelector('.top-bar');
+  const alertBar = document.getElementById('alert-bar');
+  if (topBar) ro.observe(topBar);
+  if (alertBar) ro.observe(alertBar);
 
   initAllCharts();
   setupTimeframeButtons();
@@ -246,6 +298,8 @@ function boot() {
   loadAllData(currentMinutes);
   updateStatsBar();
   updateLiquidationMarkers();
+  updateSignals();
+  updatePatterns();
 
   // Polling
   setInterval(updateRealtime, 2000);
@@ -255,6 +309,8 @@ function boot() {
   setInterval(updateVolume, 10000);
   setInterval(updateStatsBar, 5000);
   setInterval(updateLiquidationMarkers, 30000);
+  setInterval(updateSignals, 10000);
+  setInterval(updatePatterns, 30000);
 }
 
 if (document.readyState === 'loading') {
