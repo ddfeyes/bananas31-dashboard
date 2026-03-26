@@ -158,6 +158,54 @@
     #panel-oi     { flex: 2; min-height: 80px; }
     #panel-cvd    { flex: 2; min-height: 80px; }
     #panel-volume { flex: 2; min-height: 80px; }
+
+    /* ── Signals / Patterns Bar ───────────────────────── */
+    .alert-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 14px;
+      background: #090d15;
+      border-bottom: 1px solid #1c2438;
+      flex-wrap: wrap;
+      min-height: 28px;
+      font-size: 10px;
+    }
+
+    .alert-bar-label {
+      color: #404e66;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      font-size: 9px;
+    }
+
+    .alert-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+      animation: pulse-badge 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-badge {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .badge-squeeze   { background: rgba(255,61,92,0.15); color: #ff3d5c; border: 1px solid rgba(255,61,92,0.3); }
+    .badge-arb       { background: rgba(245,200,66,0.15); color: #f5c842; border: 1px solid rgba(245,200,66,0.3); }
+    .badge-accum     { background: rgba(74,143,255,0.15); color: #4a8fff; border: 1px solid rgba(74,143,255,0.3); }
+    .badge-deleverage{ background: rgba(255,122,53,0.15); color: #ff7a35; border: 1px solid rgba(255,122,53,0.3); }
+    .badge-pattern   { background: rgba(0,200,245,0.10); color: #00c8f5; border: 1px solid rgba(0,200,245,0.2); }
+    .badge-quiet     { color: #2c3a52; font-weight: 400; }
+
+    .alert-sep { color: #253047; }
   </style>
 </head>
 <body>
@@ -184,8 +232,12 @@
         <span class="stat-value" id="stat-dex">--</span>
       </div>
       <div class="stat-cell">
-        <span class="stat-label">FUNDING</span>
-        <span class="stat-value" id="stat-funding">--</span>
+        <span class="stat-label">BN-FUND</span>
+        <span class="stat-value" id="stat-bn-fund">--</span>
+      </div>
+      <div class="stat-cell">
+        <span class="stat-label">BB-FUND</span>
+        <span class="stat-value" id="stat-bb-fund">--</span>
       </div>
       <div class="stat-cell">
         <span class="stat-label">OI</span>
@@ -208,6 +260,15 @@
       <div class="conn-dot" id="conn-dot"></div>
       <span id="conn-label">--</span>
     </div>
+  </div>
+
+  <!-- Signals / Patterns Alert Bar -->
+  <div class="alert-bar" id="alert-bar">
+    <span class="alert-bar-label">Signals</span>
+    <span id="signals-content"><span class="badge-quiet">No active signals</span></span>
+    <span class="alert-sep">·</span>
+    <span class="alert-bar-label">Patterns</span>
+    <span id="patterns-content"><span class="badge-quiet">—</span></span>
   </div>
 
   <!-- Charts -->
