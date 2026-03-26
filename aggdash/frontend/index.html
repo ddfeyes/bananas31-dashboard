@@ -1,945 +1,244 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>aggdash — BANANAS31 Multi-Exchange Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <!-- Chart.js with luxon adapter -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BANANAS31 Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <style>
-/* ─────────────────────────────────────────────────────────────────────
-   aggdash — Terminal Dense Design System
-   Direction: industrial utilitarian trading terminal
-   Memorable move: monospace data density + source-colored panel accents
-   ───────────────────────────────────────────────────────────────────── */
-:root {
-  /* Backgrounds — deep black base */
-  --bg-primary:       #070a10;
-  --bg-secondary:     #0c1018;
-  --bg-panel:         #0f1420;
-  --bg-panel-header:  #131926;
-  --bg-raised:        #171e2c;
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* Borders */
-  --border:           #1c2438;
-  --border-accent:    #253047;
-  --border-strong:    #2f3d56;
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #070a10;
+      color: #dde4f0;
+      overflow-x: hidden;
+    }
 
-  /* Typography */
-  --text-primary:     #dde4f0;
-  --text-secondary:   #7a8599;
-  --text-muted:       #404e66;
-  --text-dim:         #2c3a52;
+    /* ── Top Bar ──────────────────────────────────────── */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: #0c1018;
+      border-bottom: 1px solid #1c2438;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
 
-  /* Semantic accent palette */
-  --accent-blue:      #4a8fff;
-  --accent-green:     #00c97a;
-  --accent-red:       #ff3d5c;
-  --accent-yellow:    #f5c842;
-  --accent-orange:    #ff7a35;
-  --accent-cyan:      #00c8f5;
-  --accent-purple:    #9d6fff;
-  --accent-amber:     #f0a020;
+    .top-bar .title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #00c97a;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
 
-  /* Source identity colors */
-  --color-bn-spot:    #f0b90b;
-  --color-bn-perp:    #f5d060;
-  --color-bb-spot:    #ff6b2b;
-  --color-bb-perp:    #ff9c70;
-  --color-dex:        #00c8f5;
-  --color-agg-spot:   #00c97a;
-  --color-agg-perp:   #70e8b0;
+    .stats-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
 
-  /* Type */
-  --font-mono:   'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  --font-ui:     'Inter', system-ui, -apple-system, sans-serif;
-  --radius:      5px;
-  --radius-sm:   3px;
-  --radius-lg:   8px;
-}
+    .stat-cell {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+    }
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    .stat-label {
+      font-size: 9px;
+      color: #4d566a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
 
-html { height: 100%; }
+    .stat-value {
+      font-size: 12px;
+      color: #dde4f0;
+      font-weight: 500;
+    }
 
-body {
-  font-family: var(--font-ui);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-size: 12px;
-  min-height: 100vh;
-  overflow-x: hidden;
-  -webkit-font-smoothing: antialiased;
-}
+    .stat-value.positive { color: #00c97a; }
+    .stat-value.negative { color: #ff3d5c; }
 
-/* ── Scrollbars ──────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+    .tf-buttons {
+      display: flex;
+      gap: 4px;
+    }
 
-/* ── Layout ──────────────────────────────────────────────────────── */
-.app {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
+    .tf-btn {
+      background: #131824;
+      border: 1px solid #253047;
+      color: #6b7a94;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.15s;
+    }
 
-/* ── Header ──────────────────────────────────────────────────────── */
-.header {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 0 16px;
-  height: 48px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
+    .tf-btn:hover { border-color: #3a4a6a; color: #9aa8c0; }
+    .tf-btn.active { background: #1a2540; border-color: #4a8fff; color: #4a8fff; }
 
-.header-logo {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.header-logo span {
-  color: var(--accent-yellow);
-  font-weight: 700;
-}
+    .conn-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      color: #4d566a;
+    }
 
-/* Large price display */
-.header-price {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.price-value {
-  font-family: var(--font-mono);
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.5px;
-  line-height: 1;
-}
-.price-change {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  letter-spacing: 0.03em;
-}
-.price-change.positive { color: var(--accent-green); }
-.price-change.negative { color: var(--accent-red); }
+    .conn-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #4d566a;
+    }
 
-/* Divider */
-.header-divider {
-  width: 1px;
-  height: 28px;
-  background: var(--border);
-  flex-shrink: 0;
-}
+    .conn-dot.connected { background: #00c97a; }
+    .conn-dot.error { background: #ff3d5c; }
 
-/* Header stats row */
-.header-stats {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  flex: 1;
-  overflow: hidden;
-}
+    /* ── Chart Panels ─────────────────────────────────── */
+    .charts-container {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 52px);
+    }
 
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  padding: 4px 12px;
-  border-right: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.stat-item:last-child { border-right: none; }
+    .chart-panel {
+      position: relative;
+      border-bottom: 1px solid #1c2438;
+    }
 
-.stat-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-family: var(--font-ui);
-  margin-bottom: 2px;
-}
-.stat-value {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.stat-value.positive { color: var(--accent-green); }
-.stat-value.negative { color: var(--accent-red); }
+    .chart-panel .panel-label {
+      position: absolute;
+      top: 4px;
+      left: 10px;
+      font-size: 9px;
+      color: #4d566a;
+      z-index: 10;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+    }
 
-/* Connection badge */
-.header-right {
-  margin-left: auto;
-  flex-shrink: 0;
-  padding-left: 16px;
-}
+    .chart-panel .legend {
+      position: absolute;
+      top: 4px;
+      right: 10px;
+      display: flex;
+      gap: 10px;
+      z-index: 10;
+      pointer-events: none;
+    }
 
-.connection-badge {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-}
-.connection-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-.connection-dot.connected {
-  background: var(--accent-green);
-  box-shadow: 0 0 6px var(--accent-green);
-  animation: glow-pulse 2s ease-in-out infinite;
-}
-.connection-dot.error {
-  background: var(--accent-red);
-  animation: none;
-}
-@keyframes glow-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent-green); }
-  50%       { opacity: 0.6; box-shadow: 0 0 8px var(--accent-green); }
-}
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      color: #6b7a94;
+    }
 
-/* ── Signals Banner ──────────────────────────────────────────────── */
-.signals-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 7px 16px;
-  background: rgba(240,168,32, 0.07);
-  border-bottom: 1px solid rgba(240,168,32, 0.25);
-  flex-wrap: wrap;
-  font-size: 11px;
-  animation: banner-pulse 3s ease-in-out infinite;
-}
-.signals-banner.hidden { display: none; }
+    .legend-swatch {
+      width: 10px;
+      height: 3px;
+      border-radius: 1px;
+    }
 
-@keyframes banner-pulse {
-  0%, 100% { background: rgba(240,168,32, 0.07); }
-  50%       { background: rgba(240,168,32, 0.11); }
-}
-
-.signals-banner-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent-amber);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.signals-banner-label::before {
-  content: '';
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--accent-amber);
-  box-shadow: 0 0 6px var(--accent-amber);
-  animation: glow-pulse 1s ease-in-out infinite;
-}
-
-.signal-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  border: 1px solid transparent;
-}
-.signal-item.info    { background: rgba(0,200,245, 0.10); color: #00c8f5; border-color: rgba(0,200,245,0.2); }
-.signal-item.warning { background: rgba(245,200,66, 0.10); color: #f5c842; border-color: rgba(245,200,66,0.2); }
-.signal-item.alert   { background: rgba(255,61,92, 0.12); color: #ff3d5c; border-color: rgba(255,61,92,0.2); }
-
-.signal-dot {
-  width: 5px; height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-  animation: glow-pulse 1.5s ease-in-out infinite;
-}
-
-/* ── Controls Bar ────────────────────────────────────────────────── */
-.controls-bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 6px 16px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-.controls-section {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.controls-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-family: var(--font-ui);
-  margin-right: 2px;
-}
-
-/* Timeframe button group */
-.btn-group {
-  display: flex;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-accent);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.btn-group button {
-  background: transparent;
-  border: none;
-  border-right: 1px solid var(--border);
-  color: var(--text-muted);
-  padding: 4px 9px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  letter-spacing: 0.02em;
-}
-.btn-group button:last-child { border-right: none; }
-.btn-group button:hover { background: var(--border-accent); color: var(--text-primary); }
-.btn-group button.active {
-  background: var(--accent-blue);
-  color: #fff;
-  font-weight: 600;
-}
-
-/* Source toggle buttons */
-.toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  padding: 3px 9px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-}
-.toggle-btn:hover { border-color: var(--border-strong); color: var(--text-secondary); }
-.toggle-btn .dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  transition: background 0.12s, box-shadow 0.12s;
-  flex-shrink: 0;
-}
-
-/* Active states per source */
-.toggle-btn.binance-spot.active  { border-color: rgba(240,185,11,0.4); color: #f0b90b; }
-.toggle-btn.binance-spot.active .dot { background: #f0b90b; box-shadow: 0 0 5px #f0b90b; }
-
-.toggle-btn.binance-perp.active  { border-color: rgba(245,208,96,0.3); color: #f5d060; }
-.toggle-btn.binance-perp.active .dot { background: #f5d060; box-shadow: 0 0 5px #f5d060; }
-
-.toggle-btn.bybit-spot.active    { border-color: rgba(255,107,43,0.4); color: #ff6b2b; }
-.toggle-btn.bybit-spot.active .dot { background: #ff6b2b; box-shadow: 0 0 5px #ff6b2b; }
-
-.toggle-btn.bybit-perp.active    { border-color: rgba(255,156,112,0.3); color: #ff9c70; }
-.toggle-btn.bybit-perp.active .dot { background: #ff9c70; box-shadow: 0 0 5px #ff9c70; }
-
-.toggle-btn.dex.active           { border-color: rgba(0,200,245,0.4); color: #00c8f5; }
-.toggle-btn.dex.active .dot      { background: #00c8f5; box-shadow: 0 0 5px #00c8f5; }
-
-/* ── Dashboard Grid ──────────────────────────────────────────────── */
-.dashboard {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto;
-  gap: 1px;
-  background: var(--border);
-  flex: 1;
-}
-
-/* Panels */
-.panel {
-  background: var(--bg-panel);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  position: relative;
-}
-.panel.full-width { grid-column: 1 / -1; }
-
-/* Panel header */
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 7px 12px 6px;
-  background: var(--bg-panel-header);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.panel-title {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-family: var(--font-ui);
-}
-
-.panel-stats {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.panel-stat {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-}
-.panel-stat-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.panel-stat-value {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.panel-stat-value.positive { color: var(--accent-green); }
-.panel-stat-value.negative { color: var(--accent-red); }
-
-/* Chart container */
-.chart-container {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  padding: 6px 4px 4px;
-}
-.chart-container canvas { display: block; }
-
-/* ── Liquidations panel ──────────────────────────────────────────── */
-.liq-panel {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.liq-feed {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 0;
-}
-.liq-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  border-bottom: 1px solid transparent;
-  transition: background 0.1s;
-}
-.liq-item:hover { background: var(--bg-raised); }
-.liq-item + .liq-item { border-top: 1px solid var(--border); }
-
-.liq-item .liq-side {
-  font-weight: 700;
-  font-size: 10px;
-  width: 44px;
-  flex-shrink: 0;
-  letter-spacing: 0.04em;
-}
-.liq-item .liq-side.long  { color: var(--accent-red); }
-.liq-item .liq-side.short { color: var(--accent-green); }
-
-.liq-item .liq-exchange {
-  color: var(--text-muted);
-  font-size: 10px;
-  width: 54px;
-  flex-shrink: 0;
-}
-.liq-item .liq-price { color: var(--text-primary); flex: 1; }
-.liq-item .liq-qty   { color: var(--text-secondary); min-width: 50px; text-align: right; }
-.liq-item .liq-time  { color: var(--text-muted); width: 56px; text-align: right; font-size: 10px; }
-
-.liq-heatmap {
-  width: 200px;
-  flex-shrink: 0;
-  padding: 10px 12px;
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
-  background: var(--bg-panel-header);
-}
-.liq-heatmap-title {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-}
-.liq-bar-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.liq-bar-label {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--text-secondary);
-  width: 52px;
-  flex-shrink: 0;
-}
-.liq-bar-track {
-  flex: 1;
-  height: 5px;
-  background: var(--border-accent);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.liq-bar-fill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-.liq-bar-fill.long  { background: var(--accent-red); }
-.liq-bar-fill.short { background: var(--accent-green); }
-
-/* ── Funding Rates panel ─────────────────────────────────────────── */
-.funding-grid {
-  display: flex;
-  align-items: stretch;
-  flex: 1;
-  background: var(--bg-panel);
-}
-.funding-cell {
-  flex: 1;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  border-right: 1px solid var(--border);
-}
-.funding-cell:last-child { border-right: none; }
-.funding-exchange {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-.funding-rate {
-  font-family: var(--font-mono);
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--text-secondary);
-}
-.funding-rate.positive { color: var(--accent-green); }
-.funding-rate.negative { color: var(--accent-red); }
-.funding-annual {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-/* ── Tooltip ─────────────────────────────────────────────────────── */
-.chart-tooltip {
-  position: absolute;
-  background: rgba(12,16,24,0.97);
-  border: 1px solid var(--border-accent);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  pointer-events: none;
-  z-index: 100;
-  display: none;
-  min-width: 140px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-}
-.tooltip-title {
-  color: var(--text-muted);
-  font-size: 9px;
-  margin-bottom: 5px;
-}
-.tooltip-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-primary);
-  line-height: 1.7;
-}
-.tooltip-row span:first-child { color: var(--text-secondary); }
-
-/* ── Loading ─────────────────────────────────────────────────────── */
-.loading-overlay {
-  position: absolute;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(7,10,16,0.7);
-  z-index: 10;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.loading-overlay.visible { display: flex; }
-
-/* ── Responsive: 768px ───────────────────────────────────────────── */
-@media (max-width: 900px) {
-  .dashboard { grid-template-columns: 1fr; }
-  .panel.full-width { grid-column: 1; }
-
-  .header {
-    height: auto;
-    min-height: 48px;
-    flex-wrap: wrap;
-    padding: 8px 12px;
-    gap: 8px;
-  }
-  .header-divider { display: none; }
-  .header-stats {
-    flex-wrap: wrap;
-    overflow: visible;
-    width: 100%;
-    gap: 0;
-  }
-  .stat-item { border-right: none; padding: 3px 10px 3px 0; }
-
-  .price-value { font-size: 18px; }
-  .funding-grid { flex-wrap: wrap; }
-  .funding-cell { min-width: 50%; border-bottom: 1px solid var(--border); }
-  .liq-heatmap { width: 160px; }
-}
-
-@media (max-width: 480px) {
-  .liq-heatmap { display: none; }
-  .controls-bar { gap: 8px; }
-  .toggle-btn { padding: 3px 6px; font-size: 10px; }
-}
-
-/* ── Patterns Bar (Bug 8) ────────────────────────────────────────── */
-.patterns-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-  font-size: 11px;
-}
-.patterns-bar.hidden { display: none; }
-.patterns-bar-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  flex-shrink: 0;
-}
-.pattern-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 9px;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  border: 1px solid transparent;
-}
-.pattern-badge.high   { background: rgba(255,61,92,0.12); color: #ff3d5c; border-color: rgba(255,61,92,0.25); }
-.pattern-badge.medium { background: rgba(255,122,53,0.12); color: #ff7a35; border-color: rgba(255,122,53,0.25); }
-.pattern-badge.low    { background: rgba(128,138,158,0.12); color: #8892a4; border-color: rgba(128,138,158,0.25); }
-
-/* ── Helpers ─────────────────────────────────────────────────────── */
-.positive { color: var(--accent-green) !important; }
-.negative { color: var(--accent-red) !important; }
+    #panel-price  { flex: 6; min-height: 200px; }
+    #panel-basis  { flex: 2; min-height: 100px; }
+    #panel-oi     { flex: 2; min-height: 100px; }
   </style>
 </head>
 <body>
-<div class="app">
 
-  <!-- ── Header ──────────────────────────────────────────────────────── -->
-  <header class="header">
-    <div class="header-logo">agg<span>dash</span></div>
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="title">BANANAS31</div>
 
-    <div class="header-price">
-      <div class="price-value" id="header-price-val">–</div>
-      <div class="price-change" id="header-price-change">BANANAS31USDT</div>
-    </div>
-
-    <div class="header-divider"></div>
-
-    <div class="header-stats">
-      <div class="stat-item">
-        <span class="stat-label">BN Spot</span>
-        <span class="stat-value" id="stat-bn-spot" style="color:var(--color-bn-spot)">–</span>
+    <div class="stats-row">
+      <div class="stat-cell">
+        <span class="stat-label">BN-SPOT</span>
+        <span class="stat-value" id="stat-bn-spot">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BN Perp</span>
-        <span class="stat-value" id="stat-bn-perp" style="color:var(--color-bn-perp)">–</span>
+      <div class="stat-cell">
+        <span class="stat-label">BN-PERP</span>
+        <span class="stat-value" id="stat-bn-perp">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BB Basis</span>
-        <span class="stat-value" id="stat-bb-basis" style="color:var(--color-bb-spot)">–</span>
+      <div class="stat-cell">
+        <span class="stat-label">BB-PERP</span>
+        <span class="stat-value" id="stat-bb-perp">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BB Perp</span>
-        <span class="stat-value" id="stat-bb-perp" style="color:var(--color-bb-perp)">–</span>
-      </div>
-      <div class="stat-item">
+      <div class="stat-cell">
         <span class="stat-label">DEX</span>
-        <span class="stat-value" id="stat-dex" style="color:var(--color-dex)">–</span>
+        <span class="stat-value" id="stat-dex">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">Basis</span>
-        <span class="stat-value" id="stat-basis">–</span>
+      <div class="stat-cell">
+        <span class="stat-label">FUNDING</span>
+        <span class="stat-value" id="stat-funding">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">Agg OI</span>
-        <span class="stat-value" id="stat-oi" style="color:var(--accent-blue)">–</span>
+      <div class="stat-cell">
+        <span class="stat-label">OI</span>
+        <span class="stat-value" id="stat-oi">--</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">Funding</span>
-        <span class="stat-value" id="stat-funding">–</span>
-      </div>
-    </div>
-
-    <div class="header-right">
-      <div class="connection-badge">
-        <div class="connection-dot" id="conn-dot"></div>
-        <span id="conn-label">Connecting…</span>
-      </div>
-    </div>
-  </header>
-
-  <!-- Signals banner (hidden by default) -->
-  <div id="signals-banner" class="signals-banner hidden"></div>
-
-  <!-- Patterns section (Bug 8) -->
-  <div id="patterns-bar" class="patterns-bar hidden"></div>
-
-  <!-- ── Controls ────────────────────────────────────────────────────── -->
-  <div class="controls-bar">
-    <div class="controls-section">
-      <span class="controls-label">TF</span>
-      <div class="btn-group">
-        <button data-tf="1m">1m</button>
-        <button data-tf="5m" class="active">5m</button>
-        <button data-tf="15m">15m</button>
-        <button data-tf="1h">1h</button>
+      <div class="stat-cell">
+        <span class="stat-label">DEX-SPREAD</span>
+        <span class="stat-value" id="stat-dex-spread">--</span>
       </div>
     </div>
 
-    <div class="controls-section">
-      <span class="controls-label">Sources</span>
-      <button class="toggle-btn binance-spot active" data-source="binance-spot">
-        <span class="dot"></span>BN Spot
-      </button>
-      <button class="toggle-btn binance-perp active" data-source="binance-perp">
-        <span class="dot"></span>BN Perp
-      </button>
-      <!-- BybitSpot removed: BANANAS31USDT not listed on Bybit Spot -->
-      <button class="toggle-btn bybit-perp active" data-source="bybit-perp">
-        <span class="dot"></span>BB Perp
-      </button>
-      <button class="toggle-btn dex active" data-source="bsc-pancakeswap">
-        <span class="dot"></span>DEX
-      </button>
+    <div class="tf-buttons">
+      <button class="tf-btn active" data-minutes="60">1H</button>
+      <button class="tf-btn" data-minutes="240">4H</button>
+      <button class="tf-btn" data-minutes="1440">1D</button>
+      <button class="tf-btn" data-minutes="10080">7D</button>
+    </div>
+
+    <div class="conn-status">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span id="conn-label">--</span>
     </div>
   </div>
 
-  <!-- ── Dashboard Grid ──────────────────────────────────────────────── -->
-  <div class="dashboard">
-
-    <!-- Chart 1: Price -->
-    <div class="panel full-width" style="min-height:240px">
-      <div class="panel-header">
-        <span class="panel-title">Price</span>
-        <div class="panel-stats">
-          <div class="btn-group" id="chart-range-group" style="margin-right:12px">
-            <button data-range="60">1H</button>
-            <button data-range="240">4H</button>
-            <button data-range="1440" class="active">1D</button>
-            <button data-range="10080">7D</button>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg Spot</span>
-            <span class="panel-stat-value" id="ps-agg-spot">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg Perp</span>
-            <span class="panel-stat-value" id="ps-agg-perp">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-price"></canvas>
+  <!-- Charts -->
+  <div class="charts-container">
+    <div class="chart-panel" id="panel-price">
+      <div class="panel-label">PRICE + VOLUME</div>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#00c97a"></span>BN Spot (candle)</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#ff7a35"></span>BN Perp</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>BB Perp</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#00c8f5"></span>DEX</span>
       </div>
     </div>
-
-    <!-- Chart 2: Basis -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Basis (Perp − Spot)</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">BN</span>
-            <span class="panel-stat-value" id="ps-basis-bn">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">BB</span>
-            <span class="panel-stat-value" id="ps-basis-bb">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg</span>
-            <span class="panel-stat-value" id="ps-basis-agg">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-basis"></canvas>
+    <div class="chart-panel" id="panel-basis">
+      <div class="panel-label">BASIS %</div>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>Binance</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>Bybit</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#00c8f5"></span>Aggregated</span>
       </div>
     </div>
-
-    <!-- Chart 3: Volume -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Volume</span>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-volume"></canvas>
+    <div class="chart-panel" id="panel-oi">
+      <div class="panel-label">OPEN INTEREST</div>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#4a8fff"></span>Aggregated</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>Binance</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>Bybit</span>
       </div>
     </div>
+  </div>
 
-    <!-- Chart 4: OI -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Open Interest + OI Delta</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Total OI</span>
-            <span class="panel-stat-value" id="ps-oi">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Δ 1m</span>
-            <span class="panel-stat-value" id="ps-oi-delta">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-oi"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 5: CVD -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Cumulative Volume Delta (CVD)</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg CVD</span>
-            <span class="panel-stat-value" id="ps-cvd-agg">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-cvd"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 6: DEX Spread -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">DEX vs CEX Spread</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Spread</span>
-            <span class="panel-stat-value" id="ps-spread">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">%</span>
-            <span class="panel-stat-value" id="ps-spread-pct">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-spread"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 7: Liquidations -->
-    <div class="panel full-width" style="min-height:220px">
-      <div class="panel-header">
-        <span class="panel-title">Liquidations</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Feed (live)</span>
-          </div>
-        </div>
-      </div>
-      <div class="liq-panel">
-        <div class="liq-feed" id="liq-feed"></div>
-        <div class="liq-heatmap" id="liq-heatmap"></div>
-      </div>
-    </div>
-
-    <!-- Chart 8: Funding -->
-    <div class="panel full-width" style="min-height:130px">
-      <div class="panel-header">
-        <span class="panel-title">Funding Rates</span>
-      </div>
-      <div class="funding-grid" id="funding-grid">
-        <!-- Populated by JS -->
-      </div>
-    </div>
-
-  </div><!-- /dashboard -->
-</div><!-- /app -->
-
-<script src="js/api.js"></script>
-<script src="js/charts.js"></script>
-<script src="js/main.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>

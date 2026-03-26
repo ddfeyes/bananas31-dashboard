@@ -1,86 +1,87 @@
 /**
- * aggdash API client
- * Polls backend REST endpoints and caches data for charts.
+ * BANANAS31 API client — Lightweight Charts edition
  */
 
-// Use relative URLs so the nginx frontend proxy handles routing (works behind any reverse proxy)
 const API_BASE = '';
 
-// Timeframe → seconds
-const TF_SECS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
-
-class AggdashAPI {
-  constructor() {
-    this.baseUrl = API_BASE;
-    this.cache = {};
-    this.errorCount = 0;
-    this.connected = false;
-    this.listeners = {};
+async function apiGet(path) {
+  try {
+    const res = await fetch(API_BASE + path);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    window._apiErrors = 0;
+    setConnected(true);
+    return data;
+  } catch (err) {
+    window._apiErrors = (window._apiErrors || 0) + 1;
+    if (window._apiErrors > 2) setConnected(false);
+    console.warn('[api]', path, err.message);
+    return null;
   }
-
-  on(event, fn) {
-    if (!this.listeners[event]) this.listeners[event] = [];
-    this.listeners[event].push(fn);
-  }
-
-  emit(event, data) {
-    (this.listeners[event] || []).forEach(fn => fn(data));
-  }
-
-  async get(path) {
-    try {
-      const res = await fetch(this.baseUrl + path);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      this.errorCount = 0;
-      this.connected = true;
-      this.emit('connected', true);
-      return data;
-    } catch (err) {
-      this.errorCount++;
-      if (this.errorCount > 2) {
-        this.connected = false;
-        this.emit('connected', false);
-      }
-      console.warn('[api] GET', path, 'failed:', err.message);
-      return null;
-    }
-  }
-
-  // Core endpoints
-  async getPrices() { return this.get('/api/prices'); }
-  async getAggPrices() { return this.get('/api/aggregated-prices'); }
-  async getOI() { return this.get('/api/oi'); }
-  async getFunding() { return this.get('/api/funding'); }
-  async getLiquidations(limit = 50) { return this.get(`/api/liquidations?limit=${limit}`); }
-
-  // DEX
-  async getDex() { return this.get('/api/dex'); }
-  async getDexHistory(limit = 100) { return this.get(`/api/dex/history?limit=${limit}`); }
-  async getSignals() { return this.get('/api/signals'); }
-
-  // Analytics
-  async getSnapshot() { return this.get('/api/analytics/snapshot'); }
-  async getCVD(windowSecs) { return this.get(`/api/analytics/cvd?window_secs=${windowSecs}`); }
-  async getCVDSeries(intervalSecs, windowSecs) {
-    return this.get(`/api/analytics/cvd/series?interval_secs=${intervalSecs}&window_secs=${windowSecs}`);
-  }
-  async getBasis() { return this.get('/api/analytics/basis'); }
-  async getBasisSeries(intervalSecs, windowSecs) {
-    return this.get(`/api/analytics/basis/series?interval_secs=${intervalSecs}&window_secs=${windowSecs}`);
-  }
-  async getDexCexSpread() { return this.get('/api/analytics/dex-cex-spread'); }
-  async getDexCexSpreadSeries(intervalSecs, windowSecs) {
-    return this.get(`/api/analytics/dex-cex-spread/series?interval_secs=${intervalSecs}&window_secs=${windowSecs}`);
-  }
-  async getOIDelta() { return this.get('/api/analytics/oi-delta'); }
-  async getOIDeltaSeries(windowSecs) {
-    return this.get(`/api/analytics/oi-delta/series?window_secs=${windowSecs}`);
-  }
-  async getFundingSummary() { return this.get('/api/analytics/funding'); }
-  async getPatterns() { return this.get('/api/patterns'); }
-  async getOISeries(minutes) { return this.get(`/api/oi/series?minutes=${minutes}`); }
-  async getOHLCV(exchangeId, minutes) { return this.get(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(exchangeId)}&minutes=${minutes}`); }
 }
 
-window.api = new AggdashAPI();
+function setConnected(ok) {
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  if (dot) dot.className = 'conn-dot ' + (ok ? 'connected' : 'error');
+  if (label) label.textContent = ok ? 'Live' : 'Disconnected';
+}
+
+// ── Data fetchers ────────────────────────────────────────────────────
+
+async function fetchOHLCV(exchangeId, minutes) {
+  const data = await apiGet(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(exchangeId)}&minutes=${minutes}`);
+  if (!data || !data.bars || !data.bars.length) return [];
+  return data.bars
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(b => ({
+      time: b.timestamp,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      value: b.volume,
+    }));
+}
+
+async function fetchBasisSeries(windowSecs) {
+  const data = await apiGet(`/api/analytics/basis/series?window=${windowSecs}`);
+  if (!data) return { binance: [], bybit: [], agg: [] };
+  const mapPts = arr => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.basis_pct }));
+  return {
+    binance: mapPts((data.per_exchange || {}).binance),
+    bybit: mapPts((data.per_exchange || {}).bybit),
+    agg: mapPts(data.aggregated),
+  };
+}
+
+async function fetchOISeries(minutes) {
+  const data = await apiGet(`/api/oi/series?minutes=${minutes}`);
+  if (!data) return { agg: [], binance: [], bybit: [] };
+  const mapPts = arr => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.open_interest }));
+  return {
+    agg: mapPts(data.aggregated),
+    binance: mapPts((data.per_exchange || {})['binance-perp']),
+    bybit: mapPts((data.per_exchange || {})['bybit-perp']),
+  };
+}
+
+async function fetchPrices() {
+  return apiGet('/api/prices');
+}
+
+async function fetchFunding() {
+  return apiGet('/api/funding');
+}
+
+async function fetchDexPrice() {
+  return apiGet('/api/dex/price');
+}
+
+async function fetchOI() {
+  return apiGet('/api/oi');
+}
