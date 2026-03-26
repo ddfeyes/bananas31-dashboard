@@ -26,9 +26,10 @@ ALL_CEX_SPOT = ["binance-spot"]
 ALL_CEX_PERP = ["binance-perp", "bybit-perp"]
 
 # Exchange mapping (exchange name → spot source, perp source)
-# Bybit only has perp for BANANAS31USDT (no spot)
+# Bybit has no spot for BANANAS31 — use Binance spot as reference for cross-exchange basis
 EXCHANGE_MAP = {
     "binance": ("binance-spot", "binance-perp"),
+    "bybit": ("binance-spot", "bybit-perp"),   # cross-exchange: bybit perp vs binance spot
 }
 
 
