@@ -230,10 +230,14 @@ async def get_oi():
     """Get aggregated Open Interest (Binance perp + Bybit perp)."""
     per_source = oi_funding_poller.get_latest_oi()
     aggregated = oi_funding_poller.get_aggregated_oi()
+    total = aggregated if aggregated else None
     return {
         "timestamp": asyncio.get_event_loop().time(),
         "per_source": per_source,
         "aggregated": aggregated,
+        # Aliases for frontend / tests
+        "total_oi": total,
+        "per_exchange": per_source,
     }
 
 @app.get("/api/funding")
