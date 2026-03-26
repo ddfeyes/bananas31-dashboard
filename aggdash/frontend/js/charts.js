@@ -196,13 +196,20 @@ function initVolumeChart() {
 // ── Sync visible range across all charts ─────────────────────────────
 
 function syncTimeScales() {
+  // Use TIME-based range sync (not logical index) so all panels show identical
+  // calendar timestamps regardless of how many bars each chart has.
   const charts = [priceChart, basisChart, oiChart, cvdChart, volChart].filter(Boolean);
+  let _syncing = false;
   charts.forEach(src => {
-    src.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (!range) return;
+    src.timeScale().subscribeVisibleTimeRangeChange(range => {
+      if (!range || _syncing) return;
+      _syncing = true;
       charts.forEach(dst => {
-        if (dst !== src) dst.timeScale().setVisibleLogicalRange(range);
+        if (dst !== src) {
+          try { dst.timeScale().setVisibleRange(range); } catch (_) {}
+        }
       });
+      _syncing = false;
     });
   });
 }
