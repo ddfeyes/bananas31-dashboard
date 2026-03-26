@@ -206,20 +206,66 @@ class BybitSpotCollector:
 # ─── Bybit Perp ──────────────────────────────────────────────────────────────
 
 class BybitPerpCollector:
-    """Streams BANANAS31USDT trades + liquidations from Bybit linear WS v5."""
+    """Streams BANANAS31USDT trades + liquidations from Bybit linear WS v5.
+
+    Falls back to polling Bybit REST ticker every 10s when no WS trade arrives for 30s
+    (BANANAS31 has low trade frequency on Bybit — WS connects but stays silent).
+    """
 
     WS_URL = "wss://stream.bybit.com/v5/public/linear"
     TRADE_TOPIC = "publicTrade.BANANAS31USDT"
     LIQ_TOPIC = "liquidation.BANANAS31USDT"
+    REST_TICKER_URL = "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BANANAS31USDT"
+    REST_POLL_INTERVAL = 10  # seconds
+    STALE_THRESHOLD = 30     # seconds without WS tick → emit REST tick
 
     def __init__(self, on_tick: Callable, on_liquidation: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
         self._on_liquidation = on_liquidation
         self._stop = asyncio.Event()
         self.running = False
+        self._last_ws_tick_at: float = 0.0
+
+    async def _rest_poll_loop(self) -> None:
+        """Poll Bybit REST ticker and emit ticks when WS is silent."""
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self.REST_POLL_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+            if self._stop.is_set():
+                break
+            stale = (time.time() - self._last_ws_tick_at) > self.STALE_THRESHOLD
+            if not stale:
+                continue
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        self.REST_TICKER_URL,
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        data = await resp.json()
+                items = data.get("result", {}).get("list", [])
+                if items:
+                    item = items[0]
+                    price = float(item["lastPrice"])
+                    volume = float(item.get("volume24h", 0)) / 86400  # approx per-second vol
+                    tick = Tick(
+                        source="bybit-perp",
+                        price=price,
+                        volume=volume,
+                        is_buy=True,
+                        timestamp=time.time(),
+                    )
+                    await self._on_tick(tick)
+                    logger.debug("BybitPerp REST fallback tick: %.8f", price)
+            except Exception as exc:
+                logger.warning("BybitPerp REST poll error: %s", exc)
 
     async def start(self) -> None:
         self.running = True
+        # Start REST poll loop in background
+        rest_task = asyncio.ensure_future(self._rest_poll_loop())
         while not self._stop.is_set():
             try:
                 async with websockets.connect(self.WS_URL, ping_interval=20) as ws:
@@ -237,6 +283,7 @@ class BybitPerpCollector:
 
                             if topic == self.TRADE_TOPIC:
                                 for trade in msg.get("data", []):
+                                    self._last_ws_tick_at = time.time()
                                     tick = Tick(
                                         source="bybit-perp",
                                         price=float(trade["p"]),
@@ -266,6 +313,7 @@ class BybitPerpCollector:
                 logger.error("BybitPerp unexpected error: %s", exc)
             if not self._stop.is_set():
                 await asyncio.sleep(RECONNECT_DELAY)
+        rest_task.cancel()
         self.running = False
 
     async def stop(self) -> None:
