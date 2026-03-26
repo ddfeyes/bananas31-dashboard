@@ -26,7 +26,6 @@ from analytics_engine import AnalyticsEngine
 from signals import SignalEngine
 
 # Configure structured JSON logging
-import json
 from pythonjsonlogger import jsonlogger
 
 _log_handler = logging.StreamHandler()
