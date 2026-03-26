@@ -328,6 +328,8 @@ class BSCPancakeSwapCollector:
         self.running = False
         self.last_price: Optional[float] = None
         self.last_liquidity: Optional[int] = None
+        self.last_sqrt_price_x96: Optional[int] = None  # for liquidity_usd calc (#15)
+        self.last_bnb_usd: Optional[float] = None
 
     async def start(self) -> None:
         self.running = True
@@ -438,6 +440,10 @@ class BSCPancakeSwapCollector:
         # Convert to USD using BNB/USDT from Binance
         bnb_usd = await _fetch_bnb_price_usd()
         price = price_wbnb * bnb_usd if bnb_usd else price_wbnb
+
+        # Store for liquidity_usd computation (fix #15)
+        self.last_sqrt_price_x96 = sqrt_price_x96
+        self.last_bnb_usd = bnb_usd
 
         # Parse liquidity
         liq_res = next((r for r in results if r.get("id") == 2), None)

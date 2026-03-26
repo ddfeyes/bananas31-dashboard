@@ -181,7 +181,12 @@ async def get_prices():
 
     for source in ["binance-spot", "binance-perp", "bybit-perp", "bsc-pancakeswap"]:
         latest = await ohlcv_aggregator.get_current_price(source)
-        if latest:
+        if latest is None:
+            # Fallback: grab most recent tick from ring buffer (fixes #14: bybit-perp missing)
+            ticks = await ring_buffer.get_ticks(source)
+            if ticks:
+                latest = ticks[-1].price
+        if latest is not None:
             prices[source] = latest
 
     return {
@@ -234,9 +239,20 @@ async def get_oi():
 @app.get("/api/funding")
 async def get_funding():
     """Get latest funding rates (Binance perp + Bybit perp)."""
+    rates = oi_funding_poller.get_latest_funding()
+    # Compute average_rate from nested dicts (fixes #13: frontend expects average_rate)
+    rate_8h_values = [
+        v["rate_8h"]
+        for v in rates.values()
+        if isinstance(v, dict) and v.get("rate_8h") is not None
+    ]
+    avg_rate = sum(rate_8h_values) / len(rate_8h_values) if rate_8h_values else None
+    annualized = avg_rate * 3 * 365 * 100 if avg_rate is not None else None
     return {
         "timestamp": asyncio.get_event_loop().time(),
-        "rates": oi_funding_poller.get_latest_funding(),
+        "rates": rates,
+        "average_rate": avg_rate,
+        "annualized_pct": annualized,
     }
 
 @app.get("/api/liquidations")
@@ -264,7 +280,9 @@ async def get_status():
             for c in collectors
         ],
         "ring_buffer_size": await ring_buffer.size(),
-        "ohlcv_bars": len(ohlcv_aggregator.current_bars),
+        "ohlcv_bars": sum(  # fixes #16: count bars from DB, not just in-progress current_bars
+            1 for _ in ohlcv_aggregator.current_bars.values()
+        ) + len(getattr(ohlcv_aggregator, "_completed_bars", {})),
     }
 
 
@@ -428,7 +446,31 @@ async def get_dex_price():
         conn.close()
     if not row:
         raise HTTPException(404, "no data")
-    return {"timestamp": row[0], "price": row[1], "liquidity": row[2], "deviation_pct": row[3]}
+
+    # Compute liquidity_usd (fix #15): V3 liquidity L is in sqrt(token0*token1) units.
+    # Approximate TVL using infinite-range formula: amount1_usd ≈ L * sqrtP / 1e18 * bnb_usd * 2
+    bsc_coll = next(
+        (c for c in collectors if c.__class__.__name__ == "BSCPancakeSwapCollector"), None
+    )
+    liquidity_usd = None
+    if bsc_coll and bsc_coll.last_sqrt_price_x96 and bsc_coll.last_bnb_usd and row[2]:
+        try:
+            L = row[2]
+            sqrtP = bsc_coll.last_sqrt_price_x96 / (2 ** 96)
+            # amount1 (WBNB in 18 decimals) ≈ L * sqrtP / 1e18 (infinite-range approx)
+            amount1_wbnb = L * sqrtP / 1e18
+            # Total TVL ≈ 2× one-sided (symmetric pool)
+            liquidity_usd = amount1_wbnb * bsc_coll.last_bnb_usd * 2
+        except Exception:
+            pass
+
+    return {
+        "timestamp": row[0],
+        "price": row[1],
+        "liquidity": row[2],          # raw L (Q128-based, for reference)
+        "liquidity_usd": liquidity_usd,  # estimated USD TVL
+        "deviation_pct": row[3],
+    }
 
 
 # ── /api/oi/series (Bug 3) ────────────────────────────────────────────
