@@ -21,7 +21,7 @@ OI_ACCUMULATION_THRESHOLD = 0.05     # 5% OI spike
 OI_DELEVERAGE_THRESHOLD = -0.05      # -5% OI drop
 PRICE_FLAT_THRESHOLD = 0.005         # price change < 0.5% = "flat"
 PRICE_DOWN_THRESHOLD = -0.01         # price change < -1% = "down"
-MIN_DATA_WINDOW_SECS = 300           # 5 minutes minimum before firing signals
+MIN_DATA_WINDOW_SECS = 60            # 60s minimum before firing signals (DB has enough history after restart)
 
 
 class SignalEngine:
