@@ -387,6 +387,15 @@ class BSCPancakeSwapCollector:
                 result = await self._fetch_slot0()
                 if result:
                     price, liquidity = result
+
+                    # Sanity-check: BANANAS31 valid USD range 0.001–1.0
+                    # Reject if BNB/USD conversion failed or price is raw sqrtPriceX96
+                    if price < 0.001 or price > 1.0:
+                        logger.warning(
+                            "BSC price sanity check failed: %.8f — skipping persist (likely unconverted)", price
+                        )
+                        continue
+
                     self.last_price = price
                     self.last_liquidity = liquidity
 
