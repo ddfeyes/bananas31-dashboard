@@ -154,8 +154,10 @@
     }
 
     #panel-price  { flex: 6; min-height: 200px; }
-    #panel-basis  { flex: 2; min-height: 100px; }
-    #panel-oi     { flex: 2; min-height: 100px; }
+    #panel-basis  { flex: 2; min-height: 80px; }
+    #panel-oi     { flex: 2; min-height: 80px; }
+    #panel-cvd    { flex: 2; min-height: 80px; }
+    #panel-volume { flex: 2; min-height: 80px; }
   </style>
 </head>
 <body>
@@ -233,6 +235,22 @@
         <span class="legend-item"><span class="legend-swatch" style="background:#4a8fff"></span>Aggregated</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>Binance</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>Bybit</span>
+      </div>
+    </div>
+    <div class="chart-panel" id="panel-cvd">
+      <div class="panel-label">CVD · Cumulative Volume Delta</div>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#00c97a"></span>Aggregated</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>BN Perp</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>BB Perp</span>
+      </div>
+    </div>
+    <div class="chart-panel" id="panel-volume">
+      <div class="panel-label">VOLUME · Spot vs Perp</div>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:rgba(240,185,11,0.8)"></span>BN Spot</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:rgba(255,122,53,0.8)"></span>BN Perp</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:rgba(157,111,255,0.8)"></span>BB Perp</span>
       </div>
     </div>
   </div>

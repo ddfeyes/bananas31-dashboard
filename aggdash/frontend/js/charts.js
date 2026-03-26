@@ -116,10 +116,87 @@ function initOIChart() {
   });
 }
 
-// ── Sync visible range across charts ─────────────────────────────────
+// ── CVD Panel ─────────────────────────────────────────────────────────
+
+let cvdChart, aggCVDLine, bnPerpCVDLine, bbPerpCVDLine;
+
+function initCVDChart() {
+  const container = document.getElementById('panel-cvd');
+  if (!container) return;
+  cvdChart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    autoSize: true,
+  });
+
+  const VOL_FMT = { type: 'volume', precision: 0, minMove: 1 };
+
+  // Aggregated CVD as filled area
+  aggCVDLine = cvdChart.addAreaSeries({
+    topColor: 'rgba(0,201,122,0.25)', bottomColor: 'rgba(255,61,92,0.25)',
+    lineColor: '#00c97a', lineWidth: 2,
+    lastValueVisible: true, priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+
+  bnPerpCVDLine = cvdChart.addLineSeries({
+    color: '#f0b90b', lineWidth: 1,
+    lastValueVisible: false, priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+
+  bbPerpCVDLine = cvdChart.addLineSeries({
+    color: '#9d6fff', lineWidth: 1,
+    lastValueVisible: false, priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+}
+
+// ── Volume Panel ─────────────────────────────────────────────────────
+
+let volChart, bnSpotVolSeries, bnPerpVolSeries, bbPerpVolSeries;
+
+function initVolumeChart() {
+  const container = document.getElementById('panel-volume');
+  if (!container) return;
+  volChart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    autoSize: true,
+  });
+
+  bnSpotVolSeries = volChart.addHistogramSeries({
+    color: 'rgba(240,185,11,0.6)',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'left',
+    lastValueVisible: false,
+  });
+  volChart.priceScale('left').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0 },
+    drawTicks: false,
+  });
+
+  bnPerpVolSeries = volChart.addHistogramSeries({
+    color: 'rgba(255,122,53,0.6)',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'right',
+    lastValueVisible: false,
+  });
+
+  bbPerpVolSeries = volChart.addHistogramSeries({
+    color: 'rgba(157,111,255,0.6)',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'right',
+    lastValueVisible: false,
+  });
+  volChart.priceScale('right').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0 },
+    drawTicks: false,
+  });
+}
+
+// ── Sync visible range across all charts ─────────────────────────────
 
 function syncTimeScales() {
-  const charts = [priceChart, basisChart, oiChart];
+  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart].filter(Boolean);
   charts.forEach(src => {
     src.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (!range) return;
@@ -136,5 +213,7 @@ function initAllCharts() {
   initPriceChart();
   initBasisChart();
   initOIChart();
+  initCVDChart();
+  initVolumeChart();
   syncTimeScales();
 }
