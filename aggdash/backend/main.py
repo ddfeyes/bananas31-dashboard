@@ -487,13 +487,28 @@ async def get_oi_series(minutes: int = 60):
         ).fetchall()
     finally:
         conn.close()
-    per_source = {}
+    per_source: dict = {}
     for row in rows:
         src = row[0]
         if src not in per_source:
             per_source[src] = []
         per_source[src].append({"timestamp": row[1], "open_interest": row[2]})
-    return {"per_source": per_source}
+
+    # Build aggregated series: sum OI across sources at each timestamp
+    # Align by nearest-second bucket to handle slight timing offsets
+    ts_map: dict = {}
+    for src, pts in per_source.items():
+        for pt in pts:
+            bucket = round(pt["timestamp"])
+            if bucket not in ts_map:
+                ts_map[bucket] = 0.0
+            ts_map[bucket] += pt["open_interest"]
+    aggregated = [
+        {"timestamp": float(bucket), "open_interest": total}
+        for bucket, total in sorted(ts_map.items())
+    ]
+
+    return {"per_source": per_source, "aggregated": aggregated}
 
 
 # ── /api/patterns (Bug 7) ─────────────────────────────────────────────
