@@ -4,6 +4,10 @@
 
 let currentMinutes = 60; // default 1H
 
+// ── Real-time candle state ────────────────────────────────────────────
+// Track intra-minute OHLC so .update() merges into current bar correctly.
+let _rtBar = null;  // { minuteTs, open, high, low, close }
+
 // ── Formatting helpers ───────────────────────────────────────────────
 
 function fmtPrice(v) {
@@ -82,6 +86,7 @@ function setText(id, text) {
 // ── Load historical data ─────────────────────────────────────────────
 
 async function loadAllData(minutes) {
+  _rtBar = null; // reset real-time bar tracker on full reload
   const windowSecs = minutes * 60;
 
   const [spotBars, perpBars, bbBars, dexBars, basis, oi, cvd, vol] = await Promise.all([
@@ -150,21 +155,39 @@ async function updateRealtime() {
   const p = data.prices;
   const t = data.timestamp;
 
+  // Minute-bucket timestamp — LW Charts v4 candles must use aligned time
+  // so repeated .update() calls within the same minute merge into one bar.
+  const minuteTs = Math.floor(t / 60) * 60;
+
   // Update stats bar inline
   setText('stat-bn-spot', fmtPrice(p['binance-spot']));
   setText('stat-bn-perp', fmtPrice(p['binance-perp']));
   setText('stat-bb-perp', fmtPrice(p['bybit-perp']));
   setText('stat-dex', fmtPrice(p['bsc-pancakeswap']));
 
-  // Update last candle (binance-spot)
-  if (p['binance-spot'] != null) {
-    candleSeries.update({ time: t, open: p['binance-spot'], high: p['binance-spot'], low: p['binance-spot'], close: p['binance-spot'] });
+  // Update current minute candle with proper OHLC tracking
+  const price = p['binance-spot'];
+  if (price != null && candleSeries) {
+    if (!_rtBar || _rtBar.minuteTs !== minuteTs) {
+      // New minute: open = first price seen this minute
+      _rtBar = { minuteTs, open: price, high: price, low: price, close: price };
+    } else {
+      // Same minute: extend OHLC
+      _rtBar.close = price;
+      if (price > _rtBar.high) _rtBar.high = price;
+      if (price < _rtBar.low)  _rtBar.low  = price;
+    }
+    candleSeries.update({
+      time: minuteTs,
+      open: _rtBar.open, high: _rtBar.high,
+      low: _rtBar.low,   close: _rtBar.close,
+    });
   }
 
-  // Update overlay lines
-  if (p['binance-perp'] != null) bnPerpLine.update({ time: t, value: p['binance-perp'] });
-  if (p['bybit-perp'] != null)   bbPerpLine.update({ time: t, value: p['bybit-perp'] });
-  if (p['bsc-pancakeswap'] != null) dexLine.update({ time: t, value: p['bsc-pancakeswap'] });
+  // Update overlay lines (minute-bucketed time for crosshair alignment)
+  if (p['binance-perp'] != null)    bnPerpLine.update({ time: minuteTs, value: p['binance-perp'] });
+  if (p['bybit-perp'] != null)      bbPerpLine.update({ time: minuteTs, value: p['bybit-perp'] });
+  if (p['bsc-pancakeswap'] != null) dexLine.update({ time: minuteTs, value: p['bsc-pancakeswap'] });
 }
 
 async function updateBasis() {
