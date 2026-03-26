@@ -58,8 +58,10 @@ async function updateStatsBar() {
   if (dexData && dexData.deviation_pct != null) {
     const el = document.getElementById('stat-dex-spread');
     if (el) {
+      // deviation_pct is already in % (e.g. -0.2 means -0.2%), don't divide by 100
       const v = dexData.deviation_pct;
-      el.textContent = fmtPct(v / 100);
+      const sign = v >= 0 ? '+' : '';
+      el.textContent = sign + v.toFixed(4) + '%';
       el.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
     }
   }

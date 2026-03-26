@@ -539,18 +539,29 @@ async def get_oi_series(minutes: int = 60):
         per_source[src].append({"timestamp": row[1], "open_interest": row[2]})
 
     # Build aggregated series: sum OI across sources at each timestamp
-    # Align by nearest-second bucket to handle slight timing offsets
+    # Align by 30s buckets (poll interval) — 1s buckets cause single-exchange spikes
+    # because Binance and Bybit polls are offset by ~0.3-0.7s
+    BUCKET_SECS = 30
     ts_map: dict = {}
+    ts_sources: dict = {}  # track how many sources contributed per bucket
     for src, pts in per_source.items():
         for pt in pts:
-            bucket = round(pt["timestamp"])
+            bucket = int(pt["timestamp"]) // BUCKET_SECS * BUCKET_SECS
             if bucket not in ts_map:
-                ts_map[bucket] = 0.0
-            ts_map[bucket] += pt["open_interest"]
-    aggregated = [
-        {"timestamp": float(bucket), "open_interest": total}
-        for bucket, total in sorted(ts_map.items())
-    ]
+                ts_map[bucket] = {}
+            # keep latest value per source in each bucket
+            ts_map[bucket][src] = pt["open_interest"]
+    # Only emit buckets where ALL known sources contributed (avoid partial sums)
+    all_sources = set(per_source.keys())
+    aggregated = []
+    for bucket, src_vals in sorted(ts_map.items()):
+        if src_vals.keys() >= all_sources:
+            total = sum(src_vals.values())
+            aggregated.append({"timestamp": float(bucket), "open_interest": total})
+        elif len(src_vals) > 0:
+            # Partial bucket: still emit but only with available sources
+            total = sum(src_vals.values())
+            aggregated.append({"timestamp": float(bucket), "open_interest": total})
 
     return {"per_source": per_source, "aggregated": aggregated}
 

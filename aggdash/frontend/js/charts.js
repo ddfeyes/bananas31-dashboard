@@ -67,19 +67,24 @@ function initBasisChart() {
     autoSize: true,
   });
 
+  const BASIS_FMT = { type: 'price', precision: 4, minMove: 0.0001 };
+
   bnBasisLine = basisChart.addLineSeries({
     color: '#f0b90b', lineWidth: 1,
     lastValueVisible: false, priceLineVisible: false,
+    priceFormat: BASIS_FMT,
   });
 
   bbBasisLine = basisChart.addLineSeries({
     color: '#9d6fff', lineWidth: 1,
     lastValueVisible: false, priceLineVisible: false,
+    priceFormat: BASIS_FMT,
   });
 
   aggBasisLine = basisChart.addLineSeries({
     color: '#00c8f5', lineWidth: 2,
     lastValueVisible: true, priceLineVisible: false,
+    priceFormat: BASIS_FMT,
   });
 }
 
