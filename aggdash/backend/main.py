@@ -23,9 +23,6 @@ from collectors import (
     OIFundingPoller,
 )
 from analytics_engine import AnalyticsEngine
-
-# Track application start time for uptime reporting
-_app_start_time = time.time()
 from signals import SignalEngine
 
 # Configure structured JSON logging
@@ -66,6 +63,9 @@ UVICORN_LOG_CONFIG = {
         'uvicorn.access': {'handlers': ['default'], 'level': 'INFO', 'propagate': False},
     },
 }
+
+# Track application start time for uptime reporting
+_app_start_time = time.time()
 
 # Global state
 ring_buffer: RingBuffer = None
@@ -299,9 +299,7 @@ async def get_status():
 async def get_stats():
     """Concise health and statistics snapshot for monitoring."""
     rb_size = await ring_buffer.size()
-    signals_data = {"signals": [], "count": 0}
     try:
-        from db import get_db
         db = get_db()
         cursor = db.cursor()
         cursor.execute("SELECT count(*) FROM price_feed")
