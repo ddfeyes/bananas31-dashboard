@@ -13,7 +13,7 @@ function fmtPrice(v) {
 
 function fmtPct(v) {
   if (v == null) return '--';
-  const s = (v * 100).toFixed(4) + '%';
+  const s = v.toFixed(4) + '%';
   return v >= 0 ? '+' + s : s;
 }
 
@@ -77,13 +77,15 @@ function setText(id, text) {
 async function loadAllData(minutes) {
   const windowSecs = minutes * 60;
 
-  const [spotBars, perpBars, bbBars, dexBars, basis, oi] = await Promise.all([
+  const [spotBars, perpBars, bbBars, dexBars, basis, oi, cvd, vol] = await Promise.all([
     fetchOHLCV('binance-spot', minutes),
     fetchOHLCV('binance-perp', minutes),
     fetchOHLCV('bybit-perp', minutes),
     fetchOHLCV('bsc-pancakeswap', minutes),
     fetchBasisSeries(windowSecs),
     fetchOISeries(minutes),
+    fetchCVDSeries(windowSecs),
+    fetchVolumeSeries(windowSecs),
   ]);
 
   // Price chart: candles from binance-spot, overlays from others
@@ -111,10 +113,26 @@ async function loadAllData(minutes) {
   if (oi.binance.length) bnOISeries.setData(oi.binance);
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
 
+  // CVD chart
+  if (cvdChart) {
+    if (cvd.agg.length)    aggCVDLine.setData(cvd.agg);
+    if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
+    if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
+  }
+
+  // Volume chart
+  if (volChart) {
+    if (vol.bnSpot.length) bnSpotVolSeries.setData(vol.bnSpot);
+    if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
+    if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
+  }
+
   // Fit content
   priceChart.timeScale().fitContent();
   basisChart.timeScale().fitContent();
   oiChart.timeScale().fitContent();
+  if (cvdChart) cvdChart.timeScale().fitContent();
+  if (volChart) volChart.timeScale().fitContent();
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
@@ -157,6 +175,41 @@ async function updateOI() {
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
 }
 
+async function updateCVD() {
+  if (!cvdChart) return;
+  const windowSecs = currentMinutes * 60;
+  const cvd = await fetchCVDSeries(windowSecs);
+  if (cvd.agg.length)    aggCVDLine.setData(cvd.agg);
+  if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
+  if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
+}
+
+async function updateVolume() {
+  if (!volChart) return;
+  const windowSecs = currentMinutes * 60;
+  const vol = await fetchVolumeSeries(windowSecs);
+  if (vol.bnSpot.length) bnSpotVolSeries.setData(vol.bnSpot);
+  if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
+  if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
+}
+
+// ── Liquidation markers on price chart ──────────────────────────────
+
+async function updateLiquidationMarkers() {
+  const liqs = await fetchLiquidations(currentMinutes);
+  if (!liqs.length) return;
+
+  const markers = liqs.map(l => ({
+    time: l.timestamp,
+    position: l.side === 'BUY' ? 'belowBar' : 'aboveBar',
+    color: l.side === 'BUY' ? '#ff3d5c' : '#00c97a',
+    shape: l.side === 'BUY' ? 'arrowUp' : 'arrowDown',
+    text: fmtLarge(l.quantity * l.price) + '$',
+  }));
+
+  candleSeries.setMarkers(markers);
+}
+
 // ── Timeframe buttons ────────────────────────────────────────────────
 
 function setupTimeframeButtons() {
@@ -179,12 +232,16 @@ function boot() {
   // Initial load
   loadAllData(currentMinutes);
   updateStatsBar();
+  updateLiquidationMarkers();
 
   // Polling
   setInterval(updateRealtime, 2000);
   setInterval(updateBasis, 5000);
   setInterval(updateOI, 5000);
+  setInterval(updateCVD, 10000);
+  setInterval(updateVolume, 10000);
   setInterval(updateStatsBar, 5000);
+  setInterval(updateLiquidationMarkers, 30000);
 }
 
 if (document.readyState === 'loading') {

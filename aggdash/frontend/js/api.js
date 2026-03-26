@@ -70,6 +70,46 @@ async function fetchOISeries(minutes) {
   };
 }
 
+async function fetchCVDSeries(windowSecs) {
+  // NOTE: endpoint returns {per_source, aggregated, ...} — NOT {cvd_series}
+  const data = await apiGet(`/api/analytics/cvd/series?window_secs=${windowSecs}&interval_secs=60`);
+  if (!data) return { agg: [], bnPerp: [], bbPerp: [], bnSpot: [] };
+  const mapPts = arr => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.cvd }));
+  const ps = data.per_source || {};
+  return {
+    agg:    mapPts(data.aggregated),
+    bnPerp: mapPts(ps['binance-perp']),
+    bbPerp: mapPts(ps['bybit-perp']),
+    bnSpot: mapPts(ps['binance-spot']),
+  };
+}
+
+async function fetchVolumeSeries(windowSecs) {
+  const data = await apiGet(`/api/analytics/volume/series?window_secs=${windowSecs}&interval_secs=60`);
+  if (!data) return { bnSpot: [], bnPerp: [], bbPerp: [] };
+  const mapPts = (arr, colorFn) => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.volume, color: colorFn(p.volume) }));
+  const pe = data.per_exchange || {};
+  return {
+    bnSpot: mapPts(pe['binance-spot'] || [],  () => 'rgba(240,185,11,0.5)'),
+    bnPerp: mapPts(pe['binance-perp'] || [],  () => 'rgba(255,122,53,0.5)'),
+    bbPerp: mapPts(pe['bybit-perp']   || [],  () => 'rgba(157,111,255,0.5)'),
+  };
+}
+
+async function fetchLiquidations(minutes) {
+  // Returns recent liquidations from DB — use limit based on timeframe
+  const limit = Math.min(minutes * 2, 500);
+  const data = await apiGet(`/api/liquidations?limit=${limit}`);
+  if (!data || !data.liquidations) return [];
+  return data.liquidations
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .filter(l => l.timestamp >= Date.now() / 1000 - minutes * 60);
+}
+
 async function fetchPrices() {
   return apiGet('/api/prices');
 }
