@@ -206,6 +206,42 @@
     .badge-quiet     { color: #2c3a52; font-weight: 400; }
 
     .alert-sep { color: #253047; }
+
+    /* ── Crosshair Tooltip ────────────────────────────── */
+    #price-tooltip {
+      display: none;
+      position: absolute;
+      z-index: 100;
+      pointer-events: none;
+      background: rgba(9,13,21,0.95);
+      border: 1px solid #253047;
+      border-radius: 4px;
+      padding: 7px 10px;
+      font-size: 10px;
+      color: #dde4f0;
+      line-height: 1.7;
+      min-width: 180px;
+    }
+
+    #price-tooltip .tt-time   { color: #6b7a94; font-size: 9px; margin-bottom: 3px; }
+    #price-tooltip .tt-row    { display: flex; justify-content: space-between; gap: 12px; }
+    #price-tooltip .tt-label  { color: #4d566a; }
+    #price-tooltip .tt-val    { color: #dde4f0; font-weight: 500; }
+    #price-tooltip .tt-val.up   { color: #00c97a; }
+    #price-tooltip .tt-val.dn   { color: #ff3d5c; }
+
+    /* ── Live Value Labels ────────────────────────────── */
+    .panel-live-val {
+      position: absolute;
+      top: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      font-weight: 600;
+      z-index: 10;
+      pointer-events: none;
+      letter-spacing: 0.3px;
+    }
   </style>
 </head>
 <body>
@@ -281,9 +317,11 @@
         <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>BB Perp</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#00c8f5"></span>DEX</span>
       </div>
+      <div id="price-tooltip"></div>
     </div>
     <div class="chart-panel" id="panel-basis">
       <div class="panel-label">BASIS %</div>
+      <span class="panel-live-val" id="live-basis">--</span>
       <div class="legend">
         <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>Binance</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>Bybit</span>
@@ -292,6 +330,7 @@
     </div>
     <div class="chart-panel" id="panel-oi">
       <div class="panel-label">OPEN INTEREST</div>
+      <span class="panel-live-val" id="live-oi">--</span>
       <div class="legend">
         <span class="legend-item"><span class="legend-swatch" style="background:#4a8fff"></span>Aggregated</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>Binance</span>
@@ -300,6 +339,7 @@
     </div>
     <div class="chart-panel" id="panel-cvd">
       <div class="panel-label">CVD · Cumulative Volume Delta</div>
+      <span class="panel-live-val" id="live-cvd">--</span>
       <div class="legend">
         <span class="legend-item"><span class="legend-swatch" style="background:#00c97a"></span>Aggregated</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>BN Perp</span>
@@ -308,6 +348,7 @@
     </div>
     <div class="chart-panel" id="panel-volume">
       <div class="panel-label">VOLUME · Spot vs Perp</div>
+      <span class="panel-live-val" id="live-vol">--</span>
       <div class="legend">
         <span class="legend-item"><span class="legend-swatch" style="background:rgba(240,185,11,0.8)"></span>BN Spot</span>
         <span class="legend-item"><span class="legend-swatch" style="background:rgba(255,122,53,0.8)"></span>BN Perp</span>
