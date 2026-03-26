@@ -56,6 +56,7 @@ class Dashboard {
         document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         this.refreshPriceChart();
+        this.slowPoll(); // sync series charts (basis/OI/CVD) to new range
       });
     });
 
@@ -200,7 +201,8 @@ class Dashboard {
   }
 
   async slowPoll() {
-    const windowSecs = TF_SECS[this.timeframe] * 12; // 12x timeframe window
+    // Use chartRangeMinutes for window so series charts match the price chart range
+    const windowSecs = (this.chartRangeMinutes || 1440) * 60;
     const intervalSecs = TF_SECS[this.timeframe];
 
     const [basisSeries, cvdSeries, spreadSeries, oiDeltaSeries, funding, oi, signals, patterns] = await Promise.all([
