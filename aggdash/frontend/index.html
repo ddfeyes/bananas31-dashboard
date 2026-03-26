@@ -6,7 +6,7 @@
   <title>BANANAS31 Terminal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -109,7 +109,7 @@
     .charts-container {
       display: flex;
       flex-direction: column;
-      height: calc(100vh - 52px);
+      height: calc(100vh - var(--topbar-h, 80px));
     }
 
     .chart-panel {

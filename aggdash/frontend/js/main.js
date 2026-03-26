@@ -226,6 +226,19 @@ function setupTimeframeButtons() {
 // ── Bootstrap ────────────────────────────────────────────────────────
 
 function boot() {
+  // Measure actual topbar height so charts-container fills remaining viewport exactly
+  const topBar = document.querySelector('.top-bar');
+  if (topBar) {
+    const h = topBar.getBoundingClientRect().height;
+    document.documentElement.style.setProperty('--topbar-h', h + 'px');
+    // Re-measure on resize (e.g. stats-row wraps)
+    const ro = new ResizeObserver(() => {
+      const newH = topBar.getBoundingClientRect().height;
+      document.documentElement.style.setProperty('--topbar-h', newH + 'px');
+    });
+    ro.observe(topBar);
+  }
+
   initAllCharts();
   setupTimeframeButtons();
 
