@@ -200,6 +200,117 @@ async function updateVolume() {
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
 }
 
+// ── Crosshair Tooltip ────────────────────────────────────────────────
+
+function fmtTs(unix) {
+  const d = new Date(unix * 1000);
+  return d.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+}
+
+function initPriceTooltip() {
+  const tooltip = document.getElementById('price-tooltip');
+  if (!tooltip) return;
+  const panel = document.getElementById('panel-price');
+
+  // Build lookup maps from loaded series data
+  // We'll rebuild them when data loads; store as module-level
+  window._perpByTime   = {};  // time → {bnPerp, bbPerp, dex}
+
+  priceChart.subscribeCrosshairMove(param => {
+    if (!param || !param.time || !param.point) {
+      tooltip.style.display = 'none';
+      return;
+    }
+
+    const candle = param.seriesData.get(candleSeries);
+    if (!candle) { tooltip.style.display = 'none'; return; }
+
+    const bnPerpVal = param.seriesData.get(bnPerpLine);
+    const bbPerpVal = param.seriesData.get(bbPerpLine);
+    const dexVal    = param.seriesData.get(dexLine);
+
+    const isUp = candle.close >= candle.open;
+    const clr  = isUp ? 'up' : 'dn';
+
+    tooltip.innerHTML = `
+      <div class="tt-time">${fmtTs(param.time)}</div>
+      <div class="tt-row"><span class="tt-label">O</span><span class="tt-val">${candle.open.toFixed(6)}</span></div>
+      <div class="tt-row"><span class="tt-label">H</span><span class="tt-val ${clr}">${candle.high.toFixed(6)}</span></div>
+      <div class="tt-row"><span class="tt-label">L</span><span class="tt-val ${clr}">${candle.low.toFixed(6)}</span></div>
+      <div class="tt-row"><span class="tt-label">C</span><span class="tt-val ${clr}">${candle.close.toFixed(6)}</span></div>
+      ${bnPerpVal ? `<div class="tt-row"><span class="tt-label" style="color:#ff7a35">BN-P</span><span class="tt-val">${bnPerpVal.value.toFixed(6)}</span></div>` : ''}
+      ${bbPerpVal ? `<div class="tt-row"><span class="tt-label" style="color:#9d6fff">BB-P</span><span class="tt-val">${bbPerpVal.value.toFixed(6)}</span></div>` : ''}
+      ${dexVal    ? `<div class="tt-row"><span class="tt-label" style="color:#00c8f5">DEX</span><span class="tt-val">${dexVal.value.toFixed(6)}</span></div>` : ''}
+    `;
+
+    // Position tooltip near cursor, keep within panel
+    const panelRect = panel.getBoundingClientRect();
+    let left = param.point.x + 15;
+    let top  = param.point.y + 15;
+    const ttW = 190, ttH = 140;
+    if (left + ttW > panelRect.width)  left = param.point.x - ttW - 5;
+    if (top  + ttH > panelRect.height) top  = param.point.y - ttH - 5;
+
+    tooltip.style.left    = left + 'px';
+    tooltip.style.top     = top  + 'px';
+    tooltip.style.display = 'block';
+  });
+}
+
+// ── Live panel value labels ───────────────────────────────────────────
+
+async function updateLiveLabels() {
+  // BASIS live value
+  const basisEl = document.getElementById('live-basis');
+  if (basisEl) {
+    const data = await apiGet('/api/analytics/basis');
+    if (data && data.aggregated) {
+      const v = data.aggregated.basis_pct;
+      if (v != null) {
+        basisEl.textContent = (v >= 0 ? '+' : '') + v.toFixed(4) + '%';
+        basisEl.style.color = v >= 0 ? '#00c97a' : '#ff3d5c';
+      }
+    }
+  }
+
+  // OI live value
+  const oiEl = document.getElementById('live-oi');
+  if (oiEl) {
+    const data = await apiGet('/api/oi');
+    if (data) {
+      const total = data.total_oi || data.aggregated || 0;
+      oiEl.textContent = fmtLarge(total);
+      oiEl.style.color = '#4a8fff';
+    }
+  }
+
+  // CVD live value
+  const cvdEl = document.getElementById('live-cvd');
+  if (cvdEl) {
+    const data = await apiGet('/api/analytics/cvd?window_secs=3600');
+    if (data) {
+      const v = data.aggregated_cvd;
+      if (v != null) {
+        cvdEl.textContent = (v >= 0 ? '+' : '') + fmtLarge(v);
+        cvdEl.style.color = v >= 0 ? '#00c97a' : '#ff3d5c';
+      }
+    }
+  }
+
+  // Volume live value (last 60s vol from stats bar data)
+  const volEl = document.getElementById('live-vol');
+  if (volEl) {
+    const data = await apiGet('/api/analytics/volume/series?window_secs=120&interval_secs=60');
+    if (data && data.per_exchange) {
+      const pe = data.per_exchange;
+      const last = (arr) => arr && arr.length ? arr[arr.length - 1].volume : 0;
+      const total = last(pe['binance-spot']) + last(pe['binance-perp']) + last(pe['bybit-perp']);
+      volEl.textContent = fmtLarge(total) + '/m';
+      volEl.style.color = '#f0b90b';
+    }
+  }
+}
+
 // ── Liquidation markers on price chart ──────────────────────────────
 
 const SIGNAL_CLASSES = {
@@ -294,12 +405,16 @@ function boot() {
   initAllCharts();
   setupTimeframeButtons();
 
+  // Tooltip (must be after initAllCharts)
+  initPriceTooltip();
+
   // Initial load
   loadAllData(currentMinutes);
   updateStatsBar();
   updateLiquidationMarkers();
   updateSignals();
   updatePatterns();
+  updateLiveLabels();
 
   // Polling
   setInterval(updateRealtime, 2000);
@@ -311,6 +426,7 @@ function boot() {
   setInterval(updateLiquidationMarkers, 30000);
   setInterval(updateSignals, 10000);
   setInterval(updatePatterns, 30000);
+  setInterval(updateLiveLabels, 5000);
 }
 
 if (document.readyState === 'loading') {
