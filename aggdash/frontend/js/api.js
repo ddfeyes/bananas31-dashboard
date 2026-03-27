@@ -150,3 +150,7 @@ async function fetchPatterns() {
 async function fetchPriceChange() {
   return apiGet('/api/price-change');
 }
+
+async function fetchFundingSeries(windowSecs = 86400, intervalSecs = 300) {
+  return apiGet(`/api/analytics/funding/series?window_secs=${windowSecs}&interval_secs=${intervalSecs}`);
+}
