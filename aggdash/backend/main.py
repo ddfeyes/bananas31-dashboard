@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiohttp
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +24,7 @@ from collectors import (
 )
 from analytics_engine import AnalyticsEngine
 from signals import SignalEngine
+from ws_manager import price_manager
 
 # Configure structured JSON logging
 from pythonjsonlogger import jsonlogger
@@ -96,6 +97,11 @@ async def lifespan(app: FastAPI):
         """Callback for new tick."""
         await ring_buffer.add_tick(tick)
         await ohlcv_aggregator.process_tick(tick)
+        # Push latest prices to WebSocket subscribers (throttled to 1/sec)
+        if price_manager.count > 0:
+            latest = await ring_buffer.get_latest_prices()
+            if latest:
+                await price_manager.notify_tick(latest)
 
     async def on_liquidation(liq):
         """Callback for liquidation."""
@@ -196,6 +202,47 @@ async def get_prices():
         "timestamp": time.time(),
         "prices": prices,
     }
+
+@app.websocket("/ws/prices")
+async def ws_prices(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time price streaming.
+
+    Pushes JSON: {"type": "prices", "timestamp": <float>, "prices": {source: price, ...}}
+    Rate-limited to 1 message/sec regardless of tick rate.
+    Client can send any text to keep the connection alive (heartbeat).
+    """
+    await price_manager.connect(websocket)
+    # Send the current prices immediately on connect
+    try:
+        initial_prices = await ring_buffer.get_latest_prices()
+        if initial_prices:
+            await websocket.send_json({
+                "type": "prices",
+                "timestamp": time.time(),
+                "prices": initial_prices,
+            })
+    except Exception:
+        pass
+
+    try:
+        while True:
+            # Keep connection alive — wait for client heartbeat or disconnect
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # Send a keepalive ping
+                try:
+                    await websocket.send_json({"type": "ping", "timestamp": time.time()})
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.debug("WS prices connection closed: %s", exc)
+    finally:
+        price_manager.disconnect(websocket)
+
 
 @app.get("/api/aggregated-prices")
 async def get_aggregated_prices():
@@ -330,6 +377,7 @@ async def get_stats():
         "ring_buffer_size": rb_size,
         "signal_count": signal_count,
         "last_tick_ts": last_tick_ts,
+        "ws_connections": price_manager.count,
         "collectors": [
             {"name": c.__class__.__name__, "running": c.running}
             for c in collectors

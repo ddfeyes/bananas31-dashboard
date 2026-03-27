@@ -38,3 +38,19 @@ class RingBuffer:
     async def size(self) -> int:
         async with self._lock:
             return len(self._buf)
+
+    async def get_latest_prices(self) -> dict:
+        """Return the most recent price per source as {source: price}."""
+        async with self._lock:
+            latest: dict = {}
+            for tick in reversed(self._buf):
+                if tick.source not in latest:
+                    latest[tick.source] = tick.price
+                if len(latest) >= 6:  # all known sources covered
+                    break
+            return latest
+
+    async def get_snapshot(self) -> dict:
+        """Return a snapshot dict compatible with analytics engine snapshot()."""
+        async with self._lock:
+            return {"ticks": list(self._buf)}
