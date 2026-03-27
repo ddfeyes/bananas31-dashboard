@@ -539,6 +539,15 @@ async def get_stats():
         perp_vol = vol_24h.get("binance_perp", 0) + vol_24h.get("bybit_perp", 0)
         perp_spot_ratio = (perp_vol / spot_vol) if spot_vol and spot_vol > 0 else None
 
+        # Latest 8h funding rates per exchange
+        funding_rates = {}
+        for ex in ["binance-perp", "bybit-perp"]:
+            row = cursor.execute(
+                "SELECT rate_8h FROM funding_rates WHERE exchange_id=? ORDER BY timestamp DESC LIMIT 1",
+                (ex,),
+            ).fetchone()
+            funding_rates[ex] = row[0] if row and row[0] else None
+
         # OI 24h change % and absolute total — latest per exchange
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
@@ -601,6 +610,7 @@ async def get_stats():
         price_feed_rows = oi_rows_count = liq_rows = -1
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
         perp_spot_ratio = None
+        funding_rates = {"binance-perp": None, "bybit-perp": None}
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
         liq_1h_usd = {"sell_usd": 0.0, "buy_usd": 0.0, "total_usd": 0.0}
@@ -635,6 +645,7 @@ async def get_stats():
         },
         "vol_24h": vol_24h,
         "perp_spot_ratio": perp_spot_ratio,
+        "funding_rates": funding_rates,
         "oi_change_24h_pct": oi_change_24h_pct,
         "oi_total": oi_total,
         "liq_1h_usd": liq_1h_usd,
