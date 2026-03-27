@@ -150,6 +150,21 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
+async function updatePriceRange() {
+  const data = await fetchPriceRange('binance-spot', 86400);
+  if (!data) return;
+
+  const highEl = document.getElementById('stat-24h-high');
+  const lowEl  = document.getElementById('stat-24h-low');
+
+  if (highEl && data.high_24h != null) {
+    highEl.textContent = fmtPrice(data.high_24h);
+  }
+  if (lowEl && data.low_24h != null) {
+    lowEl.textContent = fmtPrice(data.low_24h);
+  }
+}
+
 async function updateLastAlert() {
   const data = await fetchAlertsHistory(1);
   const el = document.getElementById('last-alert-content');
@@ -696,6 +711,8 @@ function boot() {
   setInterval(updateVol24h, 60000); // vol + OI 24h change every 60s
   updateLastAlert();
   setInterval(updateLastAlert, 30000);
+  updatePriceRange();
+  setInterval(updatePriceRange, 60000);
   setInterval(updateOI, 5000);
   setInterval(updateCVD, 10000);
   setInterval(updateVolume, 10000);

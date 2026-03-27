@@ -260,6 +260,45 @@ async def get_price_change(window_secs: int = 86400):
     }
 
 
+@app.get("/api/price-range")
+async def get_price_range(window_secs: int = 86400, source: str = "binance-spot"):
+    """
+    24h (or custom window) high and low price for a given exchange source.
+    Returns {high_24h, low_24h, range_pct, current, source}.
+    """
+    db = get_db()
+    now = time.time()
+    since = now - window_secs
+    try:
+        row = db.execute(
+            """
+            SELECT MAX(high), MIN(low), (SELECT close FROM price_feed
+                WHERE exchange_id = ? ORDER BY timestamp DESC LIMIT 1)
+            FROM price_feed
+            WHERE exchange_id = ? AND timestamp >= ?
+            """,
+            (source, source, since),
+        ).fetchone()
+    finally:
+        db.close()
+
+    if not row or row[0] is None:
+        return {"high_24h": None, "low_24h": None, "range_pct": None, "current": None, "source": source}
+
+    high_val, low_val, current = row
+    range_pct = ((high_val - low_val) / low_val * 100) if low_val and low_val > 0 else None
+
+    return {
+        "source": source,
+        "window_secs": window_secs,
+        "high_24h": high_val,
+        "low_24h": low_val,
+        "range_pct": range_pct,
+        "current": current,
+        "timestamp": now,
+    }
+
+
 @app.websocket("/ws/prices")
 async def ws_prices(websocket: WebSocket):
     """

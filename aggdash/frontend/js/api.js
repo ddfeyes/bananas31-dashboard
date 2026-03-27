@@ -171,3 +171,7 @@ async function fetchStats() {
 async function fetchAlertsHistory(limit = 5) {
   return apiGet(`/api/alerts/history?limit=${limit}`);
 }
+
+async function fetchPriceRange(source = 'binance-spot', windowSecs = 86400) {
+  return apiGet(`/api/price-range?source=${source}&window_secs=${windowSecs}`);
+}
