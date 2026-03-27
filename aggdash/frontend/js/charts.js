@@ -12,10 +12,21 @@ const CHART_THEME = {
     timeVisible: true,
     secondsVisible: false,
     rightOffset: 10,
-    barSpacing: 6,           // keep 5 bars of right margin — prevents auto-scroll on new data
-    fixRightEdge: false,      // allow scrolling past right edge
-    fixLeftEdge: false,       // allow scrolling past left edge
-    lockVisibleTimeRangeOnResize: true, // don't reset view on resize
+    barSpacing: 6,
+    fixRightEdge: false,
+    fixLeftEdge: false,
+    lockVisibleTimeRangeOnResize: true,
+  },
+  handleScroll: {
+    mouseWheel: true,
+    pressedMouseMove: true,
+    horzTouchDrag: true,
+    vertTouchDrag: false,
+  },
+  handleScale: {
+    mouseWheel: true,
+    pinch: true,
+    axisPressedMouseMove: { time: true, price: true },
   },
 };
 
@@ -286,17 +297,11 @@ function syncTimeScales() {
   // _suppressSync prevents periodic setData() calls from resetting manual zoom.
   const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, fundingChart, liqChart].filter(Boolean);
   let _syncing = false;
+  // Sync time range across all panels when user scrolls/zooms
   charts.forEach(src => {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (!range || _syncing || window._suppressSync) return;
+      if (!range || _syncing) return;
       _syncing = true;
-      // Save viewport: but only if enough time has passed since last programmatic setData
-      // _lastDataUpdate is set before setData(), user actions come later
-      const msSinceData = Date.now() - (window._lastDataUpdate || 0);
-      if (!window._suppressSync && msSinceData > 500) {
-        window._userScrolled = true;
-        window._savedVisibleRange = range;
-      }
       charts.forEach(dst => {
         if (dst !== src) {
           try { dst.timeScale().setVisibleRange(range); } catch (_) {}
