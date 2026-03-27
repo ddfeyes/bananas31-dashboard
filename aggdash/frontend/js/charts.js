@@ -281,6 +281,8 @@ function syncTimeScales() {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
       if (!range || _syncing || window._suppressSync) return;
       _syncing = true;
+      // Save user's viewport so data updates don't reset it
+      window._savedVisibleRange = range;
       charts.forEach(dst => {
         if (dst !== src) {
           try { dst.timeScale().setVisibleRange(range); } catch (_) {}

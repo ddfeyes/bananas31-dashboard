@@ -328,13 +328,30 @@ async function loadAllData(minutes) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Viewport: on first load scroll to realtime end (NOT fitContent which zooms to ALL history)
-  // On reload: preserve user zoom by doing nothing (data updates don't change the view)
+  // Viewport: on first load, set explicit visible range (last 4h of data)
+  // On reload: restore saved viewport to preserve user zoom
+  const savedRange = window._savedVisibleRange;
+  const now = Math.floor(Date.now() / 1000);
+  const defaultFrom = now - 4 * 3600; // show last 4 hours by default
+
   if (!window._viewportInitialized) {
-    // scrollToRealTime() positions at latest bar without zooming out to full history
-    priceChart.timeScale().scrollToRealTime();
-    // Other charts sync via syncTimeScales()
+    // Set explicit visible range: last 4 hours
+    const initRange = { from: defaultFrom, to: now + 300 };
+    try { priceChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    try { basisChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    try { oiChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    if (cvdChart) try { cvdChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    if (volChart) try { volChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    if (liqChart) try { liqChart.timeScale().setVisibleRange(initRange); } catch (_) {}
     window._viewportInitialized = true;
+  } else if (savedRange) {
+    // Restore user's saved viewport
+    try { priceChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
+    try { basisChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
+    try { oiChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
+    if (cvdChart) try { cvdChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
+    if (volChart) try { volChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
+    if (liqChart) try { liqChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
   }
 }
 
