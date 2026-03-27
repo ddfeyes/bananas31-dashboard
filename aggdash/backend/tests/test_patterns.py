@@ -11,7 +11,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # We test the constants directly from main module globals
-import importlib.util
 import ast
 
 
