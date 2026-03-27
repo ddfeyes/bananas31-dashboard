@@ -218,6 +218,57 @@
 
     .alert-sep { color: #253047; }
 
+    /* ── Liquidation Timeline ──────────────────────── */
+    .liq-timeline {
+      background: #05080f;
+      border-top: 1px solid #111d30;
+      padding: 8px 14px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .liq-timeline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .liq-timeline-title {
+      font-size: 10px;
+      color: #506080;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+    .liq-timeline-count {
+      font-size: 9px;
+      color: #303d52;
+    }
+    .liq-timeline-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .liq-timeline-empty {
+      font-size: 10px;
+      color: #2c3a52;
+      text-align: center;
+      padding: 8px 0;
+    }
+    .liq-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      padding: 2px 0;
+      border-bottom: 1px solid #0d1520;
+    }
+    .liq-row-time { color: #3a4e66; min-width: 40px; font-size: 9px; }
+    .liq-row-side-long { color: #ff3d5c; font-weight: 700; min-width: 32px; }
+    .liq-row-side-short { color: #00c97a; font-weight: 700; min-width: 32px; }
+    .liq-row-val { color: #a0b8d0; font-weight: 600; min-width: 60px; }
+    .liq-row-price { color: #506080; min-width: 70px; }
+    .liq-row-source { color: #2c3a52; font-size: 9px; }
+
     /* ── Pattern Outcome Widget ──────────────────────── */
     .outcome-card {
       display: flex;
@@ -458,8 +509,19 @@
     </div>
   </div>
 
-  <script src="js/api.js?v=202603271053"></script>
-  <script src="js/charts.js?v=202603271053"></script>
-  <script src="js/main.js?v=202603271053"></script>
+  <!-- Liquidation Timeline -->
+  <div id="liq-timeline" class="liq-timeline">
+    <div class="liq-timeline-header">
+      <span class="liq-timeline-title">🔴 LIQUIDATION FEED</span>
+      <span id="liq-timeline-count" class="liq-timeline-count">— in last hour</span>
+    </div>
+    <div id="liq-timeline-rows" class="liq-timeline-rows">
+      <div class="liq-timeline-empty">Loading...</div>
+    </div>
+  </div>
+
+  <script src="js/api.js?v=202603271204"></script>
+  <script src="js/charts.js?v=202603271204"></script>
+  <script src="js/main.js?v=202603271204"></script>
 </body>
 </html>
