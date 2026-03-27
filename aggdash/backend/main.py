@@ -743,11 +743,17 @@ async def get_basis():
 
 
 @app.get("/api/analytics/basis/series")
-async def get_basis_series(interval_secs: int = 60, window_secs: int = 3600):
-    """Basis time-series per exchange and aggregated."""
+async def get_basis_series(
+    interval_secs: int = 60,
+    window_secs: int = 3600,
+    interval: str = "1m",
+):
+    """Basis time-series per exchange and aggregated.
+    interval: candle interval for bucketing (1m/5m/15m/1h/4h/1d)"""
     return await analytics_engine.compute_basis_series(
         interval_secs=interval_secs,
         window_secs=window_secs,
+        interval=interval,
     )
 
 
@@ -1060,15 +1066,35 @@ async def get_dex_price():
 # ── /api/oi/series (Bug 3) ────────────────────────────────────────────
 
 @app.get("/api/oi/series")
-async def get_oi_series(minutes: int = 60):
-    """Get OI time-series from the oi DB table."""
+async def get_oi_series(minutes: int = 60, interval: str = "1m"):
+    """Get OI time-series from the oi DB table.
+    interval: bucket size for resampling (1m/5m/15m/1h/4h/1d)"""
+    interval_secs_map = {
+        "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800,
+    }
+    bucket_secs = interval_secs_map.get(interval, 60)
     cutoff = time.time() - minutes * 60
     conn = get_db()
     try:
-        rows = conn.execute(
-            "SELECT exchange_id, timestamp, open_interest FROM oi WHERE timestamp > ? ORDER BY timestamp",
-            (cutoff,),
-        ).fetchall()
+        # If interval > 1m, resample using SQL GROUP BY bucket
+        if bucket_secs > 60:
+            rows = conn.execute(
+                """
+                SELECT exchange_id,
+                       CAST(timestamp / ? AS INTEGER) * ? AS ts,
+                       AVG(open_interest) AS oi
+                FROM oi WHERE timestamp > ?
+                GROUP BY exchange_id, ts ORDER BY exchange_id, ts
+                """,
+                (bucket_secs, bucket_secs, cutoff),
+            ).fetchall()
+            rows = [(r[0], r[1], r[2]) for r in rows]
+        else:
+            rows = conn.execute(
+                "SELECT exchange_id, timestamp, open_interest FROM oi WHERE timestamp > ? ORDER BY timestamp",
+                (cutoff,),
+            ).fetchall()
     finally:
         conn.close()
     per_source: dict = {}

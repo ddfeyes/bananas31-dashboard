@@ -313,18 +313,20 @@ class AnalyticsEngine:
         self,
         interval_secs: int = 60,
         window_secs: int = 3600,
+        interval: str = "1m",
     ) -> Dict:
         """
         Compute basis as time-series from OHLCV bars.
         Returns per-exchange + aggregated [{timestamp, basis, basis_pct}]
+        interval: candle interval ('1m','5m','15m','1h','4h','1d')
         """
         from db import get_latest_ohlcv
         cutoff_minutes = window_secs // 60
 
-        # Fetch OHLCV close prices per source
+        # Fetch OHLCV close prices per source with correct interval
         source_bars: Dict[str, Dict[int, float]] = {}
         for src in ALL_CEX_SPOT + ALL_CEX_PERP:
-            bars = get_latest_ohlcv(src, minutes=cutoff_minutes)
+            bars = get_latest_ohlcv(src, minutes=cutoff_minutes, interval=interval)
             source_bars[src] = {b["timestamp"]: b["close"] for b in bars}
 
         # Collect all timestamps
