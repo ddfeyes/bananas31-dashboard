@@ -29,26 +29,35 @@ def make_test_db(rows):
 
 
 def resample_ohlcv(conn, exchange_id, cutoff, interval_secs):
-    """Same SQL as db.py get_latest_ohlcv with resampling."""
+    """Same SQL as db.py get_latest_ohlcv with resampling (window-function version)."""
     iv = interval_secs
     sql = """
+        WITH bucketed AS (
+            SELECT
+                CAST(timestamp / :iv AS INTEGER) * :iv AS bucket,
+                open, high, low, close, volume,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CAST(timestamp / :iv AS INTEGER)
+                    ORDER BY timestamp ASC
+                ) AS rn_first,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CAST(timestamp / :iv AS INTEGER)
+                    ORDER BY timestamp DESC
+                ) AS rn_last
+            FROM price_feed
+            WHERE exchange_id = :eid
+              AND timestamp > :cutoff
+        )
         SELECT
-            CAST(timestamp / :iv AS INTEGER) * :iv AS ts,
-            (SELECT p2.open FROM price_feed p2
-             WHERE p2.exchange_id = :eid
-               AND CAST(p2.timestamp / :iv AS INTEGER) * :iv = CAST(p.timestamp / :iv AS INTEGER) * :iv
-             ORDER BY p2.timestamp ASC LIMIT 1) AS open,
-            MAX(high)  AS high,
-            MIN(low)   AS low,
-            (SELECT p2.close FROM price_feed p2
-             WHERE p2.exchange_id = :eid
-               AND CAST(p2.timestamp / :iv AS INTEGER) * :iv = CAST(p.timestamp / :iv AS INTEGER) * :iv
-             ORDER BY p2.timestamp DESC LIMIT 1) AS close,
-            SUM(volume) AS volume
-        FROM price_feed p
-        WHERE exchange_id = :eid AND timestamp > :cutoff
-        GROUP BY CAST(timestamp / :iv AS INTEGER)
-        ORDER BY ts
+            bucket                                          AS ts,
+            MAX(CASE WHEN rn_first = 1 THEN open  END)     AS open,
+            MAX(high)                                       AS high,
+            MIN(low)                                        AS low,
+            MAX(CASE WHEN rn_last  = 1 THEN close END)     AS close,
+            SUM(volume)                                     AS volume
+        FROM bucketed
+        GROUP BY bucket
+        ORDER BY bucket
     """
     return conn.execute(sql, {"eid": exchange_id, "iv": iv, "cutoff": cutoff}).fetchall()
 

@@ -122,29 +122,36 @@ def get_latest_ohlcv(exchange_id: str, minutes: int = 60, interval: str = "1m") 
             ).fetchall()
             return [dict(r) for r in rows]
 
-        # Resampled bars: bucket timestamps, aggregate OHLCV within each bucket.
-        # open  = first close in bucket (SQLite has no FIRST aggregate; use MIN(rowid) subquery)
-        # close = last close in bucket (MAX rowid)
-        # SQLite doesn't have FIRST/LAST, so we use a correlated subquery trick.
+        # Resampled bars using a single-pass CTE with ROW_NUMBER() window functions.
+        # This avoids O(n²) correlated subqueries and runs in O(n log n) via the index.
+        # SQLite ≥ 3.25 supports window functions; production uses 3.46.1.
         sql = """
+            WITH bucketed AS (
+                SELECT
+                    CAST(timestamp / :iv AS INTEGER) * :iv AS bucket,
+                    open, high, low, close, volume,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CAST(timestamp / :iv AS INTEGER)
+                        ORDER BY timestamp ASC
+                    ) AS rn_first,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CAST(timestamp / :iv AS INTEGER)
+                        ORDER BY timestamp DESC
+                    ) AS rn_last
+                FROM price_feed
+                WHERE exchange_id = :eid
+                  AND timestamp > :cutoff
+            )
             SELECT
-                CAST(timestamp / :iv AS INTEGER) * :iv   AS ts,
-                (SELECT p2.open FROM price_feed p2
-                 WHERE p2.exchange_id = :eid
-                   AND CAST(p2.timestamp / :iv AS INTEGER) * :iv = CAST(p.timestamp / :iv AS INTEGER) * :iv
-                 ORDER BY p2.timestamp ASC LIMIT 1)       AS open,
-                MAX(high)                                  AS high,
-                MIN(low)                                   AS low,
-                (SELECT p2.close FROM price_feed p2
-                 WHERE p2.exchange_id = :eid
-                   AND CAST(p2.timestamp / :iv AS INTEGER) * :iv = CAST(p.timestamp / :iv AS INTEGER) * :iv
-                 ORDER BY p2.timestamp DESC LIMIT 1)       AS close,
-                SUM(volume)                                AS volume
-            FROM price_feed p
-            WHERE exchange_id = :eid
-              AND timestamp > :cutoff
-            GROUP BY CAST(timestamp / :iv AS INTEGER)
-            ORDER BY ts
+                bucket                                          AS ts,
+                MAX(CASE WHEN rn_first = 1 THEN open  END)     AS open,
+                MAX(high)                                       AS high,
+                MIN(low)                                        AS low,
+                MAX(CASE WHEN rn_last  = 1 THEN close END)     AS close,
+                SUM(volume)                                     AS volume
+            FROM bucketed
+            GROUP BY bucket
+            ORDER BY bucket
         """
         rows = conn.execute(sql, {"eid": exchange_id, "iv": interval_secs, "cutoff": cutoff}).fetchall()
         return [{"timestamp": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
