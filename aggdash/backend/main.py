@@ -979,7 +979,16 @@ async def get_oi_series(minutes: int = 60):
     return {"per_source": per_source, "aggregated": aggregated}
 
 
-# ── /api/patterns (Bug 7) ─────────────────────────────────────────────
+# ── /api/patterns — calibrated thresholds for BANANAS31 (low-cap) ────
+# OI_ACCUMULATION: >1.5% OI rise in 4h with flat price (was 5%)
+_PAT_OI_ACCUM_PCT = 1.5
+# DEX_PREMIUM: dex > cex * (1 + threshold) i.e. >0.3% (was 1%)
+_PAT_DEX_PREMIUM_PCT = 0.3
+# BASIS_SQUEEZE: basis > 0.1% with positive funding (was 0.3%)
+_PAT_BASIS_SQUEEZE_PCT = 0.1
+# LIQUIDATION_CASCADE: >5 liqs in 5-min window (unchanged — event-based)
+_PAT_LIQ_CASCADE_COUNT = 5
+# VOLUME_DIVERGENCE: spot/perp ratio >3x in 1h (unchanged)
 
 @app.get("/api/patterns")
 async def get_patterns():
@@ -1009,12 +1018,12 @@ async def get_patterns():
                     p_last = price_rows[-1][0]
                     if p_first and p_first > 0:
                         price_change_pct = abs((p_last - p_first) / p_first * 100)
-                if oi_change_pct > 5 and price_change_pct < 0.5:
+                if oi_change_pct > _PAT_OI_ACCUM_PCT and price_change_pct < 0.5:
                     patterns.append({
                         "name": "OI_ACCUMULATION",
                         "confidence": min(oi_change_pct / 10, 1.0),
                         "description": f"OI rose {oi_change_pct:.1f}% in 4h while price moved only {price_change_pct:.2f}%",
-                        "severity": "high" if oi_change_pct > 10 else "medium",
+                        "severity": "high" if oi_change_pct > _PAT_OI_ACCUM_PCT * 3 else "medium",
                         "detected_at": now,
                     })
 
@@ -1029,7 +1038,7 @@ async def get_patterns():
             for i, t in enumerate(liq_times):
                 count = sum(1 for t2 in liq_times[i:] if t2 - t <= 300)
                 max_in_window = max(max_in_window, count)
-            if max_in_window > 5:
+            if max_in_window > _PAT_LIQ_CASCADE_COUNT:
                 patterns.append({
                     "name": "LIQUIDATION_CASCADE",
                     "confidence": min(max_in_window / 15, 1.0),
@@ -1049,7 +1058,8 @@ async def get_patterns():
         if dex_row and spot_avg_row and dex_row[0] and spot_avg_row[0] and spot_avg_row[0] > 0:
             dex_p = dex_row[0]
             spot_avg = spot_avg_row[0]
-            if dex_p > spot_avg * 1.01:
+            threshold_factor = 1.0 + _PAT_DEX_PREMIUM_PCT / 100.0
+            if dex_p > spot_avg * threshold_factor:
                 prem_pct = (dex_p - spot_avg) / spot_avg * 100
                 patterns.append({
                     "name": "DEX_PREMIUM",
@@ -1093,7 +1103,7 @@ async def get_patterns():
         if spot_price_row and perp_price_row and spot_price_row[0] and spot_price_row[0] > 0:
             basis_pct = (perp_price_row[0] - spot_price_row[0]) / spot_price_row[0] * 100
             funding_rate = funding_row[0] if funding_row else 0
-            if basis_pct > 0.3 and funding_rate and funding_rate > 0:
+            if basis_pct > _PAT_BASIS_SQUEEZE_PCT and funding_rate and funding_rate > 0:
                 patterns.append({
                     "name": "BASIS_SQUEEZE",
                     "confidence": min(basis_pct / 1.0, 1.0),
