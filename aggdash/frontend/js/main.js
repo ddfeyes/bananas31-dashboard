@@ -653,7 +653,8 @@ function updatePatternOutcomeWidget(squeezeRiskScore) {
   const card = document.getElementById('pattern-outcome-card');
   if (!card || !_patternOutcomes || !_patternOutcomes.outcomes) return;
 
-  const showWidget = squeezeRiskScore >= 25;
+  // Show when squeeze risk >= 20 OR when any squeeze basis data present
+  const showWidget = squeezeRiskScore >= 20;
   card.style.display = showWidget ? 'flex' : 'none';
   if (!showWidget) return;
 
