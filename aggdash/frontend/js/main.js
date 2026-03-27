@@ -304,6 +304,9 @@ async function loadAllData(interval) {
     fetchVolumeSeries(windowSecs),
   ]);
 
+  // Mark timestamp before setData so subscribeVisibleTimeRangeChange can detect programmatic changes
+  window._lastDataUpdate = Date.now();
+
   // Price chart: candles from binance-spot, overlays from others
   if (spotBars.length) {
     candleSeries.setData(spotBars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
@@ -443,6 +446,7 @@ async function updateRealtime() {
 async function updateBasis() {
   const windowSecs = currentMinutes * 60;
   const basis = await fetchBasisSeries(windowSecs, currentInterval);
+  window._lastDataUpdate = Date.now();
   window._suppressSync = true;
   if (basis.binance.length) bnBasisLine.setData(basis.binance);
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
@@ -471,6 +475,7 @@ async function updateBasisMA7d() {
 
 async function updateOI() {
   const oi = await fetchOISeries(currentMinutes, currentInterval);
+  window._lastDataUpdate = Date.now();
   window._suppressSync = true;
   if (oi.agg.length)     aggOISeries.setData(oi.agg);
   if (oi.binance.length) bnOISeries.setData(oi.binance);

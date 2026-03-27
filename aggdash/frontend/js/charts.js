@@ -289,8 +289,10 @@ function syncTimeScales() {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
       if (!range || _syncing || window._suppressSync) return;
       _syncing = true;
-      // Only save viewport when not suppressed (actual user scroll, not programmatic)
-      if (!window._suppressSync) {
+      // Save viewport: but only if enough time has passed since last programmatic setData
+      // _lastDataUpdate is set before setData(), user actions come later
+      const msSinceData = Date.now() - (window._lastDataUpdate || 0);
+      if (!window._suppressSync && msSinceData > 500) {
         window._userScrolled = true;
         window._savedVisibleRange = range;
       }
