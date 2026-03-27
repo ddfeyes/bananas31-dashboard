@@ -550,36 +550,43 @@ async def get_basis_ma7d():
     bucket = 3600  # 1-hour bars
 
     try:
-        # Compute hourly basis_pct = (perp_close - spot_close) / spot_close * 100
-        rows = db.execute(
+        # Two fast GROUP BY queries — avoid self-JOIN on 1M+ rows (was timing out)
+        spot_rows = db.execute(
             """
-            SELECT
-                CAST(s.timestamp / ? AS INTEGER) * ? AS ts,
-                AVG(s.close) AS spot_close,
-                AVG(p.close) AS perp_close
-            FROM price_feed s
-            JOIN price_feed p
-              ON CAST(p.timestamp / ? AS INTEGER) * ? = CAST(s.timestamp / ? AS INTEGER) * ?
-              AND p.exchange_id = 'binance-perp'
-            WHERE s.exchange_id = 'binance-spot'
-              AND s.timestamp >= ?
-            GROUP BY ts
-            ORDER BY ts ASC
+            SELECT CAST(timestamp / ? AS INTEGER) * ? AS ts, AVG(close)
+            FROM price_feed
+            WHERE exchange_id = 'binance-spot' AND timestamp >= ?
+            GROUP BY ts ORDER BY ts ASC
             """,
-            (bucket, bucket, bucket, bucket, bucket, bucket, since),
+            (bucket, bucket, since),
+        ).fetchall()
+        perp_rows = db.execute(
+            """
+            SELECT CAST(timestamp / ? AS INTEGER) * ? AS ts, AVG(close)
+            FROM price_feed
+            WHERE exchange_id = 'binance-perp' AND timestamp >= ?
+            GROUP BY ts ORDER BY ts ASC
+            """,
+            (bucket, bucket, since),
         ).fetchall()
     finally:
         db.close()
 
-    if not rows:
+    if not spot_rows or not perp_rows:
         return {"ma7d": [], "window_bars": 168}
 
-    # Build basis_pct series
+    # Build lookup dicts and compute basis_pct where both sources have data
+    spot_by_ts = {int(ts): close for ts, close in spot_rows if close}
+    perp_by_ts = {int(ts): close for ts, close in perp_rows if close}
+    all_ts = sorted(set(spot_by_ts) & set(perp_by_ts))
+
     series = []
-    for ts, spot, perp in rows:
-        if spot and spot > 0 and perp is not None:
+    for ts in all_ts:
+        spot = spot_by_ts[ts]
+        perp = perp_by_ts[ts]
+        if spot > 0:
             basis_pct = (perp - spot) / spot * 100
-            series.append({"timestamp": int(ts), "basis_pct": basis_pct})
+            series.append({"timestamp": ts, "basis_pct": basis_pct})
 
     # Compute rolling 7-day MA (168 hourly bars)
     MA_WINDOW = 168
