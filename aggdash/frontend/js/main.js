@@ -16,8 +16,10 @@ function _restoreViewport() {
   // has rendered the new bars — otherwise TradingView overrides our range.
   // _suppressSync prevents subscribeVisibleTimeRangeChange from saving the
   // intermediate (wrong) range during the restore.
+  // Hold _suppressSync=true BEFORE RAF is scheduled — prevents subscribeVisibleTimeRangeChange
+  // from saving TradingView's bad auto-zoom in the gap between setData() and RAF execution
+  window._suppressSync = true;
   requestAnimationFrame(() => {
-    window._suppressSync = true;
     const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
     charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
     window._suppressSync = false;
