@@ -368,27 +368,19 @@ async function loadAllData(interval) {
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
+  // Apply viewport: always use initRange unless user has manually scrolled
+  // _userScrolled is set by subscribeVisibleTimeRangeChange only on real user interaction
+  const applyRange = window._userScrolled && savedRange ? savedRange : { from: defaultFrom, to: now + 300 };
   window._suppressSync = true;
+  try { priceChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
+  try { basisChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
+  try { oiChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
+  if (cvdChart) try { cvdChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
+  if (volChart) try { volChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
+  if (liqChart) try { liqChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
   if (!window._viewportInitialized) {
-    // Set explicit visible range: last 4 hours
-    const initRange = { from: defaultFrom, to: now + 300 };
-    try { priceChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    try { basisChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    try { oiChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    if (cvdChart) try { cvdChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    if (volChart) try { volChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    if (liqChart) try { liqChart.timeScale().setVisibleRange(initRange); } catch (_) {}
-    // Save this as the initial viewport so periodic updates preserve it
-    window._savedVisibleRange = initRange;
+    window._savedVisibleRange = applyRange;
     window._viewportInitialized = true;
-  } else if (savedRange) {
-    // Restore user's saved viewport
-    try { priceChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
-    try { basisChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
-    try { oiChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
-    if (cvdChart) try { cvdChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
-    if (volChart) try { volChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
-    if (liqChart) try { liqChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
   }
   window._suppressSync = false;
 }
@@ -832,9 +824,10 @@ function setupTimeframeButtons() {
       document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentInterval = btn.dataset.interval || '4h';
-      // Reset saved viewport so new interval shows appropriate range
+      // Reset viewport state on timeframe switch
       window._savedVisibleRange = null;
       window._viewportInitialized = false;
+      window._userScrolled = false;
       loadAllData(currentInterval);
     });
   });
