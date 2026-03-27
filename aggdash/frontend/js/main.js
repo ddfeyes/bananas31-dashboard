@@ -12,12 +12,11 @@ let currentMinutes = 240 * 400; // 4h * 400 bars for window-based APIs
 function _restoreViewport() {
   const r = window._savedVisibleRange;
   if (!r || !window._viewportInitialized) return;
-  // Use requestAnimationFrame so viewport restore happens AFTER TradingView
-  // has rendered the new bars — otherwise TradingView overrides our range.
-  // _suppressSync prevents subscribeVisibleTimeRangeChange from saving the
-  // intermediate (wrong) range during the restore.
+  // Keep _suppressSync = true until AFTER the RAF executes.
+  // This prevents subscribeVisibleTimeRangeChange from overwriting _savedVisibleRange
+  // with TradingView's auto-zoom value in the gap between setData() and RAF execution.
+  window._suppressSync = true;
   requestAnimationFrame(() => {
-    window._suppressSync = true;
     const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
     charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
     window._suppressSync = false;
@@ -299,8 +298,8 @@ async function loadAllData(interval) {
     fetchOHLCV('binance-perp', interval),
     fetchOHLCV('bybit-perp', interval),
     fetchOHLCV('bsc-pancakeswap', interval),
-    fetchBasisSeries(windowSecs),
-    fetchOISeries(minutes),
+    fetchBasisSeries(windowSecs, interval),
+    fetchOISeries(minutes, interval),
     fetchCVDSeries(windowSecs),
     fetchVolumeSeries(windowSecs),
   ]);
@@ -445,13 +444,12 @@ async function updateRealtime() {
 
 async function updateBasis() {
   const windowSecs = currentMinutes * 60;
-  const basis = await fetchBasisSeries(windowSecs);
+  const basis = await fetchBasisSeries(windowSecs, currentInterval);
   window._suppressSync = true;
   if (basis.binance.length) bnBasisLine.setData(basis.binance);
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
   if (basis.agg.length)     aggBasisLine.setData(basis.agg);
-  window._suppressSync = false;
-  _restoreViewport();
+  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateBasisMA7d() {
@@ -474,13 +472,12 @@ async function updateBasisMA7d() {
 }
 
 async function updateOI() {
-  const oi = await fetchOISeries(currentMinutes);
+  const oi = await fetchOISeries(currentMinutes, currentInterval);
   window._suppressSync = true;
   if (oi.agg.length)     aggOISeries.setData(oi.agg);
   if (oi.binance.length) bnOISeries.setData(oi.binance);
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
-  window._suppressSync = false;
-  _restoreViewport();
+  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateCVD() {
@@ -491,8 +488,7 @@ async function updateCVD() {
   if (cvd.agg.length)    aggCVDLine.setData(cvd.agg);
   if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
   if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
-  window._suppressSync = false;
-  _restoreViewport();
+  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateVolume() {
@@ -503,8 +499,7 @@ async function updateVolume() {
   if (vol.bnSpot.length) bnSpotVolSeries.setData(vol.bnSpot);
   if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
-  window._suppressSync = false;
-  _restoreViewport();
+  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateFundingSeries() {
@@ -523,8 +518,7 @@ async function updateFundingSeries() {
   window._suppressSync = true;
   if (bnPts.length) bnFundingSeries.setData(bnPts);
   if (bbPts.length) bbFundingSeries.setData(bbPts);
-  window._suppressSync = false;
-  _restoreViewport();
+  _restoreViewport(); // _suppressSync released in RAF
 
   // Update live-funding label with current average
   const fundEl = document.getElementById('live-funding');
@@ -810,8 +804,7 @@ async function updateLiquidationsSeries() {
     liqSellSeries.setData(sellData);
     liqBuySeries.setData(buyData);
   } finally {
-    window._suppressSync = false;
-    _restoreViewport();
+    _restoreViewport(); // _suppressSync released in RAF
   }
 
   // Update live label: total liquidation $ in window

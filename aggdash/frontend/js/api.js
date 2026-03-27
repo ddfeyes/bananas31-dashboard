@@ -56,8 +56,8 @@ async function fetchOHLCV(exchangeId, interval) {
     }));
 }
 
-async function fetchBasisSeries(windowSecs) {
-  const data = await apiGet(`/api/analytics/basis/series?window=${windowSecs}`);
+async function fetchBasisSeries(windowSecs, interval = '1m') {
+  const data = await apiGet(`/api/analytics/basis/series?window=${windowSecs}&interval=${interval}`);
   if (!data) return { binance: [], bybit: [], agg: [] };
   const mapPts = arr => (arr || [])
     .sort((a, b) => a.timestamp - b.timestamp)
@@ -69,8 +69,8 @@ async function fetchBasisSeries(windowSecs) {
   };
 }
 
-async function fetchOISeries(minutes) {
-  const data = await apiGet(`/api/oi/series?minutes=${minutes}`);
+async function fetchOISeries(minutes, interval = '1m') {
+  const data = await apiGet(`/api/oi/series?minutes=${minutes}&interval=${interval}`);
   if (!data) return { agg: [], binance: [], bybit: [] };
   const mapPts = arr => (arr || [])
     .sort((a, b) => a.timestamp - b.timestamp)
