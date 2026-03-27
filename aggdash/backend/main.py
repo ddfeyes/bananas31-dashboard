@@ -203,6 +203,59 @@ async def get_prices():
         "prices": prices,
     }
 
+@app.get("/api/price-change")
+async def get_price_change(window_secs: int = 86400):
+    """
+    Compute % price change over the given window (default 24h).
+
+    Returns per-source: {change_pct, current, prev} for each exchange.
+    Uses price_feed table: current = latest close, prev = closest close to (now - window_secs).
+    """
+    db = get_db()
+    now = time.time()
+    target_ts = now - window_secs
+    tolerance = 1800  # ±30 min acceptable for 24h anchor
+
+    sources = ["binance-spot", "binance-perp", "bybit-perp", "bsc-pancakeswap"]
+    result: dict = {}
+
+    for src in sources:
+        # Current price
+        row_cur = db.execute(
+            "SELECT close FROM price_feed WHERE exchange_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (src,),
+        ).fetchone()
+        if not row_cur:
+            continue
+        current = row_cur[0]
+
+        # Historical price closest to target_ts
+        row_prev = db.execute(
+            """
+            SELECT close FROM price_feed
+            WHERE exchange_id = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY ABS(timestamp - ?) ASC
+            LIMIT 1
+            """,
+            (src, target_ts - tolerance, target_ts + tolerance, target_ts),
+        ).fetchone()
+
+        if not row_prev:
+            result[src] = {"current": current, "prev": None, "change_pct": None}
+            continue
+
+        prev = row_prev[0]
+        change_pct = (current - prev) / prev * 100 if prev else None
+        result[src] = {"current": current, "prev": prev, "change_pct": change_pct}
+
+    db.close()
+    return {
+        "timestamp": now,
+        "window_secs": window_secs,
+        "changes": result,
+    }
+
+
 @app.websocket("/ws/prices")
 async def ws_prices(websocket: WebSocket):
     """

@@ -150,6 +150,29 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
+// ── 24h Price Change ─────────────────────────────────────────────────
+
+async function updatePriceChange() {
+  const data = await fetchPriceChange();
+  if (!data || !data.changes) return;
+
+  const changes = data.changes;
+  const map = {
+    'stat-bn-spot-chg':  changes['binance-spot'],
+    'stat-bn-perp-chg':  changes['binance-perp'],
+    'stat-bb-perp-chg':  changes['bybit-perp'],
+    'stat-dex-chg':      changes['bsc-pancakeswap'],
+  };
+
+  for (const [id, ch] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (!el || !ch || ch.change_pct == null) continue;
+    const v = ch.change_pct;
+    el.textContent = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    el.className = 'stat-change ' + (v >= 0 ? 'positive' : 'negative');
+  }
+}
+
 // ── Load historical data ─────────────────────────────────────────────
 
 async function loadAllData(minutes) {
@@ -522,6 +545,10 @@ function boot() {
 
   // WebSocket for real-time price streaming (falls back to polling if WS unavailable)
   initWebSocket();
+
+  // 24h price change — slower poll (24h values change slowly)
+  updatePriceChange();
+  setInterval(updatePriceChange, 60000);
 
   // Polling — updateRealtime is no-op when WS is active
   setInterval(updateRealtime, 2000);
