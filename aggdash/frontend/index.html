@@ -218,6 +218,25 @@
 
     .alert-sep { color: #253047; }
 
+    /* ── Pattern Outcome Widget ──────────────────────── */
+    .outcome-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 14px;
+      background: #0a1020;
+      border-bottom: 1px solid #1a2840;
+      font-size: 10px;
+      color: #8898b0;
+    }
+    .outcome-icon { font-size: 11px; }
+    .outcome-label { color: #506080; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .outcome-stat { color: #a0c0e0; font-weight: 600; font-size: 10px; white-space: nowrap; }
+    .outcome-stat.bullish { color: #00c97a; }
+    .outcome-stat.bearish { color: #ff3d5c; }
+    .outcome-sep { color: #253047; }
+    .outcome-sample { color: #3a4e66; font-size: 9px; margin-left: 4px; }
+
     /* ── Crosshair Tooltip ────────────────────────────── */
     #price-tooltip {
       display: none;
@@ -360,6 +379,18 @@
     <span id="last-alert-content"><span class="badge-quiet">—</span></span>
   </div>
 
+  <!-- Pattern Outcome Widget (shown when squeeze active) -->
+  <div id="pattern-outcome-card" class="outcome-card" style="display:none">
+    <span class="outcome-icon">📊</span>
+    <span class="outcome-label">Historical basis&gt;0.1% outcomes</span>
+    <span id="outcome-30" class="outcome-stat">—</span>
+    <span class="outcome-sep">·</span>
+    <span id="outcome-60" class="outcome-stat">—</span>
+    <span class="outcome-sep">·</span>
+    <span id="outcome-120" class="outcome-stat">—</span>
+    <span id="outcome-sample" class="outcome-sample">—</span>
+  </div>
+
   <!-- Charts -->
   <div class="charts-container">
     <div class="chart-panel" id="panel-price">
@@ -427,8 +458,8 @@
     </div>
   </div>
 
-  <script src="js/api.js?v=202603270836"></script>
-  <script src="js/charts.js?v=202603270836"></script>
-  <script src="js/main.js?v=202603270836"></script>
+  <script src="js/api.js?v=202603271053"></script>
+  <script src="js/charts.js?v=202603271053"></script>
+  <script src="js/main.js?v=202603271053"></script>
 </body>
 </html>
