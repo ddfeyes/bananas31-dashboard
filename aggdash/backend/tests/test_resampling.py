@@ -1,6 +1,5 @@
 """Tests for OHLCV resampling in db.py."""
 import sqlite3
-import time
 import sys
 import os
 
