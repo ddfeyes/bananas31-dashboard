@@ -366,18 +366,16 @@ async function loadAllData(interval) {
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
-  // Set viewport via RAF so it runs AFTER TradingView finishes rendering setData
-  // If user has scrolled manually (_userScrolled), restore their range
-  // Otherwise always show 200 candles ending at now
-  const targetRange = (window._userScrolled && savedRange) ? savedRange : { from: defaultFrom, to: now + 300 };
+  // ALWAYS set viewport to 200-candle range via RAF after every loadAllData.
+  // _savedVisibleRange is used only by periodic updates (updateBasis/OI/etc)
+  // to prevent THOSE from resetting zoom, but loadAllData always resets to initRange.
+  const initRange = { from: defaultFrom, to: now + 300 };
+  window._savedVisibleRange = initRange; // lock restore target
   window._suppressSync = true;
   requestAnimationFrame(() => {
     const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-    charts.forEach(c => { try { c.timeScale().setVisibleRange(targetRange); } catch (_) {} });
-    if (!window._viewportInitialized) {
-      window._savedVisibleRange = targetRange;
-      window._viewportInitialized = true;
-    }
+    charts.forEach(c => { try { c.timeScale().setVisibleRange(initRange); } catch (_) {} });
+    window._viewportInitialized = true;
     window._suppressSync = false;
   });
 }
