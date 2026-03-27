@@ -209,6 +209,15 @@ async function updateVol24h() {
     const total = data.oi_total.total || 0;
     oiTotEl.textContent = total > 0 ? fmtLarge(total) : '--';
   }
+
+  // LIQ-1H total liquidation USD in last hour
+  const liqEl = document.getElementById('stat-liq-1h');
+  if (liqEl && data.liq_1h_usd) {
+    const total = data.liq_1h_usd.total_usd || 0;
+    liqEl.textContent = total > 0 ? '$' + fmtLarge(total) : '$0';
+    // Red if >$10k (significant cascade activity)
+    liqEl.className = total >= 10000 ? 'stat-value negative' : 'stat-value';
+  }
 }
 
 // ── 24h Price Change ─────────────────────────────────────────────────

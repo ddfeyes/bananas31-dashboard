@@ -499,6 +499,24 @@ async def get_stats():
         cursor.execute("SELECT count(*) FROM liquidations")
         liq_rows = cursor.fetchone()[0]
 
+        # 1h liquidation totals (USD = quantity * price)
+        liq_1h_since = now - 3600
+        liq_1h_row = cursor.execute(
+            """
+            SELECT
+                SUM(CASE WHEN side='SELL' THEN quantity*price ELSE 0 END) as sell_usd,
+                SUM(CASE WHEN side='BUY'  THEN quantity*price ELSE 0 END) as buy_usd
+            FROM liquidations
+            WHERE timestamp >= ?
+            """,
+            (liq_1h_since,),
+        ).fetchone()
+        liq_1h_usd = {
+            "sell_usd": liq_1h_row[0] or 0.0,
+            "buy_usd":  liq_1h_row[1] or 0.0,
+        }
+        liq_1h_usd["total_usd"] = liq_1h_usd["sell_usd"] + liq_1h_usd["buy_usd"]
+
         # 24h volume per exchange
         vol_rows = cursor.execute(
             """
@@ -580,6 +598,7 @@ async def get_stats():
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
+        liq_1h_usd = {"sell_usd": 0.0, "buy_usd": 0.0, "total_usd": 0.0}
 
     # Latest tick timestamp
     all_ticks = await ring_buffer.get_ticks()
@@ -612,6 +631,7 @@ async def get_stats():
         "vol_24h": vol_24h,
         "oi_change_24h_pct": oi_change_24h_pct,
         "oi_total": oi_total,
+        "liq_1h_usd": liq_1h_usd,
         "db_size_mb": round(Path(DB_PATH).stat().st_size / 1e6, 1) if Path(DB_PATH).exists() else None,
     }
 
