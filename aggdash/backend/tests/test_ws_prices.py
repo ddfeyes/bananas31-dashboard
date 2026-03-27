@@ -2,9 +2,8 @@
 import asyncio
 import sys
 import os
-import json
 import time
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -99,7 +98,8 @@ class TestWSPricesEndpoint:
 
     def test_ws_manager_exported_in_main(self):
         """main.py must export ws_manager for stats endpoint."""
-        import importlib, importlib.util
+        import importlib
+        import importlib.util
         # Just check the module has ws_manager attribute after import
         # We can't fully run main without real collectors, but check structure
         spec = importlib.util.find_spec("ws_manager")
