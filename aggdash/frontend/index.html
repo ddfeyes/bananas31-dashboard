@@ -67,6 +67,14 @@
     .stat-value.positive { color: #00c97a; }
     .stat-value.negative { color: #ff3d5c; }
 
+    .stat-change {
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .stat-change.positive { color: #00c97a; }
+    .stat-change.negative { color: #ff3d5c; }
+
     .tf-buttons {
       display: flex;
       gap: 4px;
@@ -255,18 +263,22 @@
       <div class="stat-cell">
         <span class="stat-label">BN-SPOT</span>
         <span class="stat-value" id="stat-bn-spot">--</span>
+        <span class="stat-change" id="stat-bn-spot-chg"></span>
       </div>
       <div class="stat-cell">
         <span class="stat-label">BN-PERP</span>
         <span class="stat-value" id="stat-bn-perp">--</span>
+        <span class="stat-change" id="stat-bn-perp-chg"></span>
       </div>
       <div class="stat-cell">
         <span class="stat-label">BB-PERP</span>
         <span class="stat-value" id="stat-bb-perp">--</span>
+        <span class="stat-change" id="stat-bb-perp-chg"></span>
       </div>
       <div class="stat-cell">
         <span class="stat-label">DEX</span>
         <span class="stat-value" id="stat-dex">--</span>
+        <span class="stat-change" id="stat-dex-chg"></span>
       </div>
       <div class="stat-cell">
         <span class="stat-label">BN-FUND</span>

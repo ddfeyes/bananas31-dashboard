@@ -146,3 +146,7 @@ async function fetchSignals() {
 async function fetchPatterns() {
   return apiGet('/api/patterns');
 }
+
+async function fetchPriceChange() {
+  return apiGet('/api/price-change');
+}
