@@ -162,12 +162,13 @@
       border-radius: 1px;
     }
 
-    #panel-price  { flex: 6; min-height: 200px; }
-    #panel-basis  { flex: 2; min-height: 80px; }
-    #panel-oi     { flex: 2; min-height: 80px; }
-    #panel-cvd     { flex: 2; min-height: 80px; }
-    #panel-volume  { flex: 2; min-height: 80px; }
-    #panel-funding { flex: 2; min-height: 80px; }
+    #panel-price       { flex: 6; min-height: 200px; }
+    #panel-basis       { flex: 2; min-height: 80px; }
+    #panel-oi          { flex: 2; min-height: 80px; }
+    #panel-cvd         { flex: 2; min-height: 80px; }
+    #panel-volume      { flex: 2; min-height: 80px; }
+    #panel-funding     { flex: 2; min-height: 80px; }
+    #panel-liquidations{ flex: 2; min-height: 80px; }
 
     /* ── Signals / Patterns Bar ───────────────────────── */
     .alert-bar {
@@ -384,10 +385,18 @@
         <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>BB 8h</span>
       </div>
     </div>
+    <div class="chart-panel" id="panel-liquidations">
+      <div class="panel-label">LIQUIDATIONS · Long (red) vs Short (green)</div>
+      <span class="panel-live-val" id="live-liq">--</span>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#ff3d5c"></span>Long Liq</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#00c97a"></span>Short Liq</span>
+      </div>
+    </div>
   </div>
 
-  <script src="js/api.js?v=202603262335"></script>
-  <script src="js/charts.js?v=202603262335"></script>
-  <script src="js/main.js?v=202603262335"></script>
+  <script src="js/api.js?v=202603270415"></script>
+  <script src="js/charts.js?v=202603270415"></script>
+  <script src="js/main.js?v=202603270415"></script>
 </body>
 </html>

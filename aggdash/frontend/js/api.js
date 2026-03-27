@@ -154,3 +154,8 @@ async function fetchPriceChange() {
 async function fetchFundingSeries(windowSecs = 86400, intervalSecs = 300) {
   return apiGet(`/api/analytics/funding/series?window_secs=${windowSecs}&interval_secs=${intervalSecs}`);
 }
+
+async function fetchLiquidationsSeries(minutes = 1440, bucketSecs = 60) {
+  const m = Math.min(minutes, 10080); // cap at 7d
+  return apiGet(`/api/liquidations/series?minutes=${m}&bucket_secs=${bucketSecs}`);
+}
