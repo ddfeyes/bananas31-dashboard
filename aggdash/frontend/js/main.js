@@ -9,21 +9,9 @@ let currentMinutes = 240 * 400; // 4h * 400 bars for window-based APIs
 // ── Viewport restore helper ─────────────────────────────────────────
 // Call after any setData() to prevent TradingView from auto-zooming
 // when new bars extend beyond current viewport.
-function _restoreViewport() {
-  const r = window._savedVisibleRange;
-  if (!r || !window._viewportInitialized) return;
-  // Don't restore if we're in the middle of initial load (loadAllData RAF pending)
-  if (window._loadAllDataPending) return;
-  // Keep _suppressSync = true until AFTER the RAF executes.
-  // This prevents subscribeVisibleTimeRangeChange from overwriting _savedVisibleRange
-  // with TradingView's auto-zoom value in the gap between setData() and RAF execution.
-  window._suppressSync = true;
-  requestAnimationFrame(() => {
-    const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-    charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
-    window._suppressSync = false;
-  });
-}
+// _restoreViewport: no-op — zoom is managed by barSpacing in CHART_THEME
+// TradingView's handleScale/handleScroll config prevents auto-zoom on new data
+function _restoreViewport() {}
 
 
 // ── Real-time candle state ────────────────────────────────────────────
@@ -307,7 +295,6 @@ async function loadAllData(interval) {
   ]);
 
   // Mark timestamp before setData so subscribeVisibleTimeRangeChange can detect programmatic changes
-  window._lastDataUpdate = Date.now();
 
   // Price chart: candles from binance-spot, overlays from others
   if (spotBars.length) {
@@ -357,30 +344,14 @@ async function loadAllData(interval) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Viewport: on first load, set explicit visible range (last 4h of data)
-  // On reload: restore saved viewport to preserve user zoom
-  const savedRange = window._savedVisibleRange;
-  const now = Math.floor(Date.now() / 1000);
-  // Show ~100 candles by default for current interval
-  const barSecsMap = {'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
-  const barSecs = barSecsMap[currentInterval] || 14400;
-  const defaultFrom = now - barSecs * 200; // 200 candles visible by default
-
-  // All setVisibleRange calls here use _suppressSync to prevent
-  // subscribeVisibleTimeRangeChange from cascading and saving a bad range
-  // Viewport is managed by barSpacing in CHART_THEME (set once at chart creation).
-  // scrollToRealTime() positions at latest bar without changing the barSpacing zoom level.
-  // _restoreViewport() in periodic updates preserves user zoom after that.
+  // Scroll all charts to latest data on every load.
+  // barSpacing=6 in CHART_THEME sets the default zoom.
+  // handleScale/handleScroll options in CHART_THEME prevent TradingView from
+  // auto-resetting zoom when new bars arrive via setData() or update().
   if (!window._viewportInitialized) {
-    window._suppressSync = true;
-    const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-    charts.forEach(c => { try { c.timeScale().scrollToRealTime(); } catch (_) {} });
-    const r = priceChart.timeScale().getVisibleRange();
-    window._savedVisibleRange = r;
+    const allCharts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+    allCharts.forEach(c => { try { c.timeScale().scrollToRealTime(); } catch (_) {} });
     window._viewportInitialized = true;
-    window._suppressSync = false;
-  } else if (window._savedVisibleRange) {
-    _restoreViewport();
   }
 }
 
@@ -412,23 +383,17 @@ function updateRealtimeFromPrices(p, t) {
       if (price > _rtBar.high) _rtBar.high = price;
       if (price < _rtBar.low)  _rtBar.low  = price;
     }
-    // series.update() with a new bar causes TradingView to auto-scroll to right edge.
-    // Wrap with _suppressSync + _restoreViewport to prevent this.
-    window._suppressSync = true;
     candleSeries.update({
       time: minuteTs,
       open: _rtBar.open, high: _rtBar.high,
       low: _rtBar.low,   close: _rtBar.close,
     });
-    _restoreViewport();
   }
 
-  // Update overlay lines (suppress + restore to prevent auto-scroll)
-  window._suppressSync = true;
+  // Update overlay lines
   if (p['binance-perp'] != null)    bnPerpLine.update({ time: minuteTs, value: p['binance-perp'] });
   if (p['bybit-perp'] != null)      bbPerpLine.update({ time: minuteTs, value: p['bybit-perp'] });
   if (p['bsc-pancakeswap'] != null) dexLine.update({ time: minuteTs, value: p['bsc-pancakeswap'] });
-  _restoreViewport();
 }
 
 async function updateRealtime() {
@@ -442,12 +407,9 @@ async function updateRealtime() {
 async function updateBasis() {
   const windowSecs = currentMinutes * 60;
   const basis = await fetchBasisSeries(windowSecs, currentInterval);
-  window._lastDataUpdate = Date.now();
-  window._suppressSync = true;
   if (basis.binance.length) bnBasisLine.setData(basis.binance);
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
   if (basis.agg.length)     aggBasisLine.setData(basis.agg);
-  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateBasisMA7d() {
@@ -461,44 +423,35 @@ async function updateBasisMA7d() {
     .map(pt => ({ time: pt.timestamp, value: pt.ma7d }));
 
   if (!maData.length) return;
-  window._suppressSync = true;
   try {
     ma7dBasisLine.setData(maData);
   } finally {
-    window._suppressSync = false;
   }
 }
 
 async function updateOI() {
   const oi = await fetchOISeries(currentMinutes, currentInterval);
-  window._lastDataUpdate = Date.now();
-  window._suppressSync = true;
   if (oi.agg.length)     aggOISeries.setData(oi.agg);
   if (oi.binance.length) bnOISeries.setData(oi.binance);
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
-  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateCVD() {
   if (!cvdChart) return;
   const windowSecs = currentMinutes * 60;
   const cvd = await fetchCVDSeries(windowSecs);
-  window._suppressSync = true;
   if (cvd.agg.length)    aggCVDLine.setData(cvd.agg);
   if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
   if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
-  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateVolume() {
   if (!volChart) return;
   const windowSecs = currentMinutes * 60;
   const vol = await fetchVolumeSeries(windowSecs);
-  window._suppressSync = true;
   if (vol.bnSpot.length) bnSpotVolSeries.setData(vol.bnSpot);
   if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
-  _restoreViewport(); // _restoreViewport sets _suppressSync=false in RAF
 }
 
 async function updateFundingSeries() {
@@ -513,11 +466,8 @@ async function updateFundingSeries() {
 
   const bnPts = mapFunding(data.per_source['binance-perp']);
   const bbPts = mapFunding(data.per_source['bybit-perp']);
-
-  window._suppressSync = true;
   if (bnPts.length) bnFundingSeries.setData(bnPts);
   if (bbPts.length) bbFundingSeries.setData(bbPts);
-  _restoreViewport(); // _suppressSync released in RAF
 
   // Update live-funding label with current average
   const fundEl = document.getElementById('live-funding');
@@ -797,13 +747,10 @@ async function updateLiquidationsSeries() {
   const series = data.series;
   const sellData = series.map(b => ({ time: b.timestamp, value: b.sell_usd }));
   const buyData  = series.map(b => ({ time: b.timestamp, value: b.buy_usd }));
-
-  window._suppressSync = true;
   try {
     liqSellSeries.setData(sellData);
     liqBuySeries.setData(buyData);
   } finally {
-    _restoreViewport(); // _suppressSync released in RAF
   }
 
   // Update live label: total liquidation $ in window
@@ -826,9 +773,6 @@ function setupTimeframeButtons() {
       btn.classList.add('active');
       currentInterval = btn.dataset.interval || '4h';
       // Reset viewport state on timeframe switch
-      window._savedVisibleRange = null;
-      window._viewportInitialized = false;
-      window._userScrolled = false;
       loadAllData(currentInterval);
     });
   });
