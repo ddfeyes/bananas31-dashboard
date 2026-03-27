@@ -421,17 +421,23 @@ function updateRealtimeFromPrices(p, t) {
       if (price > _rtBar.high) _rtBar.high = price;
       if (price < _rtBar.low)  _rtBar.low  = price;
     }
+    // series.update() with a new bar causes TradingView to auto-scroll to right edge.
+    // Wrap with _suppressSync + _restoreViewport to prevent this.
+    window._suppressSync = true;
     candleSeries.update({
       time: minuteTs,
       open: _rtBar.open, high: _rtBar.high,
       low: _rtBar.low,   close: _rtBar.close,
     });
+    _restoreViewport();
   }
 
-  // Update overlay lines (minute-bucketed time for crosshair alignment)
+  // Update overlay lines (suppress + restore to prevent auto-scroll)
+  window._suppressSync = true;
   if (p['binance-perp'] != null)    bnPerpLine.update({ time: minuteTs, value: p['binance-perp'] });
   if (p['bybit-perp'] != null)      bbPerpLine.update({ time: minuteTs, value: p['bybit-perp'] });
   if (p['bsc-pancakeswap'] != null) dexLine.update({ time: minuteTs, value: p['bsc-pancakeswap'] });
+  _restoreViewport();
 }
 
 async function updateRealtime() {
