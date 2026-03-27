@@ -4,6 +4,21 @@
 
 let currentMinutes = 1440; // default 1D — show full history on load
 
+// ── Viewport restore helper ─────────────────────────────────────────
+// Call after any setData() to prevent TradingView from auto-zooming
+// when new bars extend beyond current viewport.
+function _restoreViewport() {
+  const r = window._savedVisibleRange;
+  if (!r || !window._viewportInitialized) return;
+  // Use _suppressSync to prevent the subscribeVisibleTimeRangeChange handler
+  // from cascading back into _restoreViewport (infinite loop prevention)
+  window._suppressSync = true;
+  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+  charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
+  window._suppressSync = false;
+}
+
+
 // ── Real-time candle state ────────────────────────────────────────────
 // Track intra-minute OHLC so .update() merges into current bar correctly.
 let _rtBar = null;  // { minuteTs, open, high, low, close }
@@ -334,6 +349,9 @@ async function loadAllData(minutes) {
   const now = Math.floor(Date.now() / 1000);
   const defaultFrom = now - 4 * 3600; // show last 4 hours by default
 
+  // All setVisibleRange calls here use _suppressSync to prevent
+  // subscribeVisibleTimeRangeChange from cascading and saving a bad range
+  window._suppressSync = true;
   if (!window._viewportInitialized) {
     // Set explicit visible range: last 4 hours
     const initRange = { from: defaultFrom, to: now + 300 };
@@ -343,6 +361,8 @@ async function loadAllData(minutes) {
     if (cvdChart) try { cvdChart.timeScale().setVisibleRange(initRange); } catch (_) {}
     if (volChart) try { volChart.timeScale().setVisibleRange(initRange); } catch (_) {}
     if (liqChart) try { liqChart.timeScale().setVisibleRange(initRange); } catch (_) {}
+    // Save this as the initial viewport so periodic updates preserve it
+    window._savedVisibleRange = initRange;
     window._viewportInitialized = true;
   } else if (savedRange) {
     // Restore user's saved viewport
@@ -353,6 +373,7 @@ async function loadAllData(minutes) {
     if (volChart) try { volChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
     if (liqChart) try { liqChart.timeScale().setVisibleRange(savedRange); } catch (_) {}
   }
+  window._suppressSync = false;
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
@@ -412,6 +433,7 @@ async function updateBasis() {
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
   if (basis.agg.length)     aggBasisLine.setData(basis.agg);
   window._suppressSync = false;
+  _restoreViewport();
 }
 
 async function updateBasisMA7d() {
@@ -440,6 +462,7 @@ async function updateOI() {
   if (oi.binance.length) bnOISeries.setData(oi.binance);
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
   window._suppressSync = false;
+  _restoreViewport();
 }
 
 async function updateCVD() {
@@ -451,6 +474,7 @@ async function updateCVD() {
   if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
   if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
   window._suppressSync = false;
+  _restoreViewport();
 }
 
 async function updateVolume() {
@@ -462,6 +486,7 @@ async function updateVolume() {
   if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
   window._suppressSync = false;
+  _restoreViewport();
 }
 
 async function updateFundingSeries() {
