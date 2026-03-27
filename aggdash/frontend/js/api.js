@@ -63,10 +63,12 @@ async function fetchOISeries(minutes) {
   const mapPts = arr => (arr || [])
     .sort((a, b) => a.timestamp - b.timestamp)
     .map(p => ({ time: p.timestamp, value: p.open_interest }));
+  // NOTE: endpoint returns per_source (not per_exchange) — keys are exchange ids
+  const ps = data.per_source || data.per_exchange || {};
   return {
     agg: mapPts(data.aggregated),
-    binance: mapPts((data.per_exchange || {})['binance-perp']),
-    bybit: mapPts((data.per_exchange || {})['bybit-perp']),
+    binance: mapPts(ps['binance-perp']),
+    bybit: mapPts(ps['bybit-perp']),
   };
 }
 
