@@ -1685,3 +1685,48 @@ if __name__ == "__main__":
 
     logger.info("Starting server on %s:%d", API_HOST, API_PORT)
     uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
+
+
+# ── /api/liquidations/history ──────────────────────────────────────
+
+@app.get("/api/liquidations/history")
+async def get_liquidations_history(limit: int = 50, window_secs: int = 3600):
+    """Last N liquidations within time window. Newest first."""
+    limit = min(limit, 200)
+    since_ts = time.time() - window_secs
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, source, symbol, side, quantity, price
+            FROM liquidations
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (since_ts, limit),
+        ).fetchall()
+        liq_list = [
+            {
+                "id": r[0],
+                "timestamp": r[1],
+                "source": r[2],
+                "symbol": r[3],
+                "side": r[4],
+                "quantity": r[5],
+                "price": r[6],
+                "usd_value": r[5] * r[6],
+            }
+            for r in rows
+        ]
+        return {
+            "liquidations": liq_list,
+            "count": len(liq_list),
+            "window_secs": window_secs,
+            "timestamp": time.time(),
+        }
+    except Exception as exc:
+        logger.error("liquidations history error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
