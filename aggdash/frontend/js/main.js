@@ -347,6 +347,11 @@ async function loadAllData(minutes) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
+  // Restore viewport after all setData() calls in loadAllData
+  // This covers: price/basis/oi/cvd/volume setData above (sync)
+  // updateFundingSeries/updateLiquidationsSeries have their own _restoreViewport
+  _restoreViewport();
+
   // Viewport: on first load, set explicit visible range (last 4h of data)
   // On reload: restore saved viewport to preserve user zoom
   const savedRange = window._savedVisibleRange;
@@ -510,6 +515,7 @@ async function updateFundingSeries() {
   if (bnPts.length) bnFundingSeries.setData(bnPts);
   if (bbPts.length) bbFundingSeries.setData(bbPts);
   window._suppressSync = false;
+  _restoreViewport();
 
   // Update live-funding label with current average
   const fundEl = document.getElementById('live-funding');
@@ -796,6 +802,7 @@ async function updateLiquidationsSeries() {
     liqBuySeries.setData(buyData);
   } finally {
     window._suppressSync = false;
+    _restoreViewport();
   }
 
   // Update live label: total liquidation $ in window
