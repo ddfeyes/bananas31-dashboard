@@ -11,7 +11,8 @@ const CHART_THEME = {
     borderColor: '#253047',
     timeVisible: true,
     secondsVisible: false,
-    rightOffset: 5,           // keep 5 bars of right margin — prevents auto-scroll on new data
+    rightOffset: 10,
+    barSpacing: 6,           // keep 5 bars of right margin — prevents auto-scroll on new data
     fixRightEdge: false,      // allow scrolling past right edge
     fixLeftEdge: false,       // allow scrolling past left edge
     lockVisibleTimeRangeOnResize: true, // don't reset view on resize
