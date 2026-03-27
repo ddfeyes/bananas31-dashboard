@@ -114,7 +114,7 @@ def get_db() -> sqlite3.Connection:
 def log_alert(
     kind: str, name: str, severity: str, message: str,
     value: float = None, sent_telegram: bool = False,
-    dedup_window_secs: int = 120,
+    dedup_window_secs: int = 1800,  # align with _ALERT_COOLDOWN_SECS in main.py
 ) -> bool:
     """Persist a fired alert to the alerts table.
 

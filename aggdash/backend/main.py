@@ -528,6 +528,8 @@ async def get_stats():
         oi_rows_count = cursor.fetchone()[0]
         cursor.execute("SELECT count(*) FROM liquidations")
         liq_rows = cursor.fetchone()[0]
+        cursor.execute("SELECT count(*) FROM alerts")
+        alerts_count = cursor.fetchone()[0]
 
         # 1h liquidation totals (USD = quantity * price)
         liq_1h_since = now - 3600
@@ -657,7 +659,7 @@ async def get_stats():
 
         db.close()
     except Exception:
-        price_feed_rows = oi_rows_count = liq_rows = -1
+        price_feed_rows = oi_rows_count = liq_rows = alerts_count = -1
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
         perp_spot_ratio = None
         funding_rates = {"binance-perp": None, "bybit-perp": None}
@@ -691,6 +693,7 @@ async def get_stats():
         ],
         "db": {
             "price_feed_rows": price_feed_rows,
+                "alerts_count": alerts_count,
             "oi_rows": oi_rows_count,
             "liquidations_rows": liq_rows,
         },
@@ -1510,8 +1513,15 @@ def _run_prune_sync(run_vacuum: bool = False) -> int:
         conn = get_db()
         result = conn.execute("DELETE FROM price_feed WHERE timestamp < ?", (cutoff,))
         deleted = result.rowcount
+        # Also prune alerts older than 30 days
+        alerts_cutoff = time.time() - 30 * 86400
+        alerts_deleted = conn.execute(
+            "DELETE FROM alerts WHERE timestamp < ?", (alerts_cutoff,)
+        ).rowcount
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if alerts_deleted > 0:
+            logger.info("DB prune: deleted %d alerts older than 30 days", alerts_deleted)
         if run_vacuum and deleted > 0:
             conn.execute("VACUUM")
         conn.close()
