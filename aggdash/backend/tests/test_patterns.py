@@ -6,7 +6,8 @@ Module 28: /api/patterns threshold calibration.
 
 # ── Import threshold constants ────────────────────────────────────────
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # We test the constants directly from main module globals
