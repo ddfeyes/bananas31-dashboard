@@ -10,12 +10,16 @@ let currentMinutes = 1440; // default 1D — show full history on load
 function _restoreViewport() {
   const r = window._savedVisibleRange;
   if (!r || !window._viewportInitialized) return;
-  // Use _suppressSync to prevent the subscribeVisibleTimeRangeChange handler
-  // from cascading back into _restoreViewport (infinite loop prevention)
-  window._suppressSync = true;
-  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-  charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
-  window._suppressSync = false;
+  // Use requestAnimationFrame so viewport restore happens AFTER TradingView
+  // has rendered the new bars — otherwise TradingView overrides our range.
+  // _suppressSync prevents subscribeVisibleTimeRangeChange from saving the
+  // intermediate (wrong) range during the restore.
+  requestAnimationFrame(() => {
+    window._suppressSync = true;
+    const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+    charts.forEach(c => { try { c.timeScale().setVisibleRange(r); } catch (_) {} });
+    window._suppressSync = false;
+  });
 }
 
 
