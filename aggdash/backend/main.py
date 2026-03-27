@@ -1229,17 +1229,6 @@ async def _telegram_signal_alert_loop():
 
             # --- Pattern alerts (medium + high severity) ---
             try:
-                patterns = []
-                # Re-run pattern detection inline (same logic as /api/patterns)
-                from fastapi.testclient import TestClient
-                _pat_resp = None  # avoid circular import; call internal logic via get_patterns()
-            except Exception:
-                pass
-
-            # Direct call to the patterns endpoint logic
-            try:
-                import importlib
-                import sys as _sys
                 _pat_conn = get_db()
                 _pat_now = now
                 _pat_patterns = []
