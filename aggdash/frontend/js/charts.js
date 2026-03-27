@@ -195,14 +195,19 @@ function initVolumeChart() {
 
 // ── Sync visible range across all charts ─────────────────────────────
 
+// Set window._suppressSync = true before any programmatic setData() that
+// should NOT trigger a user-visible zoom change, then false after.
+window._suppressSync = false;
+
 function syncTimeScales() {
   // Use TIME-based range sync (not logical index) so all panels show identical
   // calendar timestamps regardless of how many bars each chart has.
+  // _suppressSync prevents periodic setData() calls from resetting manual zoom.
   const charts = [priceChart, basisChart, oiChart, cvdChart, volChart].filter(Boolean);
   let _syncing = false;
   charts.forEach(src => {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (!range || _syncing) return;
+      if (!range || _syncing || window._suppressSync) return;
       _syncing = true;
       charts.forEach(dst => {
         if (dst !== src) {
