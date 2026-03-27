@@ -482,6 +482,36 @@ async def get_status():
 
 # ── /api/stats — concise health + stats snapshot ──────────────────────
 
+def _compute_squeeze_risk_index(
+    basis_pct: float = None,
+    funding_rate: float = None,
+    perp_spot_ratio: float = None,
+    liq_total_usd: float = 0.0,
+) -> float:
+    """
+    Compute Squeeze Risk Composite Index (0-100).
+    Weights: basis 0.5, funding 0.25, perp/spot 0.15, liq 0.1
+    """
+    score = 0.0
+    # Basis component (max 100 at 1%)
+    if basis_pct and abs(basis_pct) > 0:
+        basis_component = min(abs(basis_pct) / 1.0, 1.0) * 100
+        score += basis_component * 0.5
+    # Funding component (max 100 at 0.1%)
+    if funding_rate and funding_rate > 0:
+        funding_component = min(funding_rate / 0.001, 1.0) * 100
+        score += funding_component * 0.25
+    # Perp/Spot ratio component (max 100 at 5x)
+    if perp_spot_ratio and perp_spot_ratio > 0:
+        ratio_component = min((perp_spot_ratio - 1) / 4, 1.0) * 100
+        score += ratio_component * 0.15
+    # Liquidation component (max 100 at $100k)
+    if liq_total_usd > 0:
+        liq_component = min(liq_total_usd / 100000, 1.0) * 100
+        score += liq_component * 0.1
+    return min(score, 100.0)
+
+
 @app.get("/api/stats")
 async def get_stats():
     """Concise health and statistics snapshot for monitoring."""
@@ -548,6 +578,8 @@ async def get_stats():
             ).fetchone()
             funding_rates[ex] = row[0] if row and row[0] else None
 
+        # Squeeze Risk Composite Index computed in try block below
+
         # OI 24h change % and absolute total — latest per exchange
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
@@ -605,12 +637,31 @@ async def get_stats():
         except Exception:
             pass  # oi_total already initialized above
 
+        # Compute Squeeze Risk Composite Index after all stats are gathered
+        basis_pct_for_score = None
+        spot_p = cursor.execute(
+            "SELECT close FROM price_feed WHERE exchange_id='binance-spot' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        perp_p = cursor.execute(
+            "SELECT close FROM price_feed WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if spot_p and perp_p and spot_p[0] and spot_p[0] > 0:
+            basis_pct_for_score = (perp_p[0] - spot_p[0]) / spot_p[0] * 100
+
+        squeeze_risk_score = _compute_squeeze_risk_index(
+            basis_pct=basis_pct_for_score,
+            funding_rate=funding_rates.get("binance-perp"),
+            perp_spot_ratio=perp_spot_ratio,
+            liq_total_usd=liq_1h_usd.get("total_usd", 0),
+        )
+
         db.close()
     except Exception:
         price_feed_rows = oi_rows_count = liq_rows = -1
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
         perp_spot_ratio = None
         funding_rates = {"binance-perp": None, "bybit-perp": None}
+        squeeze_risk_score = 0.0
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
         liq_1h_usd = {"sell_usd": 0.0, "buy_usd": 0.0, "total_usd": 0.0}
@@ -646,6 +697,7 @@ async def get_stats():
         "vol_24h": vol_24h,
         "perp_spot_ratio": perp_spot_ratio,
         "funding_rates": funding_rates,
+        "squeeze_risk_score": round(squeeze_risk_score, 1),
         "oi_change_24h_pct": oi_change_24h_pct,
         "oi_total": oi_total,
         "liq_1h_usd": liq_1h_usd,
