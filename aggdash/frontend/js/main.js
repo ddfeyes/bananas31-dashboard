@@ -344,14 +344,18 @@ async function loadAllData(interval) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Scroll all charts to latest data on every load.
-  // barSpacing=6 in CHART_THEME sets the default zoom.
-  // handleScale/handleScroll options in CHART_THEME prevent TradingView from
-  // auto-resetting zoom when new bars arrive via setData() or update().
+  // On first load: set visible range to last 200 bars.
+  // Use setTimeout to ensure all async setData() calls (funding, liquidations) have fired first.
   if (!window._viewportInitialized) {
-    const allCharts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-    allCharts.forEach(c => { try { c.timeScale().scrollToRealTime(); } catch (_) {} });
     window._viewportInitialized = true;
+    setTimeout(() => {
+      const barSecsMap = {'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
+      const bs = barSecsMap[currentInterval] || 14400;
+      const nowTs = Math.floor(Date.now() / 1000);
+      const range = { from: nowTs - bs * 200, to: nowTs + bs * 5 };
+      const allCharts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+      allCharts.forEach(c => { try { c.timeScale().setVisibleRange(range); } catch (_) {} });
+    }, 1000); // 1s delay: enough for async setData to complete
   }
 }
 
