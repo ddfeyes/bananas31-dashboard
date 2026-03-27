@@ -175,3 +175,7 @@ async function fetchAlertsHistory(limit = 5) {
 async function fetchPriceRange(source = 'binance-spot', windowSecs = 86400) {
   return apiGet(`/api/price-range?source=${source}&window_secs=${windowSecs}`);
 }
+
+async function fetchPatternOutcomes(basisThreshold = 0.001) {
+  return apiGet(`/api/analytics/pattern-outcomes?basis_threshold=${basisThreshold}&horizons=30,60,120`);
+}

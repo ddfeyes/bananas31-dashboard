@@ -233,6 +233,11 @@ async function updateVol24h() {
       ratioEl.className = 'stat-value';
     }
   }
+
+  // Update pattern outcome widget with current squeeze risk
+  if (data.squeeze_risk_score != null) {
+    updatePatternOutcomeWidget(data.squeeze_risk_score);
+  }
 }
 
 // ── 24h Price Change ─────────────────────────────────────────────────
@@ -633,6 +638,47 @@ async function updatePatterns() {
   }).join(' ');
 }
 
+// Pattern outcome widget — load once, show when squeeze active
+let _patternOutcomes = null;
+
+async function loadPatternOutcomes() {
+  try {
+    _patternOutcomes = await fetchPatternOutcomes(0.001);
+  } catch (_) {
+    _patternOutcomes = null;
+  }
+}
+
+function updatePatternOutcomeWidget(squeezeRiskScore) {
+  const card = document.getElementById('pattern-outcome-card');
+  if (!card || !_patternOutcomes || !_patternOutcomes.outcomes) return;
+
+  const showWidget = squeezeRiskScore >= 25;
+  card.style.display = showWidget ? 'flex' : 'none';
+  if (!showWidget) return;
+
+  const o = _patternOutcomes.outcomes;
+  const n = _patternOutcomes.matches;
+
+  function fmtHorizon(key, label) {
+    const el = document.getElementById(`outcome-${key}`);
+    if (!el || !o[key]) return;
+    const up = o[key].up_pct;
+    const ret = o[key].avg_return_pct;
+    const cls = ret >= 0 ? 'bullish' : 'bearish';
+    const sign = ret >= 0 ? '+' : '';
+    el.className = `outcome-stat ${cls}`;
+    el.textContent = `T+${label}: ${up}% up ${sign}${ret.toFixed(2)}%`;
+  }
+
+  fmtHorizon('30', '30m');
+  fmtHorizon('60', '1h');
+  fmtHorizon('120', '2h');
+
+  const sampleEl = document.getElementById('outcome-sample');
+  if (sampleEl) sampleEl.textContent = `(n=${n})`;
+}
+
 async function updateLiquidationMarkers() {
   const liqs = await fetchLiquidations(currentMinutes);
   if (!liqs.length) return;
@@ -717,6 +763,7 @@ function boot() {
 
   // Initial load
   loadAllData(currentMinutes);
+  loadPatternOutcomes(); // load once — outcome data changes infrequently
   updateStatsBar();
   updateLiquidationMarkers();
   updateSignals();
