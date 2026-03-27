@@ -11,7 +11,8 @@ const CHART_THEME = {
     borderColor: '#253047',
     timeVisible: true,
     secondsVisible: false,
-    rightOffset: 5,           // keep 5 bars of right margin — prevents auto-scroll on new data
+    rightOffset: 10,
+    barSpacing: 6,           // keep 5 bars of right margin — prevents auto-scroll on new data
     fixRightEdge: false,      // allow scrolling past right edge
     fixLeftEdge: false,       // allow scrolling past left edge
     lockVisibleTimeRangeOnResize: true, // don't reset view on resize
@@ -289,8 +290,10 @@ function syncTimeScales() {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
       if (!range || _syncing || window._suppressSync) return;
       _syncing = true;
-      // Only save viewport when not suppressed (actual user scroll, not programmatic)
-      if (!window._suppressSync) {
+      // Save viewport: but only if enough time has passed since last programmatic setData
+      // _lastDataUpdate is set before setData(), user actions come later
+      const msSinceData = Date.now() - (window._lastDataUpdate || 0);
+      if (!window._suppressSync && msSinceData > 500) {
         window._userScrolled = true;
         window._savedVisibleRange = range;
       }

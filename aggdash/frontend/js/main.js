@@ -12,6 +12,8 @@ let currentMinutes = 240 * 400; // 4h * 400 bars for window-based APIs
 function _restoreViewport() {
   const r = window._savedVisibleRange;
   if (!r || !window._viewportInitialized) return;
+  // Don't restore if we're in the middle of initial load (loadAllData RAF pending)
+  if (window._loadAllDataPending) return;
   // Keep _suppressSync = true until AFTER the RAF executes.
   // This prevents subscribeVisibleTimeRangeChange from overwriting _savedVisibleRange
   // with TradingView's auto-zoom value in the gap between setData() and RAF execution.
@@ -304,6 +306,9 @@ async function loadAllData(interval) {
     fetchVolumeSeries(windowSecs),
   ]);
 
+  // Mark timestamp before setData so subscribeVisibleTimeRangeChange can detect programmatic changes
+  window._lastDataUpdate = Date.now();
+
   // Price chart: candles from binance-spot, overlays from others
   if (spotBars.length) {
     candleSeries.setData(spotBars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
@@ -352,11 +357,6 @@ async function loadAllData(interval) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Restore viewport after all setData() calls in loadAllData
-  // This covers: price/basis/oi/cvd/volume setData above (sync)
-  // updateFundingSeries/updateLiquidationsSeries have their own _restoreViewport
-  _restoreViewport();
-
   // Viewport: on first load, set explicit visible range (last 4h of data)
   // On reload: restore saved viewport to preserve user zoom
   const savedRange = window._savedVisibleRange;
@@ -368,21 +368,19 @@ async function loadAllData(interval) {
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
-  // Apply viewport: always use initRange unless user has manually scrolled
-  // _userScrolled is set by subscribeVisibleTimeRangeChange only on real user interaction
-  const applyRange = window._userScrolled && savedRange ? savedRange : { from: defaultFrom, to: now + 300 };
+  // ALWAYS set viewport to 200-candle range via RAF after every loadAllData.
+  // _loadAllDataPending blocks _restoreViewport until our RAF fires.
+  const initRange = { from: defaultFrom, to: now + 300 };
+  window._savedVisibleRange = initRange;
+  window._loadAllDataPending = true;
   window._suppressSync = true;
-  try { priceChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  try { basisChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  try { oiChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (cvdChart) try { cvdChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (volChart) try { volChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (liqChart) try { liqChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (!window._viewportInitialized) {
-    window._savedVisibleRange = applyRange;
+  requestAnimationFrame(() => {
+    const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+    charts.forEach(c => { try { c.timeScale().setVisibleRange(initRange); } catch (_) {} });
     window._viewportInitialized = true;
-  }
-  window._suppressSync = false;
+    window._loadAllDataPending = false;
+    window._suppressSync = false;
+  });
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
@@ -443,6 +441,7 @@ async function updateRealtime() {
 async function updateBasis() {
   const windowSecs = currentMinutes * 60;
   const basis = await fetchBasisSeries(windowSecs, currentInterval);
+  window._lastDataUpdate = Date.now();
   window._suppressSync = true;
   if (basis.binance.length) bnBasisLine.setData(basis.binance);
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
@@ -471,6 +470,7 @@ async function updateBasisMA7d() {
 
 async function updateOI() {
   const oi = await fetchOISeries(currentMinutes, currentInterval);
+  window._lastDataUpdate = Date.now();
   window._suppressSync = true;
   if (oi.agg.length)     aggOISeries.setData(oi.agg);
   if (oi.binance.length) bnOISeries.setData(oi.binance);
