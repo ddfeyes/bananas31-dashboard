@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS
-from db import init_db, get_db
+from db import init_db, get_db, log_alert, get_last_alert_ts
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
 from collectors import (
@@ -1117,6 +1117,30 @@ async def get_patterns():
     return {"patterns": patterns}
 
 
+@app.get("/api/alerts/history")
+async def get_alerts_history(limit: int = 50):
+    """
+    Recent fired alerts (signals + patterns) from the persistent alerts table.
+    Sorted by timestamp DESC. Returns up to `limit` records (max 200).
+    """
+    limit = min(limit, 200)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, kind, name, severity, message, value, sent_telegram
+            FROM alerts
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        alerts = [dict(r) for r in rows]
+    finally:
+        conn.close()
+    return {"alerts": alerts, "count": len(alerts)}
+
+
 # ── Telegram signal alerts (SPEC §4) ─────────────────────────────────
 
 # Alterlain bot token + target chat/topic
@@ -1127,9 +1151,6 @@ _ALERT_INTERVAL_SECS = 300        # check every 5 min
 _ALERT_COOLDOWN_SECS = 1800       # don't resend same signal within 30 min
 
 # In-memory dedup: {signal_id: last_sent_ts}
-_alert_sent_at: dict = {}
-
-
 async def _send_telegram_alert(text: str) -> bool:
     """Send a message to Telegram topic 7135 via alterlain bot."""
     url = f"https://api.telegram.org/bot{_TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -1167,25 +1188,30 @@ async def _telegram_signal_alert_loop():
             now = time.time()
 
             for sig in sigs:
-                sig_id = sig.get("id", "unknown")
-                last_sent = _alert_sent_at.get(sig_id, 0)
+                sig_name = sig.get("name", sig.get("id", "unknown"))
+                last_sent = get_last_alert_ts(sig_name, kind="signal")
                 if now - last_sent < _ALERT_COOLDOWN_SECS:
-                    continue  # still in cooldown
+                    continue  # still in cooldown (DB-based, survives restarts)
 
                 severity = sig.get("severity", "info")
                 icon = {"alert": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(severity, "📊")
-                name = sig.get("name", sig_id)
                 msg_text = sig.get("message", "")
                 ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
 
-                text = (
-                    f"{icon} <b>{name}</b>\n"
+                tg_text = (
+                    f"{icon} <b>{sig_name}</b>\n"
                     f"{msg_text}\n"
                     f"<i>{ts_str} · bananas31-dashboard.111miniapp.com</i>"
                 )
-                ok = await _send_telegram_alert(text)
-                if ok:
-                    _alert_sent_at[sig_id] = now
+                ok = await _send_telegram_alert(tg_text)
+                log_alert(
+                    kind="signal",
+                    name=sig_name,
+                    severity=severity,
+                    message=msg_text,
+                    value=sig.get("value"),
+                    sent_telegram=ok,
+                )
 
         except Exception as exc:
             logger.warning("Telegram alert loop error: %s", exc)

@@ -150,6 +150,24 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
+async function updateLastAlert() {
+  const data = await fetchAlertsHistory(1);
+  const el = document.getElementById('last-alert-content');
+  if (!el) return;
+  const alerts = data && data.alerts;
+  if (!alerts || !alerts.length) {
+    el.innerHTML = '<span class="badge-quiet">none yet</span>';
+    return;
+  }
+  const a = alerts[0];
+  const ageMin = Math.round((Date.now() / 1000 - a.timestamp) / 60);
+  const ageStr = ageMin < 60 ? `${ageMin}m ago` : `${Math.round(ageMin / 60)}h ago`;
+  const clsMap = {alert: 'badge-squeeze', warning: 'badge-deleverage', info: 'badge-accum'};
+  const cls = clsMap[a.severity] || 'badge-pattern';
+  const tg = a.sent_telegram ? ' ✈' : '';
+  el.innerHTML = `<span class="alert-badge ${cls}">${a.name}${tg}</span><span class="badge-quiet" style="font-size:9px;margin-left:4px">${ageStr}</span>`;
+}
+
 async function updateVol24h() {
   const data = await fetchStats();
   if (!data) return;
@@ -669,6 +687,8 @@ function boot() {
   setInterval(updateBasisMA7d, 300000); // MA7D changes slowly — refresh every 5 min
   updateVol24h();
   setInterval(updateVol24h, 60000); // vol + OI 24h change every 60s
+  updateLastAlert();
+  setInterval(updateLastAlert, 30000);
   setInterval(updateOI, 5000);
   setInterval(updateCVD, 10000);
   setInterval(updateVolume, 10000);
