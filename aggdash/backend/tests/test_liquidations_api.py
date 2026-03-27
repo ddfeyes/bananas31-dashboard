@@ -3,7 +3,6 @@ test_liquidations_api.py — Verify /api/liquidations and /api/liquidations/seri
 
 Module 25: liquidations chart + series endpoint.
 """
-import pytest
 import sqlite3
 import time
 import os
