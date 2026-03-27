@@ -328,15 +328,12 @@ async function loadAllData(minutes) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Fit content — only if first load (no prior viewport saved)
-  // Subsequent updates preserve user's zoom level via _suppressSync
+  // Viewport: on first load scroll to realtime end (NOT fitContent which zooms to ALL history)
+  // On reload: preserve user zoom by doing nothing (data updates don't change the view)
   if (!window._viewportInitialized) {
-    priceChart.timeScale().fitContent();
-    basisChart.timeScale().fitContent();
-    oiChart.timeScale().fitContent();
-    if (cvdChart) cvdChart.timeScale().fitContent();
-    if (volChart) volChart.timeScale().fitContent();
-    if (liqChart) liqChart.timeScale().fitContent();
+    // scrollToRealTime() positions at latest bar without zooming out to full history
+    priceChart.timeScale().scrollToRealTime();
+    // Other charts sync via syncTimeScales()
     window._viewportInitialized = true;
   }
 }
