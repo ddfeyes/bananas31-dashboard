@@ -37,9 +37,9 @@ def compute_price_range(conn, source, since):
     ).fetchone()
     if not row or row[0] is None:
         return {"high_24h": None, "low_24h": None, "range_pct": None}
-    h, l, c = row
-    range_pct = ((h - l) / l * 100) if l and l > 0 else None
-    return {"high_24h": h, "low_24h": l, "range_pct": range_pct, "current": c}
+    high_val, low_val, current_val = row
+    range_pct = ((high_val - low_val) / low_val * 100) if low_val and low_val > 0 else None
+    return {"high_24h": high_val, "low_24h": low_val, "range_pct": range_pct, "current": current_val}
 
 
 def test_price_range_correct_values():
