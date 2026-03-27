@@ -534,6 +534,10 @@ async def get_stats():
             "bybit_perp": vol_map.get("bybit-perp", 0.0),
         }
         vol_24h["total"] = sum(vol_24h.values())
+        # Perp/Spot volume ratio (SPEC §2: perp >> spot = speculation-driven)
+        spot_vol = vol_24h.get("binance_spot", 0)
+        perp_vol = vol_24h.get("binance_perp", 0) + vol_24h.get("bybit_perp", 0)
+        perp_spot_ratio = (perp_vol / spot_vol) if spot_vol and spot_vol > 0 else None
 
         # OI 24h change % and absolute total — latest per exchange
         oi_change_24h_pct = None
@@ -596,6 +600,7 @@ async def get_stats():
     except Exception:
         price_feed_rows = oi_rows_count = liq_rows = -1
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
+        perp_spot_ratio = None
         oi_change_24h_pct = None
         oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
         liq_1h_usd = {"sell_usd": 0.0, "buy_usd": 0.0, "total_usd": 0.0}
@@ -629,6 +634,7 @@ async def get_stats():
             "liquidations_rows": liq_rows,
         },
         "vol_24h": vol_24h,
+        "perp_spot_ratio": perp_spot_ratio,
         "oi_change_24h_pct": oi_change_24h_pct,
         "oi_total": oi_total,
         "liq_1h_usd": liq_1h_usd,

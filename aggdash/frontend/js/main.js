@@ -218,6 +218,21 @@ async function updateVol24h() {
     // Red if >$10k (significant cascade activity)
     liqEl.className = total >= 10000 ? 'stat-value negative' : 'stat-value';
   }
+
+  // PERP/S ratio (SPEC §2: perp >> spot = speculation-driven)
+  const ratioEl = document.getElementById('stat-perp-spot-ratio');
+  if (ratioEl && data.perp_spot_ratio != null) {
+    const ratio = data.perp_spot_ratio;
+    ratioEl.textContent = ratio.toFixed(1) + 'x';
+    // Red if >3x (speculation-driven), green if <1 (spot-driven)
+    if (ratio > 3) {
+      ratioEl.className = 'stat-value negative';
+    } else if (ratio < 1) {
+      ratioEl.className = 'stat-value positive';
+    } else {
+      ratioEl.className = 'stat-value';
+    }
+  }
 }
 
 // ── 24h Price Change ─────────────────────────────────────────────────
