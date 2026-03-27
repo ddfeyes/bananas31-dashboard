@@ -1595,13 +1595,6 @@ else:
         return {"message": "aggdash backend running. Frontend not found."}
 
 
-if __name__ == "__main__":
-    import uvicorn
-
-    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
-    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
-
-
 # ── /api/analytics/pattern-outcomes ─────────────────────────────────
 
 @app.get("/api/analytics/pattern-outcomes")
@@ -1735,3 +1728,10 @@ async def get_pattern_outcomes(
     except Exception as exc:
         logger.error("pattern-outcomes error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
+    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
