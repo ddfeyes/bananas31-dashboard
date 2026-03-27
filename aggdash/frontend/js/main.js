@@ -355,11 +355,6 @@ async function loadAllData(interval) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Restore viewport after all setData() calls in loadAllData
-  // This covers: price/basis/oi/cvd/volume setData above (sync)
-  // updateFundingSeries/updateLiquidationsSeries have their own _restoreViewport
-  _restoreViewport();
-
   // Viewport: on first load, set explicit visible range (last 4h of data)
   // On reload: restore saved viewport to preserve user zoom
   const savedRange = window._savedVisibleRange;
@@ -371,21 +366,20 @@ async function loadAllData(interval) {
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
-  // Apply viewport: always use initRange unless user has manually scrolled
-  // _userScrolled is set by subscribeVisibleTimeRangeChange only on real user interaction
-  const applyRange = window._userScrolled && savedRange ? savedRange : { from: defaultFrom, to: now + 300 };
+  // Set viewport via RAF so it runs AFTER TradingView finishes rendering setData
+  // If user has scrolled manually (_userScrolled), restore their range
+  // Otherwise always show 200 candles ending at now
+  const targetRange = (window._userScrolled && savedRange) ? savedRange : { from: defaultFrom, to: now + 300 };
   window._suppressSync = true;
-  try { priceChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  try { basisChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  try { oiChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (cvdChart) try { cvdChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (volChart) try { volChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (liqChart) try { liqChart.timeScale().setVisibleRange(applyRange); } catch (_) {}
-  if (!window._viewportInitialized) {
-    window._savedVisibleRange = applyRange;
-    window._viewportInitialized = true;
-  }
-  window._suppressSync = false;
+  requestAnimationFrame(() => {
+    const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
+    charts.forEach(c => { try { c.timeScale().setVisibleRange(targetRange); } catch (_) {} });
+    if (!window._viewportInitialized) {
+      window._savedVisibleRange = targetRange;
+      window._viewportInitialized = true;
+    }
+    window._suppressSync = false;
+  });
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
