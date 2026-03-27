@@ -1114,6 +1114,20 @@ async def get_patterns():
     finally:
         conn.close()
 
+    # Log new patterns to alerts DB (dedup: skip if same pattern fired within 30min)
+    _PATTERN_LOG_COOLDOWN = 1800
+    for pat in patterns:
+        last_pat_ts = get_last_alert_ts(pat["name"], kind="pattern")
+        if now - last_pat_ts >= _PATTERN_LOG_COOLDOWN:
+            log_alert(
+                kind="pattern",
+                name=pat["name"],
+                severity=pat.get("severity", "medium"),
+                message=pat.get("description", ""),
+                value=pat.get("confidence"),
+                sent_telegram=False,
+            )
+
     return {"patterns": patterns}
 
 
@@ -1212,6 +1226,73 @@ async def _telegram_signal_alert_loop():
                     value=sig.get("value"),
                     sent_telegram=ok,
                 )
+
+            # --- Pattern alerts (medium + high severity) ---
+            try:
+                patterns = []
+                # Re-run pattern detection inline (same logic as /api/patterns)
+                from fastapi.testclient import TestClient
+                _pat_resp = None  # avoid circular import; call internal logic via get_patterns()
+            except Exception:
+                pass
+
+            # Direct call to the patterns endpoint logic
+            try:
+                import importlib
+                import sys as _sys
+                _pat_conn = get_db()
+                _pat_now = now
+                _pat_patterns = []
+                # Reuse the DB queries from get_patterns (simplified inline version)
+                # Check BASIS_SQUEEZE pattern as primary pattern alert candidate
+                _sp_row = _pat_conn.execute(
+                    "SELECT close FROM price_feed WHERE exchange_id='binance-spot' ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                _pp_row = _pat_conn.execute(
+                    "SELECT close FROM price_feed WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                _fr_row = _pat_conn.execute(
+                    "SELECT rate_8h FROM funding_rates WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                _pat_conn.close()
+
+                if _sp_row and _pp_row and _sp_row[0] and _sp_row[0] > 0:
+                    _bp = (_pp_row[0] - _sp_row[0]) / _sp_row[0] * 100
+                    _fr = _fr_row[0] if _fr_row else 0
+                    if _bp > _PAT_BASIS_SQUEEZE_PCT and _fr and _fr > 0:
+                        _pat_patterns.append({
+                            "name": "BASIS_SQUEEZE",
+                            "severity": "high" if _bp > 0.5 else "medium",
+                            "description": f"Basis {_bp:.3f}% with positive funding {_fr*100:.4f}%",
+                            "confidence": min(_bp / 1.0, 1.0),
+                        })
+
+                for pat in _pat_patterns:
+                    pat_name = pat["name"]
+                    last_pat = get_last_alert_ts(pat_name, kind="pattern_tg")
+                    if now - last_pat < _ALERT_COOLDOWN_SECS:
+                        continue
+
+                    sev = pat.get("severity", "medium")
+                    icon = "🔴" if sev == "high" else "🟡"
+                    desc = pat.get("description", "")
+                    ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
+                    tg_text = (
+                        f"{icon} <b>Pattern: {pat_name}</b>\n"
+                        f"{desc}\n"
+                        f"<i>{ts_str} · bananas31-dashboard.111miniapp.com</i>"
+                    )
+                    ok = await _send_telegram_alert(tg_text)
+                    log_alert(
+                        kind="pattern_tg",
+                        name=pat_name,
+                        severity=sev,
+                        message=desc,
+                        value=pat.get("confidence"),
+                        sent_telegram=ok,
+                    )
+            except Exception as exc2:
+                logger.warning("Pattern alert loop error: %s", exc2)
 
         except Exception as exc:
             logger.warning("Telegram alert loop error: %s", exc)
