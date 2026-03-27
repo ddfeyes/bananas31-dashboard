@@ -364,7 +364,7 @@ async function loadAllData(interval) {
   // Show ~100 candles by default for current interval
   const barSecsMap = {'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
   const barSecs = barSecsMap[currentInterval] || 14400;
-  const defaultFrom = now - barSecs * 100; // 100 candles
+  const defaultFrom = now - barSecs * 200; // 200 candles visible by default
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
