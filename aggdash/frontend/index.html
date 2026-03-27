@@ -103,7 +103,8 @@
     }
 
     .conn-dot.connected { background: #00c97a; }
-    .conn-dot.error { background: #ff3d5c; }
+    .conn-dot.polling  { background: #f0b90b; }
+    .conn-dot.error    { background: #ff3d5c; }
 
     /* ── Chart Panels ─────────────────────────────────── */
     .charts-container {
@@ -282,6 +283,10 @@
       <div class="stat-cell">
         <span class="stat-label">DEX-SPREAD</span>
         <span class="stat-value" id="stat-dex-spread">--</span>
+      </div>
+      <div class="stat-cell">
+        <span class="stat-label">DEX-TVL</span>
+        <span class="stat-value" id="stat-dex-tvl" style="color:#00d4ff">--</span>
       </div>
     </div>
 

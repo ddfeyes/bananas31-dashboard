@@ -27,6 +27,11 @@ function initWebSocket() {
     console.log('WS: connected to', url);
     _wsActive = true;
     _wsRetryDelay = 1000;  // reset backoff
+    // Update connection indicator
+    const dot = document.getElementById('conn-dot');
+    const label = document.getElementById('conn-label');
+    if (dot) dot.className = 'conn-dot connected';
+    if (label) label.textContent = 'WS Live';
   };
 
   _ws.onmessage = (event) => {
@@ -45,6 +50,11 @@ function initWebSocket() {
     _wsActive = false;
     _ws = null;
     console.log(`WS: closed, reconnecting in ${_wsRetryDelay}ms`);
+    // Show polling fallback state — amber dot, not red (we still get data via polling)
+    const dot = document.getElementById('conn-dot');
+    const label = document.getElementById('conn-label');
+    if (dot) dot.className = 'conn-dot polling';
+    if (label) label.textContent = 'Polling';
     setTimeout(() => {
       _wsRetryDelay = Math.min(_wsRetryDelay * 2, 30000);
       initWebSocket();
@@ -123,6 +133,14 @@ async function updateStatsBar() {
       const sign = v >= 0 ? '+' : '';
       el.textContent = sign + v.toFixed(4) + '%';
       el.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
+    }
+  }
+
+  // DEX TVL — liquidity in USD from PancakeSwap V3 pool (SPEC Section 4)
+  if (dexData && dexData.liquidity_usd != null) {
+    const el = document.getElementById('stat-dex-tvl');
+    if (el) {
+      el.textContent = '$' + fmtLarge(dexData.liquidity_usd);
     }
   }
 }
