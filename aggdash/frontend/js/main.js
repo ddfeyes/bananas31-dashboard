@@ -2,7 +2,7 @@
  * BANANAS31 main controller — Lightweight Charts edition
  */
 
-let currentMinutes = 60; // default 1H
+let currentMinutes = 1440; // default 1D — show full history on load
 
 // ── Real-time candle state ────────────────────────────────────────────
 // Track intra-minute OHLC so .update() merges into current bar correctly.
@@ -193,34 +193,42 @@ async function updateRealtime() {
 async function updateBasis() {
   const windowSecs = currentMinutes * 60;
   const basis = await fetchBasisSeries(windowSecs);
+  window._suppressSync = true;
   if (basis.binance.length) bnBasisLine.setData(basis.binance);
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
   if (basis.agg.length)     aggBasisLine.setData(basis.agg);
+  window._suppressSync = false;
 }
 
 async function updateOI() {
   const oi = await fetchOISeries(currentMinutes);
+  window._suppressSync = true;
   if (oi.agg.length)     aggOISeries.setData(oi.agg);
   if (oi.binance.length) bnOISeries.setData(oi.binance);
   if (oi.bybit.length)   bbOISeries.setData(oi.bybit);
+  window._suppressSync = false;
 }
 
 async function updateCVD() {
   if (!cvdChart) return;
   const windowSecs = currentMinutes * 60;
   const cvd = await fetchCVDSeries(windowSecs);
+  window._suppressSync = true;
   if (cvd.agg.length)    aggCVDLine.setData(cvd.agg);
   if (cvd.bnPerp.length) bnPerpCVDLine.setData(cvd.bnPerp);
   if (cvd.bbPerp.length) bbPerpCVDLine.setData(cvd.bbPerp);
+  window._suppressSync = false;
 }
 
 async function updateVolume() {
   if (!volChart) return;
   const windowSecs = currentMinutes * 60;
   const vol = await fetchVolumeSeries(windowSecs);
+  window._suppressSync = true;
   if (vol.bnSpot.length) bnSpotVolSeries.setData(vol.bnSpot);
   if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
+  window._suppressSync = false;
 }
 
 // ── Crosshair Tooltip ────────────────────────────────────────────────
