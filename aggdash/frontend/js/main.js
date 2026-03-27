@@ -150,6 +150,27 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
+async function updateVol24h() {
+  const data = await fetchStats();
+  if (!data) return;
+
+  // VOL-24H total
+  const volEl = document.getElementById('stat-vol-24h');
+  if (volEl && data.vol_24h) {
+    const total = data.vol_24h.total || 0;
+    volEl.textContent = fmtLarge(total);
+  }
+
+  // OI/24H change %
+  const oiEl = document.getElementById('stat-oi-24h');
+  if (oiEl && data.oi_change_24h_pct != null) {
+    const v = data.oi_change_24h_pct * 100; // fraction → percent
+    const sign = v >= 0 ? '+' : '';
+    oiEl.textContent = sign + v.toFixed(2) + '%';
+    oiEl.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
+  }
+}
+
 // ── 24h Price Change ─────────────────────────────────────────────────
 
 async function updatePriceChange() {
@@ -646,6 +667,8 @@ function boot() {
   setInterval(updateBasis, 5000);
   updateBasisMA7d();
   setInterval(updateBasisMA7d, 300000); // MA7D changes slowly — refresh every 5 min
+  updateVol24h();
+  setInterval(updateVol24h, 60000); // vol + OI 24h change every 60s
   setInterval(updateOI, 5000);
   setInterval(updateCVD, 10000);
   setInterval(updateVolume, 10000);

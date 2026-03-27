@@ -446,18 +446,72 @@ async def get_status():
 async def get_stats():
     """Concise health and statistics snapshot for monitoring."""
     rb_size = await ring_buffer.size()
+    now = time.time()
+    since_24h = now - 86400
+
     try:
         db = get_db()
         cursor = db.cursor()
         cursor.execute("SELECT count(*) FROM price_feed")
         price_feed_rows = cursor.fetchone()[0]
         cursor.execute("SELECT count(*) FROM oi")
-        oi_rows = cursor.fetchone()[0]
+        oi_rows_count = cursor.fetchone()[0]
         cursor.execute("SELECT count(*) FROM liquidations")
         liq_rows = cursor.fetchone()[0]
+
+        # 24h volume per exchange
+        vol_rows = cursor.execute(
+            """
+            SELECT exchange_id, SUM(volume) as vol_24h
+            FROM price_feed
+            WHERE timestamp >= ?
+            GROUP BY exchange_id
+            """,
+            (since_24h,),
+        ).fetchall()
+        vol_map = {row[0]: row[1] or 0.0 for row in vol_rows}
+        vol_24h = {
+            "binance_spot": vol_map.get("binance-spot", 0.0),
+            "binance_perp": vol_map.get("binance-perp", 0.0),
+            "bybit_perp": vol_map.get("bybit-perp", 0.0),
+        }
+        vol_24h["total"] = sum(vol_24h.values())
+
+        # OI 24h change % (latest vs 24h-ago for aggregated)
+        oi_change_24h_pct = None
+        try:
+            oi_now_rows = cursor.execute(
+                """
+                SELECT exchange_id, open_interest
+                FROM oi
+                WHERE timestamp >= ? - 60
+                ORDER BY timestamp DESC
+                """,
+                (now,),
+            ).fetchall()
+            oi_ago_rows = cursor.execute(
+                """
+                SELECT exchange_id, open_interest
+                FROM oi
+                WHERE timestamp BETWEEN ? AND ? + 1800
+                ORDER BY timestamp ASC
+                """,
+                (since_24h, since_24h),
+            ).fetchall()
+
+            if oi_now_rows and oi_ago_rows:
+                oi_now_total = sum(r[1] for r in oi_now_rows if r[1])
+                oi_ago_total = sum(r[1] for r in oi_ago_rows if r[1])
+                if oi_ago_total > 0:
+                    oi_change_24h_pct = (oi_now_total - oi_ago_total) / oi_ago_total
+        except Exception:
+            pass
+
         db.close()
     except Exception:
-        price_feed_rows = oi_rows = liq_rows = -1
+        price_feed_rows = oi_rows_count = liq_rows = -1
+        vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
+        oi_change_24h_pct = None
 
     # Latest tick timestamp
     all_ticks = await ring_buffer.get_ticks()
@@ -473,7 +527,7 @@ async def get_stats():
 
     return {
         "status": "ok",
-        "uptime_secs": round(time.time() - _app_start_time),
+        "uptime_secs": round(now - _app_start_time),
         "ring_buffer_size": rb_size,
         "signal_count": signal_count,
         "last_tick_ts": last_tick_ts,
@@ -484,9 +538,11 @@ async def get_stats():
         ],
         "db": {
             "price_feed_rows": price_feed_rows,
-            "oi_rows": oi_rows,
+            "oi_rows": oi_rows_count,
             "liquidations_rows": liq_rows,
         },
+        "vol_24h": vol_24h,
+        "oi_change_24h_pct": oi_change_24h_pct,
     }
 
 

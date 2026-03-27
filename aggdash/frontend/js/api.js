@@ -163,3 +163,7 @@ async function fetchLiquidationsSeries(minutes = 1440, bucketSecs = 60) {
 async function fetchBasisMA7d() {
   return apiGet('/api/analytics/basis/ma7d');
 }
+
+async function fetchStats() {
+  return apiGet('/api/stats');
+}
