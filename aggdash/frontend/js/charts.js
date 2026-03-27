@@ -7,7 +7,15 @@ const CHART_THEME = {
   grid: { vertLines: { color: '#1c2438' }, horzLines: { color: '#1c2438' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   rightPriceScale: { borderColor: '#253047' },
-  timeScale: { borderColor: '#253047', timeVisible: true, secondsVisible: false },
+  timeScale: {
+    borderColor: '#253047',
+    timeVisible: true,
+    secondsVisible: false,
+    rightOffset: 5,           // keep 5 bars of right margin — prevents auto-scroll on new data
+    fixRightEdge: false,      // allow scrolling past right edge
+    fixLeftEdge: false,       // allow scrolling past left edge
+    lockVisibleTimeRangeOnResize: true, // don't reset view on resize
+  },
 };
 
 const PRICE_FMT = { type: 'price', precision: 6, minMove: 0.000001 };
