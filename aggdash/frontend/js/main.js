@@ -235,6 +235,9 @@ async function loadAllData(minutes) {
   // Liquidations chart
   updateLiquidationsSeries();
 
+  // Basis 7-day MA — always full 14-day window regardless of timeframe
+  updateBasisMA7d();
+
   // Fit content
   priceChart.timeScale().fitContent();
   basisChart.timeScale().fitContent();
@@ -301,6 +304,25 @@ async function updateBasis() {
   if (basis.bybit.length)   bbBasisLine.setData(basis.bybit);
   if (basis.agg.length)     aggBasisLine.setData(basis.agg);
   window._suppressSync = false;
+}
+
+async function updateBasisMA7d() {
+  if (!ma7dBasisLine) return;
+  const data = await fetchBasisMA7d();
+  if (!data || !data.ma7d || !data.ma7d.length) return;
+
+  // Map to {time, value} — use ma7d field
+  const maData = data.ma7d
+    .filter(pt => pt.ma7d != null)
+    .map(pt => ({ time: pt.timestamp, value: pt.ma7d }));
+
+  if (!maData.length) return;
+  window._suppressSync = true;
+  try {
+    ma7dBasisLine.setData(maData);
+  } finally {
+    window._suppressSync = false;
+  }
 }
 
 async function updateOI() {
@@ -622,6 +644,8 @@ function boot() {
   // Polling — updateRealtime is no-op when WS is active
   setInterval(updateRealtime, 2000);
   setInterval(updateBasis, 5000);
+  updateBasisMA7d();
+  setInterval(updateBasisMA7d, 300000); // MA7D changes slowly — refresh every 5 min
   setInterval(updateOI, 5000);
   setInterval(updateCVD, 10000);
   setInterval(updateVolume, 10000);

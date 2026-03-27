@@ -58,7 +58,7 @@ function initPriceChart() {
 
 // ── Basis Panel ──────────────────────────────────────────────────────
 
-let basisChart, bnBasisLine, bbBasisLine, aggBasisLine;
+let basisChart, bnBasisLine, bbBasisLine, aggBasisLine, ma7dBasisLine;
 
 function initBasisChart() {
   const container = document.getElementById('panel-basis');
@@ -85,6 +85,17 @@ function initBasisChart() {
     color: '#00c8f5', lineWidth: 2,
     lastValueVisible: true, priceLineVisible: false,
     priceFormat: BASIS_FMT,
+  });
+
+  // 7-day MA line — dashed white/gray (SPEC §5)
+  ma7dBasisLine = basisChart.addLineSeries({
+    color: 'rgba(200,210,230,0.7)',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+    title: 'MA7D',
   });
 }
 
