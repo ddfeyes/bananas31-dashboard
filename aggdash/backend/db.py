@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS liquidations (
     price     REAL
 );
 
+CREATE TABLE IF NOT EXISTS alerts (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp      REAL NOT NULL,
+    kind           TEXT NOT NULL,  -- 'signal' | 'pattern'
+    name           TEXT NOT NULL,
+    severity       TEXT,
+    message        TEXT,
+    value          REAL,
+    sent_telegram  INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp DESC);
+
 INSERT OR IGNORE INTO exchanges VALUES
     ('binance-spot',    'Binance Spot',        1),
     ('binance-perp',    'Binance Perp',        1),
@@ -96,6 +109,43 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def log_alert(kind: str, name: str, severity: str, message: str, value: float = None, sent_telegram: bool = False) -> None:
+    """Persist a fired alert to the alerts table."""
+    import time as _time
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO alerts(timestamp, kind, name, severity, message, value, sent_telegram) VALUES (?,?,?,?,?,?,?)",
+            (_time.time(), kind, name, severity, message, value, 1 if sent_telegram else 0),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("log_alert failed: %s", exc)
+    finally:
+        conn.close()
+
+
+def get_last_alert_ts(name: str, kind: str = None) -> float:
+    """Return the timestamp of the most recent alert with this name, or 0 if none."""
+    conn = get_db()
+    try:
+        if kind:
+            row = conn.execute(
+                "SELECT MAX(timestamp) FROM alerts WHERE name=? AND kind=?",
+                (name, kind),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT MAX(timestamp) FROM alerts WHERE name=?",
+                (name,),
+            ).fetchone()
+        return row[0] or 0.0
+    except Exception:
+        return 0.0
+    finally:
+        conn.close()
 
 
 VALID_INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}

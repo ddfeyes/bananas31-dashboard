@@ -167,3 +167,7 @@ async function fetchBasisMA7d() {
 async function fetchStats() {
   return apiGet('/api/stats');
 }
+
+async function fetchAlertsHistory(limit = 5) {
+  return apiGet(`/api/alerts/history?limit=${limit}`);
+}
