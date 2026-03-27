@@ -1680,11 +1680,6 @@ else:
 
 
 
-if __name__ == "__main__":
-    import uvicorn
-
-    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
-    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
 
 
 # ── /api/liquidations/history ──────────────────────────────────────
@@ -1730,3 +1725,10 @@ async def get_liquidations_history(limit: int = 50, window_secs: int = 3600):
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         conn.close()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
+    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
