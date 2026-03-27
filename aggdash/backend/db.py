@@ -111,18 +111,37 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
-def log_alert(kind: str, name: str, severity: str, message: str, value: float = None, sent_telegram: bool = False) -> None:
-    """Persist a fired alert to the alerts table."""
+def log_alert(
+    kind: str, name: str, severity: str, message: str,
+    value: float = None, sent_telegram: bool = False,
+    dedup_window_secs: int = 120,
+) -> bool:
+    """Persist a fired alert to the alerts table.
+
+    Deduplication: skip INSERT if an identical (kind, name) alert was already
+    logged within `dedup_window_secs` seconds. Returns True if inserted, False if skipped.
+    """
     import time as _time
+    now = _time.time()
     conn = get_db()
     try:
+        # Check for recent duplicate
+        recent = conn.execute(
+            "SELECT id FROM alerts WHERE kind=? AND name=? AND timestamp>=? LIMIT 1",
+            (kind, name, now - dedup_window_secs),
+        ).fetchone()
+        if recent:
+            return False  # duplicate suppressed
+
         conn.execute(
             "INSERT INTO alerts(timestamp, kind, name, severity, message, value, sent_telegram) VALUES (?,?,?,?,?,?,?)",
-            (_time.time(), kind, name, severity, message, value, 1 if sent_telegram else 0),
+            (now, kind, name, severity, message, value, 1 if sent_telegram else 0),
         )
         conn.commit()
+        return True
     except Exception as exc:
         logger.warning("log_alert failed: %s", exc)
+        return False
     finally:
         conn.close()
 
