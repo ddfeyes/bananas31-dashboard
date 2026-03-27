@@ -187,6 +187,13 @@ async function updateVol24h() {
     oiEl.textContent = sign + v.toFixed(2) + '%';
     oiEl.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
   }
+
+  // OI-TOT absolute total
+  const oiTotEl = document.getElementById('stat-oi-total');
+  if (oiTotEl && data.oi_total) {
+    const total = data.oi_total.total || 0;
+    oiTotEl.textContent = total > 0 ? fmtLarge(total) : '--';
+  }
 }
 
 // ── 24h Price Change ─────────────────────────────────────────────────
