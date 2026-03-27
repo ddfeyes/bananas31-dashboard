@@ -55,10 +55,14 @@ def make_oi_db(rows):
 
 
 def compute_oi_change_24h(conn, now, since_24h):
-    """Compute OI 24h change % — mirrors get_stats() logic."""
+    """Compute OI 24h change % — mirrors get_stats() logic (dedup per exchange)."""
     oi_now_rows = conn.execute(
-        "SELECT exchange_id, open_interest FROM oi WHERE timestamp >= ? - 60 ORDER BY timestamp DESC",
-        (now,),
+        """
+        SELECT exchange_id, open_interest FROM oi
+        WHERE (exchange_id, timestamp) IN (
+            SELECT exchange_id, MAX(timestamp) FROM oi GROUP BY exchange_id
+        )
+        """,
     ).fetchall()
     oi_ago_rows = conn.execute(
         "SELECT exchange_id, open_interest FROM oi WHERE timestamp BETWEEN ? AND ? + 1800 ORDER BY timestamp ASC",
@@ -66,8 +70,18 @@ def compute_oi_change_24h(conn, now, since_24h):
     ).fetchall()
     if not oi_now_rows or not oi_ago_rows:
         return None
-    oi_now_total = sum(r[1] for r in oi_now_rows if r[1])
-    oi_ago_total = sum(r[1] for r in oi_ago_rows if r[1])
+    seen = set()
+    oi_now_total = 0.0
+    for ex, oi in oi_now_rows:
+        if ex not in seen and oi:
+            oi_now_total += oi
+            seen.add(ex)
+    seen = set()
+    oi_ago_total = 0.0
+    for ex, oi in oi_ago_rows:
+        if ex not in seen and oi:
+            oi_ago_total += oi
+            seen.add(ex)
     if oi_ago_total <= 0:
         return None
     return (oi_now_total - oi_ago_total) / oi_ago_total

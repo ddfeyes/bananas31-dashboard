@@ -477,18 +477,20 @@ async def get_stats():
         }
         vol_24h["total"] = sum(vol_24h.values())
 
-        # OI 24h change % (latest vs 24h-ago for aggregated)
+        # OI 24h change % — latest row per exchange vs 24h-ago row per exchange
         oi_change_24h_pct = None
         try:
+            # Latest OI per exchange (one row each)
             oi_now_rows = cursor.execute(
                 """
                 SELECT exchange_id, open_interest
                 FROM oi
-                WHERE timestamp >= ? - 60
-                ORDER BY timestamp DESC
+                WHERE (exchange_id, timestamp) IN (
+                    SELECT exchange_id, MAX(timestamp) FROM oi GROUP BY exchange_id
+                )
                 """,
-                (now,),
             ).fetchall()
+            # OI per exchange closest to 24h ago (±30min window)
             oi_ago_rows = cursor.execute(
                 """
                 SELECT exchange_id, open_interest
@@ -500,8 +502,20 @@ async def get_stats():
             ).fetchall()
 
             if oi_now_rows and oi_ago_rows:
-                oi_now_total = sum(r[1] for r in oi_now_rows if r[1])
-                oi_ago_total = sum(r[1] for r in oi_ago_rows if r[1])
+                # Sum latest per exchange (deduplicated)
+                seen = set()
+                oi_now_total = 0.0
+                for ex, oi in oi_now_rows:
+                    if ex not in seen and oi:
+                        oi_now_total += oi
+                        seen.add(ex)
+                # Sum 24h-ago per exchange (deduplicated — take first occurrence per exchange)
+                seen = set()
+                oi_ago_total = 0.0
+                for ex, oi in oi_ago_rows:
+                    if ex not in seen and oi:
+                        oi_ago_total += oi
+                        seen.add(ex)
                 if oi_ago_total > 0:
                     oi_change_24h_pct = (oi_now_total - oi_ago_total) / oi_ago_total
         except Exception:
