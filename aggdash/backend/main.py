@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS
+from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
 from db import init_db, get_db, log_alert, get_last_alert_ts
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI):
 
     # Start Telegram signal alert task (SPEC §4: post to topic 7135 every 5 min)
     asyncio.create_task(_telegram_signal_alert_loop())
+    asyncio.create_task(_db_prune_loop())
 
     logger.info("All collectors started")
 
@@ -572,6 +573,7 @@ async def get_stats():
         "vol_24h": vol_24h,
         "oi_change_24h_pct": oi_change_24h_pct,
         "oi_total": oi_total,
+        "db_size_mb": round(Path(DB_PATH).stat().st_size / 1e6, 1) if Path(DB_PATH).exists() else None,
     }
 
 
@@ -1305,6 +1307,37 @@ async def _telegram_signal_alert_loop():
 
 
 # ── Historical backfill (Bug 6) ───────────────────────────────────────
+
+_DB_PRUNE_RETENTION_DAYS = 90   # keep 90 days of price_feed
+_DB_PRUNE_INTERVAL_SECS = 3600  # check every hour
+
+
+async def _db_prune_loop():
+    """
+    Background task: prune old price_feed rows once per hour.
+    Keeps last 90 days; leaves OI, funding_rates, liquidations, alerts untouched.
+    """
+    while True:
+        await asyncio.sleep(_DB_PRUNE_INTERVAL_SECS)
+        try:
+            cutoff = time.time() - _DB_PRUNE_RETENTION_DAYS * 86400
+            conn = get_db()
+            result = conn.execute(
+                "DELETE FROM price_feed WHERE timestamp < ?",
+                (cutoff,),
+            )
+            deleted = result.rowcount
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+            if deleted > 0:
+                logger.info(
+                    "DB prune: deleted %d price_feed rows older than %d days",
+                    deleted, _DB_PRUNE_RETENTION_DAYS,
+                )
+        except Exception as exc:
+            logger.warning("DB prune error: %s", exc)
+
 
 async def _backfill_historical_data():
     """Fetch last 7 days of Binance data if DB is sparse."""
