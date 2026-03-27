@@ -477,8 +477,9 @@ async def get_stats():
         }
         vol_24h["total"] = sum(vol_24h.values())
 
-        # OI 24h change % — latest row per exchange vs 24h-ago row per exchange
+        # OI 24h change % and absolute total — latest per exchange
         oi_change_24h_pct = None
+        oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
         try:
             # Latest OI per exchange (one row each)
             oi_now_rows = cursor.execute(
@@ -518,14 +519,27 @@ async def get_stats():
                         seen.add(ex)
                 if oi_ago_total > 0:
                     oi_change_24h_pct = (oi_now_total - oi_ago_total) / oi_ago_total
+
+            # Absolute OI total — latest per exchange
+            oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
+            if oi_now_rows:
+                seen = set()
+                for ex, oi in oi_now_rows:
+                    if ex not in seen and oi:
+                        key = ex.replace("-", "_")
+                        if key in oi_total:
+                            oi_total[key] = oi
+                        seen.add(ex)
+                oi_total["total"] = oi_total["binance_perp"] + oi_total["bybit_perp"]
         except Exception:
-            pass
+            pass  # oi_total already initialized above
 
         db.close()
     except Exception:
         price_feed_rows = oi_rows_count = liq_rows = -1
         vol_24h = {"binance_spot": 0, "binance_perp": 0, "bybit_perp": 0, "total": 0}
         oi_change_24h_pct = None
+        oi_total = {"binance_perp": 0.0, "bybit_perp": 0.0, "total": 0.0}
 
     # Latest tick timestamp
     all_ticks = await ring_buffer.get_ticks()
@@ -557,6 +571,7 @@ async def get_stats():
         },
         "vol_24h": vol_24h,
         "oi_change_24h_pct": oi_change_24h_pct,
+        "oi_total": oi_total,
     }
 
 
