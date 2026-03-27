@@ -57,7 +57,7 @@ async function fetchOHLCV(exchangeId, interval) {
 }
 
 async function fetchBasisSeries(windowSecs, interval = '1m') {
-  const data = await apiGet(`/api/analytics/basis/series?window=${windowSecs}&interval=${interval}`);
+  const data = await apiGet(`/api/analytics/basis/series?window_secs=${windowSecs}&interval=${interval}`);
   if (!data) return { binance: [], bybit: [], agg: [] };
   const mapPts = arr => (arr || [])
     .sort((a, b) => a.timestamp - b.timestamp)
