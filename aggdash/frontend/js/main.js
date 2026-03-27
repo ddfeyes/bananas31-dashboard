@@ -368,19 +368,20 @@ async function loadAllData(interval) {
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
-  // ALWAYS set viewport to 200-candle range via RAF after every loadAllData.
-  // _loadAllDataPending blocks _restoreViewport until our RAF fires.
-  const initRange = { from: defaultFrom, to: now + 300 };
-  window._savedVisibleRange = initRange;
-  window._loadAllDataPending = true;
-  window._suppressSync = true;
-  requestAnimationFrame(() => {
+  // Viewport is managed by barSpacing in CHART_THEME (set once at chart creation).
+  // scrollToRealTime() positions at latest bar without changing the barSpacing zoom level.
+  // _restoreViewport() in periodic updates preserves user zoom after that.
+  if (!window._viewportInitialized) {
+    window._suppressSync = true;
     const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
-    charts.forEach(c => { try { c.timeScale().setVisibleRange(initRange); } catch (_) {} });
+    charts.forEach(c => { try { c.timeScale().scrollToRealTime(); } catch (_) {} });
+    const r = priceChart.timeScale().getVisibleRange();
+    window._savedVisibleRange = r;
     window._viewportInitialized = true;
-    window._loadAllDataPending = false;
     window._suppressSync = false;
-  });
+  } else if (window._savedVisibleRange) {
+    _restoreViewport();
+  }
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
