@@ -447,50 +447,70 @@ class AnalyticsEngine:
     # OI delta                                                             #
     # ------------------------------------------------------------------ #
 
-    async def compute_oi_delta(self) -> Dict:
+    async def compute_oi_delta(self, window_secs: int = 300) -> Dict:
         """
-        Compute OI delta = current OI - OI 1 minute ago, per source and aggregated.
-        Uses in-memory OI history tracked by update_oi_history().
+        Compute OI delta = current OI vs OI ``window_secs`` ago, per source and aggregated.
+        Reads from DB (oi table) so it works even on a fresh restart.
+        Previously relied on an in-memory dict that was never populated.
         """
-        async with self.lock:
-            result = {}
-            agg_current = 0.0
-            agg_prev = 0.0
-            has_agg = False
+        from db import get_latest_oi_history
 
-            for source, history in self._oi_history.items():
-                if len(history) < 2:
-                    result[source] = {"oi": history[-1][1] if history else None, "delta": None, "delta_pct": None}
-                    continue
+        # Fetch enough history to cover the window (poller runs every 30s → ~10+ entries for 5 min)
+        limit = max(int(window_secs / 30) + 10, 20)
+        sources = ["binance-perp", "bybit-perp"]
+        result = {}
+        agg_current = 0.0
+        agg_prev = 0.0
+        has_agg = False
 
-                current_ts, current_oi = history[-1]
-                # Find entry ~60s ago
-                target_ts = current_ts - 60
-                prev = min(history[:-1], key=lambda x: abs(x[0] - target_ts))
-                prev_oi = prev[1]
+        now = time.time()
+        cutoff = now - window_secs
 
-                delta = current_oi - prev_oi
-                delta_pct = (delta / prev_oi * 100) if prev_oi else None
-                result[source] = {
-                    "oi": current_oi,
-                    "delta": delta,
-                    "delta_pct": delta_pct,
-                }
-                agg_current += current_oi
-                agg_prev += prev_oi
-                has_agg = True
+        for source in sources:
+            history = get_latest_oi_history(source, limit=limit)
+            if not history:
+                result[source] = {"oi": None, "delta": None, "delta_pct": None}
+                continue
 
-            agg_delta = agg_current - agg_prev if has_agg else None
-            agg_delta_pct = (agg_delta / agg_prev * 100) if (agg_prev and agg_delta is not None) else None
+            # Latest entry
+            current_oi = history[-1]["oi"]
+            if current_oi is None:
+                result[source] = {"oi": None, "delta": None, "delta_pct": None}
+                continue
 
-            return {
-                "per_source": result,
-                "aggregated": {
-                    "oi": agg_current if has_agg else None,
-                    "delta": agg_delta,
-                    "delta_pct": agg_delta_pct,
-                },
+            # Find entry closest to cutoff
+            prev_entry = min(
+                history, key=lambda x: abs(x["timestamp"] - cutoff)
+            )
+            prev_oi = prev_entry["oi"]
+
+            if prev_oi is None or prev_oi == 0:
+                result[source] = {"oi": current_oi, "delta": None, "delta_pct": None}
+                continue
+
+            delta = current_oi - prev_oi
+            # delta_pct is a fraction (0.05 = 5%) to match signal thresholds
+            delta_pct = (delta / prev_oi)
+            result[source] = {
+                "oi": current_oi,
+                "delta": delta,
+                "delta_pct": delta_pct,
             }
+            agg_current += current_oi
+            agg_prev += prev_oi
+            has_agg = True
+
+        agg_delta = agg_current - agg_prev if has_agg else None
+        agg_delta_pct = (agg_delta / agg_prev) if (agg_prev and agg_delta is not None) else None
+
+        return {
+            "per_source": result,
+            "aggregated": {
+                "oi": agg_current if has_agg else None,
+                "delta": agg_delta,
+                "delta_pct": agg_delta_pct,
+            },
+        }
 
     async def update_oi_history(self, source: str, oi: float):
         """Record a new OI snapshot into the internal history (called by poller)."""
