@@ -1283,42 +1283,19 @@ async def _telegram_signal_alert_loop():
                     sent_telegram=ok,
                 )
 
-            # --- Pattern alerts (medium + high severity) ---
+            # --- Pattern alerts (ALL patterns, medium + high severity) ---
             try:
-                _pat_conn = get_db()
-                _pat_now = now
-                _pat_patterns = []
-                # Reuse the DB queries from get_patterns (simplified inline version)
-                # Check BASIS_SQUEEZE pattern as primary pattern alert candidate
-                _sp_row = _pat_conn.execute(
-                    "SELECT close FROM price_feed WHERE exchange_id='binance-spot' ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
-                _pp_row = _pat_conn.execute(
-                    "SELECT close FROM price_feed WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
-                _fr_row = _pat_conn.execute(
-                    "SELECT rate_8h FROM funding_rates WHERE exchange_id='binance-perp' ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
-                _pat_conn.close()
-
-                if _sp_row and _pp_row and _sp_row[0] and _sp_row[0] > 0:
-                    _bp = (_pp_row[0] - _sp_row[0]) / _sp_row[0] * 100
-                    _fr = _fr_row[0] if _fr_row else 0
-                    if _bp > _PAT_BASIS_SQUEEZE_PCT and _fr and _fr > 0:
-                        _pat_patterns.append({
-                            "name": "BASIS_SQUEEZE",
-                            "severity": "high" if _bp > 0.5 else "medium",
-                            "description": f"Basis {_bp:.3f}% with positive funding {_fr*100:.4f}%",
-                            "confidence": min(_bp / 1.0, 1.0),
-                        })
-
-                for pat in _pat_patterns:
+                pat_result = await get_patterns()
+                all_patterns = pat_result.get("patterns", [])
+                for pat in all_patterns:
                     pat_name = pat["name"]
+                    sev = pat.get("severity", "medium")
+                    if sev not in ("high", "medium"):
+                        continue  # skip low-severity
                     last_pat = get_last_alert_ts(pat_name, kind="pattern_tg")
                     if now - last_pat < _ALERT_COOLDOWN_SECS:
-                        continue
+                        continue  # cooldown active
 
-                    sev = pat.get("severity", "medium")
                     icon = "🔴" if sev == "high" else "🟡"
                     desc = pat.get("description", "")
                     ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
