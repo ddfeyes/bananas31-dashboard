@@ -12,6 +12,8 @@ let currentMinutes = 240 * 400; // 4h * 400 bars for window-based APIs
 function _restoreViewport() {
   const r = window._savedVisibleRange;
   if (!r || !window._viewportInitialized) return;
+  // Don't restore if we're in the middle of initial load (loadAllData RAF pending)
+  if (window._loadAllDataPending) return;
   // Keep _suppressSync = true until AFTER the RAF executes.
   // This prevents subscribeVisibleTimeRangeChange from overwriting _savedVisibleRange
   // with TradingView's auto-zoom value in the gap between setData() and RAF execution.
@@ -367,15 +369,16 @@ async function loadAllData(interval) {
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
   // ALWAYS set viewport to 200-candle range via RAF after every loadAllData.
-  // _savedVisibleRange is used only by periodic updates (updateBasis/OI/etc)
-  // to prevent THOSE from resetting zoom, but loadAllData always resets to initRange.
+  // _loadAllDataPending blocks _restoreViewport until our RAF fires.
   const initRange = { from: defaultFrom, to: now + 300 };
-  window._savedVisibleRange = initRange; // lock restore target
+  window._savedVisibleRange = initRange;
+  window._loadAllDataPending = true;
   window._suppressSync = true;
   requestAnimationFrame(() => {
     const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, liqChart].filter(Boolean);
     charts.forEach(c => { try { c.timeScale().setVisibleRange(initRange); } catch (_) {} });
     window._viewportInitialized = true;
+    window._loadAllDataPending = false;
     window._suppressSync = false;
   });
 }
