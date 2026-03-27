@@ -143,6 +143,9 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(flush_ohlcv_periodically())
 
+    # Start Telegram signal alert task (SPEC §4: post to topic 7135 every 5 min)
+    asyncio.create_task(_telegram_signal_alert_loop())
+
     logger.info("All collectors started")
 
     yield
@@ -377,6 +380,50 @@ async def get_liquidations(limit: int = 100):
     finally:
         conn.close()
     return {"count": len(rows), "liquidations": rows}
+
+
+@app.get("/api/liquidations/series")
+async def get_liquidations_series(minutes: int = 60, bucket_secs: int = 60):
+    """
+    Liquidations aggregated by minute bucket.
+    Returns per-side (SELL = long liquidation, BUY = short liquidation) bar data.
+    """
+    cutoff = time.time() - minutes * 60
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                CAST(timestamp / ? AS INTEGER) * ? AS bucket,
+                side,
+                COUNT(*) AS count,
+                SUM(quantity * price) AS usd_value
+            FROM liquidations
+            WHERE timestamp > ?
+            GROUP BY bucket, side
+            ORDER BY bucket ASC
+            """,
+            (bucket_secs, bucket_secs, cutoff),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Pivot into {timestamp, sell_usd, buy_usd, sell_count, buy_count}
+    buckets: dict = {}
+    for row in rows:
+        bucket, side, count, usd = row
+        if bucket not in buckets:
+            buckets[bucket] = {
+                "timestamp": bucket,
+                "sell_usd": 0.0, "sell_count": 0,
+                "buy_usd": 0.0, "buy_count": 0,
+            }
+        side_key = "sell" if side and side.upper() == "SELL" else "buy"
+        buckets[bucket][f"{side_key}_usd"] += usd or 0.0
+        buckets[bucket][f"{side_key}_count"] += count
+
+    series = sorted(buckets.values(), key=lambda x: x["timestamp"])
+    return {"series": series, "count": len(series), "bucket_secs": bucket_secs}
 
 @app.get("/api/status")
 async def get_status():
@@ -916,6 +963,82 @@ async def get_patterns():
         conn.close()
 
     return {"patterns": patterns}
+
+
+# ── Telegram signal alerts (SPEC §4) ─────────────────────────────────
+
+# Alterlain bot token + target chat/topic
+_TELEGRAM_BOT_TOKEN = "8630691278:AAHKwfY24KVBCudTJWbwb-E5qKbArNSPw5c"
+_TELEGRAM_CHAT_ID = "-1003844426893"
+_TELEGRAM_THREAD_ID = 7135
+_ALERT_INTERVAL_SECS = 300        # check every 5 min
+_ALERT_COOLDOWN_SECS = 1800       # don't resend same signal within 30 min
+
+# In-memory dedup: {signal_id: last_sent_ts}
+_alert_sent_at: dict = {}
+
+
+async def _send_telegram_alert(text: str) -> bool:
+    """Send a message to Telegram topic 7135 via alterlain bot."""
+    url = f"https://api.telegram.org/bot{_TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": _TELEGRAM_CHAT_ID,
+        "message_thread_id": _TELEGRAM_THREAD_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    logger.info("Telegram alert sent: %s", text[:80])
+                    return True
+                else:
+                    logger.warning("Telegram alert failed: %s", data)
+                    return False
+    except Exception as exc:
+        logger.warning("Telegram alert error: %s", exc)
+        return False
+
+
+async def _telegram_signal_alert_loop():
+    """Background task: check signals every 5 min and post to Telegram when new ones fire."""
+    # Wait for data collection to warm up before first check
+    await asyncio.sleep(120)
+
+    while True:
+        try:
+            snap = await analytics_engine.snapshot()
+            sigs = signal_engine.compute_signals(snap)
+            now = time.time()
+
+            for sig in sigs:
+                sig_id = sig.get("id", "unknown")
+                last_sent = _alert_sent_at.get(sig_id, 0)
+                if now - last_sent < _ALERT_COOLDOWN_SECS:
+                    continue  # still in cooldown
+
+                severity = sig.get("severity", "info")
+                icon = {"alert": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(severity, "📊")
+                name = sig.get("name", sig_id)
+                msg_text = sig.get("message", "")
+                ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
+
+                text = (
+                    f"{icon} <b>{name}</b>\n"
+                    f"{msg_text}\n"
+                    f"<i>{ts_str} · bananas31-dashboard.111miniapp.com</i>"
+                )
+                ok = await _send_telegram_alert(text)
+                if ok:
+                    _alert_sent_at[sig_id] = now
+
+        except Exception as exc:
+            logger.warning("Telegram alert loop error: %s", exc)
+
+        await asyncio.sleep(_ALERT_INTERVAL_SECS)
 
 
 # ── Historical backfill (Bug 6) ───────────────────────────────────────

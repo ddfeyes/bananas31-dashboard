@@ -224,6 +224,36 @@ function initFundingChart() {
   });
 }
 
+// ── Liquidations Panel ────────────────────────────────────────────────
+
+let liqChart, liqSellSeries, liqBuySeries;
+
+function initLiquidationsChart() {
+  const container = document.getElementById('panel-liquidations');
+  liqChart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    autoSize: true,
+  });
+
+  // SELL side = long liquidations (price drops → longs get liquidated) → red
+  liqSellSeries = liqChart.addHistogramSeries({
+    color: '#ff3d5c',
+    priceFormat: { type: 'custom', formatter: v => fmtLarge(v) },
+    priceScaleId: 'liq',
+  });
+
+  // BUY side = short liquidations → green (positive bars)
+  liqBuySeries = liqChart.addHistogramSeries({
+    color: '#00c97a',
+    priceFormat: { type: 'custom', formatter: v => fmtLarge(v) },
+    priceScaleId: 'liq',
+  });
+
+  liqChart.priceScale('liq').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0.1 },
+  });
+}
+
 // ── Sync visible range across all charts ─────────────────────────────
 
 // Set window._suppressSync = true before any programmatic setData() that
@@ -234,7 +264,7 @@ function syncTimeScales() {
   // Use TIME-based range sync (not logical index) so all panels show identical
   // calendar timestamps regardless of how many bars each chart has.
   // _suppressSync prevents periodic setData() calls from resetting manual zoom.
-  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, fundingChart].filter(Boolean);
+  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, fundingChart, liqChart].filter(Boolean);
   let _syncing = false;
   charts.forEach(src => {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
@@ -259,5 +289,6 @@ function initAllCharts() {
   initCVDChart();
   initVolumeChart();
   initFundingChart();
+  initLiquidationsChart();
   syncTimeScales();
 }

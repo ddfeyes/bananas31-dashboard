@@ -232,12 +232,16 @@ async function loadAllData(minutes) {
   // Funding rate chart — always 24h window, loaded async
   updateFundingSeries();
 
+  // Liquidations chart
+  updateLiquidationsSeries();
+
   // Fit content
   priceChart.timeScale().fitContent();
   basisChart.timeScale().fitContent();
   oiChart.timeScale().fitContent();
   if (cvdChart) cvdChart.timeScale().fitContent();
   if (volChart) volChart.timeScale().fitContent();
+  if (liqChart) liqChart.timeScale().fitContent();
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
@@ -533,6 +537,36 @@ async function updateLiquidationMarkers() {
   candleSeries.setMarkers(markers);
 }
 
+async function updateLiquidationsSeries() {
+  if (!liqChart) return;
+  // Use appropriate bucket size based on timeframe
+  const bucketSecs = currentMinutes <= 60 ? 60 : currentMinutes <= 1440 ? 300 : 3600;
+  const data = await fetchLiquidationsSeries(currentMinutes, bucketSecs);
+  if (!data || !data.series) return;
+
+  const series = data.series;
+  const sellData = series.map(b => ({ time: b.timestamp, value: b.sell_usd }));
+  const buyData  = series.map(b => ({ time: b.timestamp, value: b.buy_usd }));
+
+  window._suppressSync = true;
+  try {
+    liqSellSeries.setData(sellData);
+    liqBuySeries.setData(buyData);
+  } finally {
+    window._suppressSync = false;
+  }
+
+  // Update live label: total liquidation $ in window
+  const totalSell = series.reduce((s, b) => s + (b.sell_usd || 0), 0);
+  const totalBuy  = series.reduce((s, b) => s + (b.buy_usd || 0), 0);
+  const liqEl = document.getElementById('live-liq');
+  if (liqEl) {
+    const total = totalSell + totalBuy;
+    liqEl.textContent = total > 0 ? '$' + fmtLarge(total) : '--';
+    liqEl.style.color = totalSell > totalBuy ? '#ff3d5c' : '#00c97a';
+  }
+}
+
 // ── Timeframe buttons ────────────────────────────────────────────────
 
 function setupTimeframeButtons() {
@@ -595,6 +629,8 @@ function boot() {
   setInterval(updateFundingSeries, 30000);
   setInterval(updateStatsBar, 5000);
   setInterval(updateLiquidationMarkers, 30000);
+  updateLiquidationsSeries();
+  setInterval(updateLiquidationsSeries, 30000);
   setInterval(updateSignals, 10000);
   setInterval(updatePatterns, 30000);
   setInterval(updateLiveLabels, 5000);

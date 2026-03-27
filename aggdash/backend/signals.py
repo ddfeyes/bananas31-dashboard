@@ -13,14 +13,14 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Thresholds
-SQUEEZE_BASIS_THRESHOLD = 0.02       # 2%
+# Thresholds — calibrated for BANANAS31 (low-cap, typical basis 0.03–0.3%)
+SQUEEZE_BASIS_THRESHOLD = 0.002      # 0.2% (was 2% — too high for BANANAS31)
 SQUEEZE_FUNDING_THRESHOLD = 0.0      # funding > 0
-ARB_DEVIATION_THRESHOLD = 0.01       # 1%
-OI_ACCUMULATION_THRESHOLD = 0.05     # 5% OI spike
-OI_DELEVERAGE_THRESHOLD = -0.05      # -5% OI drop
+ARB_DEVIATION_THRESHOLD = 0.003      # 0.3% (was 1% — DEX/CEX spread rarely exceeds 0.5%)
+OI_ACCUMULATION_THRESHOLD = 0.03     # 3% OI spike (was 5%)
+OI_DELEVERAGE_THRESHOLD = -0.03      # -3% OI drop (was -5%)
 PRICE_FLAT_THRESHOLD = 0.005         # price change < 0.5% = "flat"
-PRICE_DOWN_THRESHOLD = -0.01         # price change < -1% = "down"
+PRICE_DOWN_THRESHOLD = -0.005        # price change < -0.5% = "down" (was -1%)
 MIN_DATA_WINDOW_SECS = 60            # 60s minimum before firing signals (DB has enough history after restart)
 
 
