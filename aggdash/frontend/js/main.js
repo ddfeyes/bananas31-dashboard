@@ -8,6 +8,55 @@ let currentMinutes = 1440; // default 1D — show full history on load
 // Track intra-minute OHLC so .update() merges into current bar correctly.
 let _rtBar = null;  // { minuteTs, open, high, low, close }
 
+// ── WebSocket price stream ────────────────────────────────────────────
+let _ws = null;
+let _wsRetryDelay = 1000;  // ms, doubles on each failure (max 30s)
+let _wsActive = false;     // true when WS connected and working
+
+function initWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws/prices`;
+  try {
+    _ws = new WebSocket(url);
+  } catch (e) {
+    console.warn('WS: failed to create', e);
+    return;
+  }
+
+  _ws.onopen = () => {
+    console.log('WS: connected to', url);
+    _wsActive = true;
+    _wsRetryDelay = 1000;  // reset backoff
+  };
+
+  _ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'prices' && msg.prices) {
+        updateRealtimeFromPrices(msg.prices, msg.timestamp);
+      }
+      // ping: no-op (keepalive from server)
+    } catch (e) {
+      // ignore parse errors
+    }
+  };
+
+  _ws.onclose = () => {
+    _wsActive = false;
+    _ws = null;
+    console.log(`WS: closed, reconnecting in ${_wsRetryDelay}ms`);
+    setTimeout(() => {
+      _wsRetryDelay = Math.min(_wsRetryDelay * 2, 30000);
+      initWebSocket();
+    }, _wsRetryDelay);
+  };
+
+  _ws.onerror = (err) => {
+    console.warn('WS: error', err);
+    // onclose will fire after onerror
+  };
+}
+
 // ── Formatting helpers ───────────────────────────────────────────────
 
 function fmtPrice(v) {
@@ -149,11 +198,9 @@ async function loadAllData(minutes) {
 
 // ── Real-time updates ────────────────────────────────────────────────
 
-async function updateRealtime() {
-  const data = await fetchPrices();
-  if (!data || !data.prices) return;
-  const p = data.prices;
-  const t = data.timestamp;
+function updateRealtimeFromPrices(p, t) {
+  if (!p) return;
+  if (t == null) t = Date.now() / 1000;
 
   // Minute-bucket timestamp — LW Charts v4 candles must use aligned time
   // so repeated .update() calls within the same minute merge into one bar.
@@ -188,6 +235,14 @@ async function updateRealtime() {
   if (p['binance-perp'] != null)    bnPerpLine.update({ time: minuteTs, value: p['binance-perp'] });
   if (p['bybit-perp'] != null)      bbPerpLine.update({ time: minuteTs, value: p['bybit-perp'] });
   if (p['bsc-pancakeswap'] != null) dexLine.update({ time: minuteTs, value: p['bsc-pancakeswap'] });
+}
+
+async function updateRealtime() {
+  // Skip polling if WebSocket is active — WS already handles real-time updates
+  if (_wsActive) return;
+  const data = await fetchPrices();
+  if (!data || !data.prices) return;
+  updateRealtimeFromPrices(data.prices, data.timestamp);
 }
 
 async function updateBasis() {
@@ -447,7 +502,10 @@ function boot() {
   updatePatterns();
   updateLiveLabels();
 
-  // Polling
+  // WebSocket for real-time price streaming (falls back to polling if WS unavailable)
+  initWebSocket();
+
+  // Polling — updateRealtime is no-op when WS is active
   setInterval(updateRealtime, 2000);
   setInterval(updateBasis, 5000);
   setInterval(updateOI, 5000);
