@@ -95,7 +95,7 @@ async def backfill_binance(session, db_conn, exchange_id, url, interval, start_t
         cursor.executemany(
             "INSERT OR IGNORE INTO price_feed(exchange_id, timestamp, open, high, low, close, volume) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(exchange_id, ts, o, h, l, c, v) for ts, o, h, l, c, v in bars],
+            [(exchange_id, ts, op, hi, lo, cl, vol) for ts, op, hi, lo, cl, vol in bars],
         )
         db_conn.commit()
         total += len(bars)
@@ -176,7 +176,7 @@ async def backfill_bybit(session, db_conn, exchange_id, interval, start_ts, end_
         cursor.executemany(
             "INSERT OR IGNORE INTO price_feed(exchange_id, timestamp, open, high, low, close, volume) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(exchange_id, ts, o, h, l, c, v) for ts, o, h, l, c, v in bars],
+            [(exchange_id, ts, op, hi, lo, cl, vol) for ts, op, hi, lo, cl, vol in bars],
         )
         db_conn.commit()
         total += len(bars)
