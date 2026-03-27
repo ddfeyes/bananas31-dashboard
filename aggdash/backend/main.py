@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
+from config import LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
 from db import init_db, get_db, log_alert, get_last_alert_ts
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
@@ -1323,7 +1323,7 @@ async def get_pattern_outcomes(
             SELECT s.timestamp, s.close AS spot_close, p.close AS perp_close
             FROM price_feed s
             JOIN price_feed p ON p.exchange_id='binance-perp' AND p.timestamp=s.timestamp
-            WHERE s.exchange_id='binance-spot' AND s.timestamp>=? 
+            WHERE s.exchange_id='binance-spot' AND s.timestamp>=?
               AND s.close>0 AND p.close>0
             ORDER BY s.timestamp ASC
             """,
