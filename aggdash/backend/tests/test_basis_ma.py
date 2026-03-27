@@ -3,7 +3,6 @@ test_basis_ma.py — Unit tests for 7-day MA basis computation (SPEC §5).
 
 Module 26: Basis 7-day MA line.
 """
-import math
 
 
 # ── MA computation logic (mirrors main.py) ───────────────────────────
