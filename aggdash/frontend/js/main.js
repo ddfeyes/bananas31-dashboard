@@ -679,6 +679,47 @@ function updatePatternOutcomeWidget(squeezeRiskScore) {
   if (sampleEl) sampleEl.textContent = `(n=${n})`;
 }
 
+function fmtLiqTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toUTCString().slice(17, 22); // HH:MM
+}
+
+async function updateLiquidationTimeline() {
+  const data = await fetchLiquidationsHistory(50, 3600);
+  if (!data) return;
+
+  const countEl = document.getElementById('liq-timeline-count');
+  const rowsEl = document.getElementById('liq-timeline-rows');
+  if (!rowsEl) return;
+
+  const liqs = data.liquidations || [];
+
+  if (countEl) {
+    countEl.textContent = `${data.count} in last hour`;
+  }
+
+  if (liqs.length === 0) {
+    rowsEl.innerHTML = '<div class="liq-timeline-empty">No liquidations in last hour</div>';
+    return;
+  }
+
+  rowsEl.innerHTML = liqs.map(l => {
+    const isLong = l.side === 'BUY';
+    const sideCls = isLong ? 'liq-row-side-long' : 'liq-row-side-short';
+    const sideLabel = isLong ? 'LONG' : 'SHORT';
+    const usd = l.usd_value;
+    const usdStr = usd >= 1000 ? '$' + fmtLarge(usd) : '$' + usd.toFixed(2);
+    const srcShort = l.source === 'binance-perp' ? 'BN' : l.source === 'bybit-perp' ? 'BB' : l.source;
+    return `<div class="liq-row">
+      <span class="liq-row-time">${fmtLiqTime(l.timestamp)}</span>
+      <span class="${sideCls}">${sideLabel}</span>
+      <span class="liq-row-val">${usdStr}</span>
+      <span class="liq-row-price">@${l.price.toFixed(6)}</span>
+      <span class="liq-row-source">${srcShort}</span>
+    </div>`;
+  }).join('');
+}
+
 async function updateLiquidationMarkers() {
   const liqs = await fetchLiquidations(currentMinutes);
   if (!liqs.length) return;
@@ -797,6 +838,8 @@ function boot() {
   setInterval(updateLiquidationMarkers, 30000);
   updateLiquidationsSeries();
   setInterval(updateLiquidationsSeries, 30000);
+  updateLiquidationTimeline();
+  setInterval(updateLiquidationTimeline, 15000);
   setInterval(updateSignals, 10000);
   setInterval(updatePatterns, 30000);
   setInterval(updateLiveLabels, 5000);

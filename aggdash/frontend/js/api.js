@@ -179,3 +179,7 @@ async function fetchPriceRange(source = 'binance-spot', windowSecs = 86400) {
 async function fetchPatternOutcomes(basisThreshold = 0.001) {
   return apiGet(`/api/analytics/pattern-outcomes?basis_threshold=${basisThreshold}&horizons=30,60,120`);
 }
+
+async function fetchLiquidationsHistory(limit = 50, windowSecs = 3600) {
+  return apiGet(`/api/liquidations/history?limit=${limit}&window_secs=${windowSecs}`);
+}
