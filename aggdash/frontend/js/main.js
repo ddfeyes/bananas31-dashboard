@@ -2,7 +2,9 @@
  * BANANAS31 main controller — Lightweight Charts edition
  */
 
-let currentMinutes = 1440; // default 1D — show full history on load
+let currentInterval = '4h'; // default 4H candles
+// Legacy alias used by some functions
+let currentMinutes = 240 * 400; // 4h * 400 bars for window-based APIs
 
 // ── Viewport restore helper ─────────────────────────────────────────
 // Call after any setData() to prevent TradingView from auto-zooming
@@ -284,15 +286,19 @@ async function updatePriceChange() {
 
 // ── Load historical data ─────────────────────────────────────────────
 
-async function loadAllData(minutes) {
+async function loadAllData(interval) {
   _rtBar = null; // reset real-time bar tracker on full reload
+  currentInterval = interval;
+  const barMins = {'1m':1,'5m':5,'15m':15,'30m':30,'1h':60,'4h':240,'1d':1440,'1w':10080};
+  const minutes = (barMins[interval] || 60) * 400;
+  currentMinutes = minutes;
   const windowSecs = minutes * 60;
 
   const [spotBars, perpBars, bbBars, dexBars, basis, oi, cvd, vol] = await Promise.all([
-    fetchOHLCV('binance-spot', minutes),
-    fetchOHLCV('binance-perp', minutes),
-    fetchOHLCV('bybit-perp', minutes),
-    fetchOHLCV('bsc-pancakeswap', minutes),
+    fetchOHLCV('binance-spot', interval),
+    fetchOHLCV('binance-perp', interval),
+    fetchOHLCV('bybit-perp', interval),
+    fetchOHLCV('bsc-pancakeswap', interval),
     fetchBasisSeries(windowSecs),
     fetchOISeries(minutes),
     fetchCVDSeries(windowSecs),
@@ -356,7 +362,10 @@ async function loadAllData(minutes) {
   // On reload: restore saved viewport to preserve user zoom
   const savedRange = window._savedVisibleRange;
   const now = Math.floor(Date.now() / 1000);
-  const defaultFrom = now - 4 * 3600; // show last 4 hours by default
+  // Show ~100 candles by default for current interval
+  const barSecsMap = {'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
+  const barSecs = barSecsMap[currentInterval] || 14400;
+  const defaultFrom = now - barSecs * 100; // 100 candles
 
   // All setVisibleRange calls here use _suppressSync to prevent
   // subscribeVisibleTimeRangeChange from cascading and saving a bad range
@@ -823,8 +832,11 @@ function setupTimeframeButtons() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      currentMinutes = parseInt(btn.dataset.minutes, 10);
-      loadAllData(currentMinutes);
+      currentInterval = btn.dataset.interval || '4h';
+      // Reset saved viewport so new interval shows appropriate range
+      window._savedVisibleRange = null;
+      window._viewportInitialized = false;
+      loadAllData(currentInterval);
     });
   });
 }
@@ -854,7 +866,7 @@ function boot() {
   initPriceTooltip();
 
   // Initial load
-  loadAllData(currentMinutes);
+  loadAllData(currentInterval);
   loadPatternOutcomes(); // load once — outcome data changes infrequently
   updateStatsBar();
   updateLiquidationMarkers();
