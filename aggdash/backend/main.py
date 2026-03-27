@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
+from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
 from db import init_db, get_db, log_alert, get_last_alert_ts
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
@@ -1678,3 +1678,10 @@ else:
         return {"message": "aggdash backend running. Frontend not found."}
 
 
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
+    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
