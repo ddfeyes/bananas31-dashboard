@@ -285,14 +285,14 @@ async def get_price_range(window_secs: int = 86400, source: str = "binance-spot"
     if not row or row[0] is None:
         return {"high_24h": None, "low_24h": None, "range_pct": None, "current": None, "source": source}
 
-    high, low, current = row
-    range_pct = ((high - low) / low * 100) if low and low > 0 else None
+    high_val, low_val, current = row
+    range_pct = ((high_val - low_val) / low_val * 100) if low_val and low_val > 0 else None
 
     return {
         "source": source,
         "window_secs": window_secs,
-        "high_24h": high,
-        "low_24h": low,
+        "high_24h": high_val,
+        "low_24h": low_val,
         "range_pct": range_pct,
         "current": current,
         "timestamp": now,
