@@ -29,8 +29,19 @@ function setConnected(ok) {
 
 // ── Data fetchers ────────────────────────────────────────────────────
 
+// Auto-select interval based on timeframe to keep bar count manageable
+function minutesToInterval(minutes) {
+  if (minutes <= 240)   return '1m';   // 1H/4H: up to 240 1m bars
+  if (minutes <= 1440)  return '5m';   // 1D: 288 5m bars
+  if (minutes <= 10080) return '15m';  // 7D: 672 15m bars
+  if (minutes <= 43200) return '1h';   // 1M: 720 1h bars
+  if (minutes <= 129600) return '4h';  // 3M: 810 4h bars
+  return '1d';                         // 1Y: 365 1d bars
+}
+
 async function fetchOHLCV(exchangeId, minutes) {
-  const data = await apiGet(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(exchangeId)}&minutes=${minutes}`);
+  const interval = minutesToInterval(minutes);
+  const data = await apiGet(`/api/analytics/ohlcv?exchange_id=${encodeURIComponent(exchangeId)}&minutes=${minutes}&interval=${interval}`);
   if (!data || !data.bars || !data.bars.length) return [];
   return data.bars
     .sort((a, b) => a.timestamp - b.timestamp)

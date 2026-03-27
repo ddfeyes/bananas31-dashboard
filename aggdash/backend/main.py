@@ -459,11 +459,17 @@ async def get_oi_delta_snapshot():
 
 
 @app.get("/api/analytics/ohlcv")
-async def get_ohlcv(exchange_id: str = "binance-spot", minutes: int = 1440):
-    """Get OHLCV bars from the price_feed table for a given exchange and time range."""
-    from db import get_latest_ohlcv
-    bars = get_latest_ohlcv(exchange_id, minutes=minutes)
-    return {"bars": bars, "count": len(bars), "exchange_id": exchange_id}
+async def get_ohlcv(exchange_id: str = "binance-spot", minutes: int = 1440, interval: str = "1m"):
+    """Get OHLCV bars from the price_feed table for a given exchange and time range.
+
+    interval: 1m (default), 5m, 15m, 30m, 1h, 4h, 1d
+    For long timeframes pass a coarser interval to keep response size reasonable.
+    """
+    from db import get_latest_ohlcv, VALID_INTERVALS
+    if interval not in VALID_INTERVALS:
+        interval = "1m"
+    bars = get_latest_ohlcv(exchange_id, minutes=minutes, interval=interval)
+    return {"bars": bars, "count": len(bars), "exchange_id": exchange_id, "interval": interval}
 
 
 @app.get("/api/dex")
