@@ -1328,31 +1328,46 @@ _DB_PRUNE_RETENTION_DAYS = 90   # keep 90 days of price_feed
 _DB_PRUNE_INTERVAL_SECS = 3600  # check every hour
 
 
+def _run_prune_sync(run_vacuum: bool = False) -> int:
+    """
+    Synchronous prune of price_feed rows older than retention window.
+    Returns number of deleted rows. Optionally runs VACUUM to reclaim disk.
+    """
+    try:
+        cutoff = time.time() - _DB_PRUNE_RETENTION_DAYS * 86400
+        conn = get_db()
+        result = conn.execute("DELETE FROM price_feed WHERE timestamp < ?", (cutoff,))
+        deleted = result.rowcount
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if run_vacuum and deleted > 0:
+            conn.execute("VACUUM")
+        conn.close()
+        if deleted > 0:
+            logger.info(
+                "DB prune: deleted %d price_feed rows older than %d days (vacuum=%s)",
+                deleted, _DB_PRUNE_RETENTION_DAYS, run_vacuum,
+            )
+        return deleted
+    except Exception as exc:
+        logger.warning("DB prune error: %s", exc)
+        return 0
+
+
 async def _db_prune_loop():
     """
-    Background task: prune old price_feed rows once per hour.
+    Background task: prune old price_feed rows.
+    Runs immediately at startup (with VACUUM for bulk compaction),
+    then every hour thereafter.
     Keeps last 90 days; leaves OI, funding_rates, liquidations, alerts untouched.
     """
+    # Run immediately at startup — compacts historical backfill data
+    await asyncio.sleep(5)  # brief delay to let DB settle after init
+    _run_prune_sync(run_vacuum=True)
+
     while True:
         await asyncio.sleep(_DB_PRUNE_INTERVAL_SECS)
-        try:
-            cutoff = time.time() - _DB_PRUNE_RETENTION_DAYS * 86400
-            conn = get_db()
-            result = conn.execute(
-                "DELETE FROM price_feed WHERE timestamp < ?",
-                (cutoff,),
-            )
-            deleted = result.rowcount
-            conn.commit()
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.close()
-            if deleted > 0:
-                logger.info(
-                    "DB prune: deleted %d price_feed rows older than %d days",
-                    deleted, _DB_PRUNE_RETENTION_DAYS,
-                )
-        except Exception as exc:
-            logger.warning("DB prune error: %s", exc)
+        _run_prune_sync(run_vacuum=False)
 
 
 async def _backfill_historical_data():
