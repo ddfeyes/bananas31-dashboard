@@ -533,6 +533,71 @@ async def get_basis_series(interval_secs: int = 60, window_secs: int = 3600):
     )
 
 
+@app.get("/api/analytics/basis/ma7d")
+async def get_basis_ma7d():
+    """
+    7-day moving average of aggregated basis_pct.
+
+    Uses 1-hour bucketed basis bars from price_feed (last 14 days to compute
+    a full 7-day rolling MA). Returns [{timestamp, basis_pct, ma7d}] for all
+    available points with window = 168 bars.
+    SPEC §5: 'Basis trend: 7-day MA'.
+    """
+    from db import get_db
+    db = get_db()
+    window_secs = 14 * 86400  # 14 days of history
+    since = time.time() - window_secs
+    bucket = 3600  # 1-hour bars
+
+    try:
+        # Compute hourly basis_pct = (perp_close - spot_close) / spot_close * 100
+        rows = db.execute(
+            """
+            SELECT
+                CAST(s.timestamp / ? AS INTEGER) * ? AS ts,
+                AVG(s.close) AS spot_close,
+                AVG(p.close) AS perp_close
+            FROM price_feed s
+            JOIN price_feed p
+              ON CAST(p.timestamp / ? AS INTEGER) * ? = CAST(s.timestamp / ? AS INTEGER) * ?
+              AND p.exchange_id = 'binance-perp'
+            WHERE s.exchange_id = 'binance-spot'
+              AND s.timestamp >= ?
+            GROUP BY ts
+            ORDER BY ts ASC
+            """,
+            (bucket, bucket, bucket, bucket, bucket, bucket, since),
+        ).fetchall()
+    finally:
+        db.close()
+
+    if not rows:
+        return {"ma7d": [], "window_bars": 168}
+
+    # Build basis_pct series
+    series = []
+    for ts, spot, perp in rows:
+        if spot and spot > 0 and perp is not None:
+            basis_pct = (perp - spot) / spot * 100
+            series.append({"timestamp": int(ts), "basis_pct": basis_pct})
+
+    # Compute rolling 7-day MA (168 hourly bars)
+    MA_WINDOW = 168
+    result = []
+    for i, pt in enumerate(series):
+        window_start = max(0, i - MA_WINDOW + 1)
+        window_vals = [s["basis_pct"] for s in series[window_start:i + 1]]
+        ma7d = sum(window_vals) / len(window_vals)
+        result.append({
+            "timestamp": pt["timestamp"],
+            "basis_pct": pt["basis_pct"],
+            "ma7d": ma7d,
+            "window_used": len(window_vals),
+        })
+
+    return {"ma7d": result, "window_bars": MA_WINDOW, "count": len(result)}
+
+
 @app.get("/api/analytics/dex-cex-spread")
 async def get_dex_cex_spread():
     """Current DEX vs CEX spot spread."""
