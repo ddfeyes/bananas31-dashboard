@@ -323,13 +323,17 @@ async function loadAllData(minutes) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
-  // Fit content
-  priceChart.timeScale().fitContent();
-  basisChart.timeScale().fitContent();
-  oiChart.timeScale().fitContent();
-  if (cvdChart) cvdChart.timeScale().fitContent();
-  if (volChart) volChart.timeScale().fitContent();
-  if (liqChart) liqChart.timeScale().fitContent();
+  // Fit content — only if first load (no prior viewport saved)
+  // Subsequent updates preserve user's zoom level via _suppressSync
+  if (!window._viewportInitialized) {
+    priceChart.timeScale().fitContent();
+    basisChart.timeScale().fitContent();
+    oiChart.timeScale().fitContent();
+    if (cvdChart) cvdChart.timeScale().fitContent();
+    if (volChart) volChart.timeScale().fitContent();
+    if (liqChart) liqChart.timeScale().fitContent();
+    window._viewportInitialized = true;
+  }
 }
 
 // ── Real-time updates ────────────────────────────────────────────────
