@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
+from config import LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
 from db import init_db, get_db, log_alert, get_last_alert_ts
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
@@ -1300,6 +1300,89 @@ async def get_alerts_history(limit: int = 50):
     return {"alerts": alerts, "count": len(alerts)}
 
 
+# ── /api/analytics/pattern-outcomes ─────────────────────────────────
+
+@app.get("/api/analytics/pattern-outcomes")
+async def get_pattern_outcomes(
+    basis_threshold: float = 0.001,  # 0.1% basis
+    lookback_days: int = 90,
+    horizons: str = "30,60,120",  # minutes
+):
+    """Historical outcome analysis: when basis > threshold, what did price do N minutes later?"""
+    try:
+        horizon_mins = [int(h) for h in horizons.split(",") if h.strip()]
+        if not horizon_mins:
+            horizon_mins = [30, 60, 120]
+        horizon_mins = horizon_mins[:5]
+
+        since_ts = time.time() - lookback_days * 86400
+        conn = get_db()
+
+        rows = conn.execute(
+            """
+            SELECT s.timestamp, s.close AS spot_close, p.close AS perp_close
+            FROM price_feed s
+            JOIN price_feed p ON p.exchange_id='binance-perp' AND p.timestamp=s.timestamp
+            WHERE s.exchange_id='binance-spot' AND s.timestamp>=?
+              AND s.close>0 AND p.close>0
+            ORDER BY s.timestamp ASC
+            """,
+            (since_ts,),
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return {"matches": 0, "outcomes": {}, "basis_threshold_pct": basis_threshold*100, "lookback_days": lookback_days}
+
+        price_map = {float(r[0]): float(r[1]) for r in rows}
+        signal_times = []
+        for ts, spot, perp in rows:
+            ts_f = float(ts)
+            spot_f = float(spot)
+            if spot_f > 0 and (perp - spot_f) / spot_f > basis_threshold:
+                signal_times.append(ts_f)
+
+        dedup_signals = []
+        last_ts = 0.0
+        for ts_f in signal_times:
+            if ts_f - last_ts >= 1800:
+                dedup_signals.append(ts_f)
+                last_ts = ts_f
+
+        outcomes = {}
+        for horizon in horizon_mins:
+            horizon_secs = horizon * 60
+            returns = []
+            for sig_ts in dedup_signals:
+                entry = price_map.get(sig_ts)
+                exit_p = price_map.get(sig_ts + horizon_secs)
+                if entry and exit_p and entry > 0:
+                    returns.append((exit_p - entry) / entry * 100)
+
+            if returns:
+                ups = [r for r in returns if r > 0]
+                avg_ret = sum(returns) / len(returns)
+                outcomes[str(horizon)] = {
+                    "horizon_min": horizon,
+                    "sample_n": len(returns),
+                    "up_pct": round(len(ups) / len(returns) * 100, 1),
+                    "down_pct": round((len(returns) - len(ups)) / len(returns) * 100, 1),
+                    "avg_return_pct": round(avg_ret, 3),
+                    "median_return_pct": round(sorted(returns)[len(returns)//2], 3),
+                }
+
+        return {
+            "matches": len(dedup_signals),
+            "outcomes": outcomes,
+            "basis_threshold_pct": round(basis_threshold*100, 3),
+            "lookback_days": lookback_days,
+            "total_price_bars": len(rows),
+        }
+    except Exception as exc:
+        logger.error("pattern-outcomes error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ── Telegram signal alerts (SPEC §4) ─────────────────────────────────
 
 # Alterlain bot token + target chat/topic
@@ -1595,143 +1678,3 @@ else:
         return {"message": "aggdash backend running. Frontend not found."}
 
 
-if __name__ == "__main__":
-    import uvicorn
-
-    logger.info("Starting server on %s:%d", API_HOST, API_PORT)
-    uvicorn.run(app, host=API_HOST, port=API_PORT, workers=1, log_config=UVICORN_LOG_CONFIG)
-
-
-# ── /api/analytics/pattern-outcomes ─────────────────────────────────
-
-@app.get("/api/analytics/pattern-outcomes")
-async def get_pattern_outcomes(
-    basis_threshold: float = 0.001,  # 0.1% basis
-    lookback_days: int = 90,
-    horizons: str = "30,60,120",  # minutes
-):
-    """
-    Historical outcome analysis: when basis > threshold, what did price do N minutes later?
-
-    Uses price_feed table (90 days of 1m Binance spot + perp bars) to:
-    1. Find all historical windows where perp-spot basis exceeded threshold
-    2. For each match, compute price return at T+30, T+60, T+120 minutes
-    3. Return win rates and average returns
-
-    Returns:
-        matches: number of historical pattern occurrences
-        outcomes: {horizon_min: {up_pct, down_pct, avg_return_pct, sample_n}}
-    """
-    try:
-        horizon_mins = [int(h) for h in horizons.split(",") if h.strip()]
-        if not horizon_mins:
-            horizon_mins = [30, 60, 120]
-        horizon_mins = horizon_mins[:5]  # max 5 horizons
-
-        since_ts = time.time() - lookback_days * 86400
-        conn = get_db()
-
-        # Build joined table: for each minute, get spot + perp close price
-        rows = conn.execute(
-            """
-            SELECT s.timestamp,
-                   s.close AS spot_close,
-                   p.close AS perp_close
-            FROM price_feed s
-            JOIN price_feed p
-              ON p.exchange_id = 'binance-perp'
-             AND p.timestamp = s.timestamp
-            WHERE s.exchange_id = 'binance-spot'
-              AND s.timestamp >= ?
-              AND s.close IS NOT NULL
-              AND p.close IS NOT NULL
-              AND s.close > 0
-            ORDER BY s.timestamp ASC
-            """,
-            (since_ts,),
-        ).fetchall()
-        conn.close()
-
-        if not rows:
-            return {
-                "matches": 0,
-                "outcomes": {},
-                "basis_threshold_pct": basis_threshold * 100,
-                "lookback_days": lookback_days,
-            }
-
-        # Build price lookup: ts → spot_close
-        price_map = {float(r[0]): float(r[1]) for r in rows}
-
-        # Find signal windows: basis > threshold
-        signal_times = []
-        for ts, spot, perp in rows:
-            ts_f = float(ts)
-            spot_f = float(spot)
-            perp_f = float(perp)
-            basis_pct = (perp_f - spot_f) / spot_f
-            if basis_pct > basis_threshold:
-                signal_times.append(ts_f)
-
-        # Deduplicate: keep only one signal per 30-minute window
-        dedup_signals = []
-        last_signal_ts = 0.0
-        for ts_f in signal_times:
-            if ts_f - last_signal_ts >= 1800:
-                dedup_signals.append(ts_f)
-                last_signal_ts = ts_f
-
-        if not dedup_signals:
-            return {
-                "matches": 0,
-                "outcomes": {},
-                "basis_threshold_pct": basis_threshold * 100,
-                "lookback_days": lookback_days,
-            }
-
-        # For each signal, compute outcome at each horizon
-        outcomes: dict = {}
-        for horizon in horizon_mins:
-            horizon_secs = horizon * 60
-            returns = []
-            for sig_ts in dedup_signals:
-                entry_price = price_map.get(sig_ts)
-                # Find closest price at sig_ts + horizon_secs (±2 min tolerance)
-                exit_price = None
-                target = sig_ts + horizon_secs
-                for offset in range(0, 121, 60):  # check ±2 bars
-                    for direction in (0, offset, -offset):
-                        candidate = price_map.get(target + direction)
-                        if candidate:
-                            exit_price = candidate
-                            break
-                    if exit_price:
-                        break
-                if entry_price and exit_price and entry_price > 0:
-                    ret_pct = (exit_price - entry_price) / entry_price * 100
-                    returns.append(ret_pct)
-
-            if returns:
-                ups = [r for r in returns if r > 0]
-                downs = [r for r in returns if r <= 0]
-                avg_ret = sum(returns) / len(returns)
-                outcomes[str(horizon)] = {
-                    "horizon_min": horizon,
-                    "sample_n": len(returns),
-                    "up_pct": round(len(ups) / len(returns) * 100, 1),
-                    "down_pct": round(len(downs) / len(returns) * 100, 1),
-                    "avg_return_pct": round(avg_ret, 3),
-                    "median_return_pct": round(sorted(returns)[len(returns) // 2], 3),
-                }
-
-        return {
-            "matches": len(dedup_signals),
-            "outcomes": outcomes,
-            "basis_threshold_pct": round(basis_threshold * 100, 3),
-            "lookback_days": lookback_days,
-            "total_price_bars": len(rows),
-        }
-
-    except Exception as exc:
-        logger.error("pattern-outcomes error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
