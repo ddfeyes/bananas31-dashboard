@@ -323,8 +323,18 @@ async function loadAllData(minutes) {
   // Basis 7-day MA — always full 14-day window regardless of timeframe
   updateBasisMA7d();
 
+  // Save viewport BEFORE setData() calls in case they trigger range changes
+  const viewports = {
+    price: priceChart.timeScale().getVisibleRange(),
+    basis: basisChart.timeScale().getVisibleRange(),
+    oi: oiChart.timeScale().getVisibleRange(),
+    cvd: cvdChart ? cvdChart.timeScale().getVisibleRange() : null,
+    vol: volChart ? volChart.timeScale().getVisibleRange() : null,
+    liq: liqChart ? liqChart.timeScale().getVisibleRange() : null,
+  };
+
   // Fit content — only if first load (no prior viewport saved)
-  // Subsequent updates preserve user's zoom level via _suppressSync
+  // Subsequent updates preserve user's zoom level by restoring saved viewport
   if (!window._viewportInitialized) {
     priceChart.timeScale().fitContent();
     basisChart.timeScale().fitContent();
@@ -333,6 +343,14 @@ async function loadAllData(minutes) {
     if (volChart) volChart.timeScale().fitContent();
     if (liqChart) liqChart.timeScale().fitContent();
     window._viewportInitialized = true;
+  } else {
+    // Restore previously saved viewport
+    if (viewports.price) try { priceChart.timeScale().setVisibleRange(viewports.price); } catch (_) {}
+    if (viewports.basis) try { basisChart.timeScale().setVisibleRange(viewports.basis); } catch (_) {}
+    if (viewports.oi) try { oiChart.timeScale().setVisibleRange(viewports.oi); } catch (_) {}
+    if (viewports.cvd && cvdChart) try { cvdChart.timeScale().setVisibleRange(viewports.cvd); } catch (_) {}
+    if (viewports.vol && volChart) try { volChart.timeScale().setVisibleRange(viewports.vol); } catch (_) {}
+    if (viewports.liq && liqChart) try { liqChart.timeScale().setVisibleRange(viewports.liq); } catch (_) {}
   }
 }
 
