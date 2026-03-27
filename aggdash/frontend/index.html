@@ -165,8 +165,9 @@
     #panel-price  { flex: 6; min-height: 200px; }
     #panel-basis  { flex: 2; min-height: 80px; }
     #panel-oi     { flex: 2; min-height: 80px; }
-    #panel-cvd    { flex: 2; min-height: 80px; }
-    #panel-volume { flex: 2; min-height: 80px; }
+    #panel-cvd     { flex: 2; min-height: 80px; }
+    #panel-volume  { flex: 2; min-height: 80px; }
+    #panel-funding { flex: 2; min-height: 80px; }
 
     /* ── Signals / Patterns Bar ───────────────────────── */
     .alert-bar {
@@ -373,6 +374,14 @@
         <span class="legend-item"><span class="legend-swatch" style="background:rgba(240,185,11,0.8)"></span>BN Spot</span>
         <span class="legend-item"><span class="legend-swatch" style="background:rgba(255,122,53,0.8)"></span>BN Perp</span>
         <span class="legend-item"><span class="legend-swatch" style="background:rgba(157,111,255,0.8)"></span>BB Perp</span>
+      </div>
+    </div>
+    <div class="chart-panel" id="panel-funding">
+      <div class="panel-label">FUNDING RATE · 8h · BN vs BB</div>
+      <span class="panel-live-val" id="live-funding">--</span>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch" style="background:#f0b90b"></span>BN 8h</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#9d6fff"></span>BB 8h</span>
       </div>
     </div>
   </div>

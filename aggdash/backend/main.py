@@ -519,6 +519,50 @@ async def get_funding_summary():
     return await analytics_engine.get_funding_summary()
 
 
+@app.get("/api/analytics/funding/series")
+async def get_funding_series(interval_secs: int = 300, window_secs: int = 86400):
+    """
+    Funding rate time series per exchange, bucketed by interval.
+
+    Returns per_source: {exchange: [{timestamp, rate_8h, rate_1h}, ...]}
+    Default: 24h window, 5-min buckets → 288 points per exchange.
+    """
+    db = get_db()
+    now = time.time()
+    since = now - window_secs
+    sources = ["binance-perp", "bybit-perp"]
+    result: dict = {}
+
+    for src in sources:
+        rows = db.execute(
+            """
+            SELECT CAST((timestamp / ?) AS INTEGER) * ? AS bucket,
+                   rate_8h, rate_1h
+            FROM funding_rates
+            WHERE exchange_id = ? AND timestamp >= ?
+            ORDER BY bucket ASC, timestamp DESC
+            """,
+            (interval_secs, interval_secs, src, since),
+        ).fetchall()
+
+        # Deduplicate buckets — keep the most recent reading per bucket
+        seen: set = set()
+        pts = []
+        for bucket, r8, r1 in rows:
+            if bucket not in seen:
+                seen.add(bucket)
+                pts.append({"timestamp": int(bucket), "rate_8h": r8, "rate_1h": r1})
+        pts.sort(key=lambda x: x["timestamp"])
+        result[src] = pts
+
+    db.close()
+    return {
+        "per_source": result,
+        "window_secs": window_secs,
+        "interval_secs": interval_secs,
+    }
+
+
 @app.get("/api/analytics/volume/series")
 async def get_volume_series(interval_secs: int = 60, window_secs: int = 3600):
     """Volume series per exchange over a time window, bucketed by interval."""

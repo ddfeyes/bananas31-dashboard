@@ -229,6 +229,9 @@ async function loadAllData(minutes) {
     if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
   }
 
+  // Funding rate chart — always 24h window, loaded async
+  updateFundingSeries();
+
   // Fit content
   priceChart.timeScale().fitContent();
   basisChart.timeScale().fitContent();
@@ -325,6 +328,38 @@ async function updateVolume() {
   if (vol.bnPerp.length) bnPerpVolSeries.setData(vol.bnPerp);
   if (vol.bbPerp.length) bbPerpVolSeries.setData(vol.bbPerp);
   window._suppressSync = false;
+}
+
+async function updateFundingSeries() {
+  if (!fundingChart) return;
+  // Use 24h window regardless of selected timeframe — funding data is sparse
+  const data = await fetchFundingSeries(86400, 300);
+  if (!data || !data.per_source) return;
+
+  const mapFunding = arr => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.rate_8h }));
+
+  const bnPts = mapFunding(data.per_source['binance-perp']);
+  const bbPts = mapFunding(data.per_source['bybit-perp']);
+
+  window._suppressSync = true;
+  if (bnPts.length) bnFundingSeries.setData(bnPts);
+  if (bbPts.length) bbFundingSeries.setData(bbPts);
+  window._suppressSync = false;
+
+  // Update live-funding label with current average
+  const fundEl = document.getElementById('live-funding');
+  if (fundEl) {
+    const lastBn = bnPts.length ? bnPts[bnPts.length - 1].value : null;
+    const lastBb = bbPts.length ? bbPts[bbPts.length - 1].value : null;
+    if (lastBn !== null) {
+      const avg = lastBb !== null ? (lastBn + lastBb) / 2 : lastBn;
+      const pct = (avg * 100).toFixed(5);
+      fundEl.textContent = (avg >= 0 ? '+' : '') + pct + '%';
+      fundEl.style.color = avg >= 0 ? '#00c97a' : '#ff3d5c';
+    }
+  }
 }
 
 // ── Crosshair Tooltip ────────────────────────────────────────────────
@@ -556,6 +591,8 @@ function boot() {
   setInterval(updateOI, 5000);
   setInterval(updateCVD, 10000);
   setInterval(updateVolume, 10000);
+  updateFundingSeries();
+  setInterval(updateFundingSeries, 30000);
   setInterval(updateStatsBar, 5000);
   setInterval(updateLiquidationMarkers, 30000);
   setInterval(updateSignals, 10000);

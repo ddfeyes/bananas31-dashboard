@@ -193,6 +193,37 @@ function initVolumeChart() {
   });
 }
 
+// ── Funding Rate Chart ───────────────────────────────────────────────
+
+let fundingChart, bnFundingSeries, bbFundingSeries;
+
+function initFundingChart() {
+  const container = document.getElementById('panel-funding');
+  if (!container) return;
+  fundingChart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    autoSize: true,
+  });
+
+  bnFundingSeries = fundingChart.addLineSeries({
+    color: '#f0b90b',
+    lineWidth: 1,
+    priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
+    lastValueVisible: true,
+    priceLineVisible: false,
+    title: 'BN',
+  });
+
+  bbFundingSeries = fundingChart.addLineSeries({
+    color: '#9d6fff',
+    lineWidth: 1,
+    priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
+    lastValueVisible: true,
+    priceLineVisible: false,
+    title: 'BB',
+  });
+}
+
 // ── Sync visible range across all charts ─────────────────────────────
 
 // Set window._suppressSync = true before any programmatic setData() that
@@ -203,7 +234,7 @@ function syncTimeScales() {
   // Use TIME-based range sync (not logical index) so all panels show identical
   // calendar timestamps regardless of how many bars each chart has.
   // _suppressSync prevents periodic setData() calls from resetting manual zoom.
-  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart].filter(Boolean);
+  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, fundingChart].filter(Boolean);
   let _syncing = false;
   charts.forEach(src => {
     src.timeScale().subscribeVisibleTimeRangeChange(range => {
@@ -227,5 +258,6 @@ function initAllCharts() {
   initOIChart();
   initCVDChart();
   initVolumeChart();
+  initFundingChart();
   syncTimeScales();
 }
