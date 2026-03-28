@@ -313,24 +313,24 @@ function initLiquidationsChart() {
 window._suppressSync = false;
 
 function syncTimeScales() {
-  // Use TIME-based range sync (not logical index) so all panels show identical
-  // calendar timestamps regardless of how many bars each chart has.
-  // _suppressSync prevents periodic setData() calls from resetting manual zoom.
-  const charts = [priceChart, basisChart, oiChart, cvdChart, volChart, fundingChart, liqChart].filter(Boolean);
+  // Use TIME-based range sync so all panels show identical timestamps.
+  // IMPORTANT: Only priceChart is the SOURCE of sync (it has full data range).
+  // fundingChart and liqChart have limited data — they must NEVER shrink priceChart.
+  const otherCharts = [basisChart, oiChart, cvdChart, volChart, fundingChart, liqChart].filter(Boolean);
   let _syncing = false;
-  // Sync time range across all panels when user scrolls/zooms
-  charts.forEach(src => {
-    src.timeScale().subscribeVisibleTimeRangeChange(range => {
+  // Only priceChart triggers sync — all others just receive
+  if (priceChart) {
+    priceChart.timeScale().subscribeVisibleTimeRangeChange(range => {
       if (!range || _syncing) return;
       _syncing = true;
-      charts.forEach(dst => {
-        if (dst !== src) {
+      otherCharts.forEach(dst => {
+        if (dst !== priceChart) {
           try { dst.timeScale().setVisibleRange(range); } catch (_) {}
         }
       });
       _syncing = false;
     });
-  });
+  }
 }
 
 // ── Init all ─────────────────────────────────────────────────────────
