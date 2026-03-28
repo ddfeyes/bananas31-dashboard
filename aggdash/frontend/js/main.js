@@ -109,10 +109,14 @@ async function updateStatsBar() {
 
   if (pricesData && pricesData.prices) {
     const p = pricesData.prices;
-    setText('stat-bn-spot', fmtPrice(p['binance-spot']));
-    setText('stat-bn-perp', fmtPrice(p['binance-perp']));
-    setText('stat-bb-perp', fmtPrice(p['bybit-perp']));
-    setText('stat-dex', fmtPrice(p['bsc-pancakeswap']));
+    // Header primary prices (v2 IDs)
+    setText('hdr-bn-spot', fmtPrice(p['binance-spot']));
+    setText('hdr-bn-perp', fmtPrice(p['binance-perp']));
+    setText('hdr-bb-perp', fmtPrice(p['bybit-perp']));
+    setText('hdr-dex',     fmtPrice(p['bsc-pancakeswap']));
+    // Header live price label (price panel)
+    const bnSpot = p['binance-spot'];
+    if (bnSpot != null) setText('live-price', fmtPrice(bnSpot));
   }
 
   if (fundingData && fundingData.rates) {
@@ -124,7 +128,7 @@ async function updateStatsBar() {
       if (el && rate != null) {
         const v = rate.rate_8h * 100;
         el.textContent = (v >= 0 ? '+' : '') + v.toFixed(4) + '%';
-        el.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
+        el.className = 'stat-value ' + (v >= 0 ? 'up' : 'dn');
       }
     };
     if (bnRate) setFundEl('stat-bn-fund', bnRate);
@@ -259,11 +263,12 @@ async function updatePriceChange() {
   if (!data || !data.changes) return;
 
   const changes = data.changes;
+  // v2: header price change IDs
   const map = {
-    'stat-bn-spot-chg':  changes['binance-spot'],
-    'stat-bn-perp-chg':  changes['binance-perp'],
-    'stat-bb-perp-chg':  changes['bybit-perp'],
-    'stat-dex-chg':      changes['bsc-pancakeswap'],
+    'hdr-bn-spot-chg': changes['binance-spot'],
+    'hdr-bn-perp-chg': changes['binance-perp'],
+    'hdr-bb-perp-chg': changes['bybit-perp'],
+    'hdr-dex-chg':     changes['bsc-pancakeswap'],
   };
 
   for (const [id, ch] of Object.entries(map)) {
@@ -271,7 +276,7 @@ async function updatePriceChange() {
     if (!el || !ch || ch.change_pct == null) continue;
     const v = ch.change_pct;
     el.textContent = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-    el.className = 'stat-change ' + (v >= 0 ? 'positive' : 'negative');
+    el.className = 'price-cell-change ' + (v >= 0 ? 'up' : 'dn');
   }
 }
 
@@ -630,31 +635,62 @@ const PATTERN_LABELS = {
 
 async function updateSignals() {
   const data = await fetchSignals();
-  const el = document.getElementById('signals-content');
-  if (!el) return;
-  if (!data || !data.signals || data.signals.length === 0) {
-    el.innerHTML = '<span class="badge-quiet">No active signals</span>';
-    return;
+
+  // Controls bar summary badge
+  const summaryEl = document.getElementById('signals-summary');
+  if (summaryEl) {
+    if (!data || !data.signals || data.signals.length === 0) {
+      summaryEl.innerHTML = '<span class="signal-badge-mini quiet">No active signals</span>';
+    } else {
+      summaryEl.innerHTML = data.signals.slice(0, 2).map(s => {
+        const cfg = SIGNAL_CLASSES[s.id] || { cls: 'accum', label: s.id };
+        const detail = s.value != null ? ` ${s.value * 100 >= 0 ? '+' : ''}${(s.value * 100).toFixed(2)}%` : '';
+        return `<span class="signal-badge-mini ${cfg.cls}"><span class="signal-dot-pulse"></span>${cfg.label}${detail}</span>`;
+      }).join('');
+    }
   }
-  el.innerHTML = data.signals.map(s => {
-    const cfg = SIGNAL_CLASSES[s.id] || { cls: 'badge-accum', icon: '⚪', label: s.id };
-    const detail = s.value != null ? ` ${s.value * 100 >= 0 ? '+' : ''}${(s.value * 100).toFixed(2)}%` : '';
-    return `<span class="alert-badge ${cfg.cls}">${cfg.icon} ${cfg.label}${detail}</span>`;
-  }).join(' ');
+
+  // Sidebar signal main block
+  const sidebarSignal = document.getElementById('sidebar-signal-main');
+  const probSection = document.getElementById('prob-section');
+  if (sidebarSignal) {
+    if (!data || !data.signals || data.signals.length === 0) {
+      sidebarSignal.className = 'sidebar-signal-main';
+      sidebarSignal.innerHTML = '<span class="signal-name quiet">No active signals</span>';
+      if (probSection) probSection.style.display = 'none';
+    } else {
+      const s = data.signals[0];
+      const cfg = SIGNAL_CLASSES[s.id] || { cls: 'accum', label: s.id };
+      const isSqueezeType = s.id === 'squeeze_risk';
+      sidebarSignal.className = 'sidebar-signal-main' + (isSqueezeType ? ' active-squeeze' : '');
+      const detail = s.value != null ? `<span class="signal-value ${cfg.cls}">${s.value >= 0 ? '+' : ''}${(s.value * 100).toFixed(2)}%</span>` : '';
+      sidebarSignal.innerHTML = `<span class="signal-name ${cfg.cls}">${cfg.label}</span>${detail}`;
+      // Show prob section for squeeze
+      if (probSection) probSection.style.display = isSqueezeType ? 'block' : 'none';
+    }
+  }
+
+  // Legacy: update basis panel glow state
+  const basisPanel = document.getElementById('panel-basis');
+  if (basisPanel && data && data.signals) {
+    const hasSqueezeSignal = data.signals.some(s => s.id === 'squeeze_risk');
+    basisPanel.style.background = hasSqueezeSignal ? 'rgba(255,61,92,0.04)' : '';
+  }
 }
 
 async function updatePatterns() {
   const data = await fetchPatterns();
-  const el = document.getElementById('patterns-content');
+  const el = document.getElementById('sidebar-patterns');
   if (!el) return;
   if (!data || !data.patterns || data.patterns.length === 0) {
-    el.innerHTML = '<span class="badge-quiet">—</span>';
+    el.innerHTML = '<span class="pattern-empty">—</span>';
     return;
   }
   el.innerHTML = data.patterns.map(p => {
     const label = PATTERN_LABELS[p.name] || p.name;
-    return `<span class="alert-badge badge-pattern">${label}</span>`;
-  }).join(' ');
+    const dotCls = p.name === 'BASIS_SQUEEZE' ? 'squeeze' : p.name === 'DEX_PREMIUM' ? 'arb' : '';
+    return `<div class="pattern-row"><span class="pattern-dot ${dotCls}"></span>${label}</div>`;
+  }).join('');
 }
 
 // Pattern outcome widget — load once, show when squeeze active
@@ -669,34 +705,34 @@ async function loadPatternOutcomes() {
 }
 
 function updatePatternOutcomeWidget(squeezeRiskScore) {
-  const card = document.getElementById('pattern-outcome-card');
-  if (!card || !_patternOutcomes || !_patternOutcomes.outcomes) return;
-
-  // Show when squeeze risk >= 20 OR when any squeeze basis data present
+  if (!_patternOutcomes || !_patternOutcomes.outcomes) return;
   const showWidget = squeezeRiskScore >= 20;
-  card.style.display = showWidget ? 'flex' : 'none';
+  const probSection = document.getElementById('prob-section');
   if (!showWidget) return;
 
   const o = _patternOutcomes.outcomes;
   const n = _patternOutcomes.matches;
 
-  function fmtHorizon(key, label) {
-    const el = document.getElementById(`outcome-${key}`);
-    if (!el || !o[key]) return;
+  function setHorizon(barId, pctId, avgId, key) {
+    if (!o[key]) return;
     const up = o[key].up_pct;
     const ret = o[key].avg_return_pct;
-    const cls = ret >= 0 ? 'bullish' : 'bearish';
-    const sign = ret >= 0 ? '+' : '';
-    el.className = `outcome-stat ${cls}`;
-    el.textContent = `T+${label}: ${up}% up ${sign}${ret.toFixed(2)}%`;
+    const isBull = ret >= 0;
+    const pctEl = document.getElementById(pctId);
+    const barEl = document.getElementById(barId);
+    const avgEl = document.getElementById(avgId);
+    if (pctEl) { pctEl.textContent = up + '%'; pctEl.className = 'prob-pct ' + (isBull ? 'bullish' : 'bearish'); }
+    if (barEl) { barEl.style.width = up + '%'; barEl.className = 'prob-bar-fill ' + (isBull ? 'bullish' : 'bearish'); }
+    if (avgEl) { avgEl.textContent = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%'; }
   }
 
-  fmtHorizon('30', '30m');
-  fmtHorizon('60', '1h');
-  fmtHorizon('120', '2h');
+  setHorizon('prob-bar-30',  'prob-pct-30',  'prob-avg-30',  '30');
+  setHorizon('prob-bar-60',  'prob-pct-60',  'prob-avg-60',  '60');
+  setHorizon('prob-bar-120', 'prob-pct-120', 'prob-avg-120', '120');
 
-  const sampleEl = document.getElementById('outcome-sample');
-  if (sampleEl) sampleEl.textContent = `(n=${n})`;
+  const sampleEl = document.getElementById('prob-sample');
+  if (sampleEl) sampleEl.textContent = 'n=' + n + ' historical matches';
+  if (probSection) probSection.style.display = 'block';
 }
 
 function fmtLiqTime(ts) {
@@ -708,36 +744,68 @@ async function updateLiquidationTimeline() {
   const data = await fetchLiquidationsHistory(50, 3600);
   if (!data) return;
 
-  const countEl = document.getElementById('liq-timeline-count');
-  const rowsEl = document.getElementById('liq-timeline-rows');
-  if (!rowsEl) return;
+  const tableEl = document.getElementById('liq-feed-table');
+  if (!tableEl) return;
 
   const liqs = data.liquidations || [];
 
-  if (countEl) {
-    countEl.textContent = `${data.count} in last hour`;
+  // Update stat in controls bar
+  const liqToggleBtn = document.getElementById('liq-toggle-btn');
+  if (liqToggleBtn && data.count > 0) {
+    liqToggleBtn.textContent = (liqToggleBtn.classList.contains('active') ? 'LIQ FEED ▴' : 'LIQ FEED ▾') + ` (${data.count})`;
   }
 
   if (liqs.length === 0) {
-    rowsEl.innerHTML = '<div class="liq-timeline-empty">No liquidations in last hour</div>';
+    tableEl.innerHTML = '<div class="liq-feed-empty">No liquidations in last hour</div>';
+    updateLiqHeatmap([]);
     return;
   }
 
-  rowsEl.innerHTML = liqs.map(l => {
+  tableEl.innerHTML = liqs.map(l => {
     const isLong = l.side === 'BUY';
-    const sideCls = isLong ? 'liq-row-side-long' : 'liq-row-side-short';
     const sideLabel = isLong ? 'LONG' : 'SHORT';
+    const sideCls = isLong ? 'long' : 'short';
     const usd = l.usd_value;
     const usdStr = usd >= 1000 ? '$' + fmtLarge(usd) : '$' + usd.toFixed(2);
     const srcShort = l.source === 'binance-perp' ? 'BN' : l.source === 'bybit-perp' ? 'BB' : l.source;
-    return `<div class="liq-row">
-      <span class="liq-row-time">${fmtLiqTime(l.timestamp)}</span>
-      <span class="${sideCls}">${sideLabel}</span>
-      <span class="liq-row-val">${usdStr}</span>
-      <span class="liq-row-price">@${l.price.toFixed(6)}</span>
-      <span class="liq-row-source">${srcShort}</span>
+    return `<div class="liq-feed-row">
+      <span class="liq-side ${sideCls}">${sideLabel}</span>
+      <span class="liq-exch">${srcShort}</span>
+      <span class="liq-price">${l.price.toFixed(6)}</span>
+      <span class="liq-usd">${usdStr}</span>
+      <span class="liq-time">${fmtLiqTime(l.timestamp)}</span>
     </div>`;
   }).join('');
+
+  updateLiqHeatmap(liqs);
+}
+
+function updateLiqHeatmap(liqs) {
+  const hmEl = document.getElementById('liq-hm-rows');
+  if (!hmEl) return;
+
+  // Aggregate by source + side
+  const agg = {};
+  liqs.forEach(l => {
+    const src = l.source === 'binance-perp' ? 'BN' : l.source === 'bybit-perp' ? 'BB' : l.source;
+    const side = l.side === 'BUY' ? 'long' : 'short';
+    const key = src + ':' + side;
+    agg[key] = (agg[key] || 0) + (l.usd_value || 0);
+  });
+
+  const maxVal = Math.max(...Object.values(agg), 1);
+
+  const rows = ['BN:long','BN:short','BB:long','BB:short'].map(key => {
+    const [src, side] = key.split(':');
+    const val = agg[key] || 0;
+    const pct = Math.round((val / maxVal) * 100);
+    return `<div class="liq-heatmap-row">
+      <span class="liq-hm-label">${src} ${side === 'long' ? 'LONG' : 'SHORT'}</span>
+      <div class="liq-hm-track"><div class="liq-hm-fill ${side}" style="width:${pct}%"></div></div>
+      <span class="liq-hm-val">${val > 0 ? '$' + fmtLarge(val) : '—'}</span>
+    </div>`;
+  });
+  hmEl.innerHTML = rows.join('');
 }
 
 async function updateLiquidationMarkers() {
@@ -798,22 +866,29 @@ function setupTimeframeButtons() {
 
 // ── Bootstrap ────────────────────────────────────────────────────────
 
-function boot() {
-  // Measure combined topbar + alert-bar height so charts-container fills remaining viewport
-  const measureHeaderHeight = () => {
-    const topBar = document.querySelector('.top-bar');
-    const alertBar = document.getElementById('alert-bar');
-    const h = (topBar ? topBar.getBoundingClientRect().height : 0)
-            + (alertBar ? alertBar.getBoundingClientRect().height : 0);
-    document.documentElement.style.setProperty('--topbar-h', h + 'px');
-  };
-  measureHeaderHeight();
-  const ro = new ResizeObserver(measureHeaderHeight);
-  const topBar = document.querySelector('.top-bar');
-  const alertBar = document.getElementById('alert-bar');
-  if (topBar) ro.observe(topBar);
-  if (alertBar) ro.observe(alertBar);
+// ── Sidebar recent alerts ────────────────────────────────────────────
 
+async function updateSidebarAlerts() {
+  const data = await fetchAlertsHistory(5);
+  const el = document.getElementById('sidebar-alerts');
+  if (!el) return;
+  const alerts = data && data.alerts;
+  if (!alerts || !alerts.length) {
+    el.innerHTML = '<span class="pattern-empty">—</span>';
+    return;
+  }
+  el.innerHTML = alerts.map(a => {
+    const ageMin = Math.round((Date.now() / 1000 - a.timestamp) / 60);
+    const ageStr = ageMin < 60 ? ageMin + 'm ago' : Math.round(ageMin / 60) + 'h ago';
+    const isUp = a.severity === 'info';
+    return `<div class="alert-history-row">
+      <span class="alert-hist-time">${ageStr}</span>
+      <span class="alert-hist-name">${a.name}</span>
+    </div>`;
+  }).join('');
+}
+
+function boot() {
   initAllCharts();
   setupTimeframeButtons();
 
@@ -827,6 +902,7 @@ function boot() {
   updateLiquidationMarkers();
   updateSignals();
   updatePatterns();
+  updateSidebarAlerts();
   updateLiveLabels();
 
   // WebSocket for real-time price streaming (falls back to polling if WS unavailable)
@@ -861,6 +937,7 @@ function boot() {
   setInterval(updateSignals, 10000);
   setInterval(updatePatterns, 30000);
   setInterval(updateLiveLabels, 5000);
+  setInterval(updateSidebarAlerts, 30000);
 }
 
 if (document.readyState === 'loading') {

@@ -1,0 +1,76 @@
+/* BANANAS31 Design Tokens v2.0 */
+:root {
+  /* ── Backgrounds ──────────────────────────────── */
+  --bg-void:     #06080e;
+  --bg-base:     #090c14;
+  --bg-surface:  #0d1220;
+  --bg-raised:   #111828;
+  --bg-overlay:  #151d2e;
+
+  /* ── Borders ──────────────────────────────────── */
+  --border-dim:    rgba(255,255,255,0.04);
+  --border-subtle: rgba(255,255,255,0.07);
+  --border-mild:   rgba(255,255,255,0.11);
+  --border-accent: rgba(74,143,255,0.30);
+
+  /* ── Text ─────────────────────────────────────── */
+  --text-primary:   #eef0f5;
+  --text-secondary: #7a8499;
+  --text-muted:     #3d4a60;
+  --text-ghost:     #1e2a3a;
+
+  /* ── Signal colors ────────────────────────────── */
+  --green:   #00c97a;
+  --red:     #ff3d5c;
+  --yellow:  #f0c040;
+  --blue:    #4a8fff;
+  --purple:  #9d6fff;
+  --cyan:    #00c8f5;
+  --orange:  #ff7a35;
+
+  /* ── Exchange identity ────────────────────────── */
+  --binance:       #f0b90b;
+  --binance-light: #f0d060;
+  --bybit:         #ff6b2b;
+  --bybit-light:   #ff9d6b;
+  --dex:           #00c8f5;
+  --agg:           #4a8fff;
+
+  /* ── Chart panel accent lines ─────────────────── */
+  --panel-price-accent:   var(--blue);
+  --panel-basis-accent:   var(--red);
+  --panel-oi-accent:      var(--blue);
+  --panel-cvd-accent:     var(--green);
+  --panel-volume-accent:  var(--yellow);
+  --panel-funding-accent: var(--yellow);
+  --panel-liq-accent:     var(--red);
+
+  /* ── Squeeze state ────────────────────────────── */
+  --squeeze-bg:   rgba(255,61,92,0.07);
+  --squeeze-glow: 0 0 20px rgba(255,61,92,0.15);
+
+  /* ── Spacing ──────────────────────────────────── */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+
+  /* ── Typography ───────────────────────────────── */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-ui:   'Inter', system-ui, -apple-system, sans-serif;
+
+  /* ── Radius ───────────────────────────────────── */
+  --r-xs: 2px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  /* ── Layout heights ───────────────────────────── */
+  --header-h:   40px;
+  --stats-h:    34px;
+  --controls-h: 30px;
+  --chrome-h:   calc(var(--header-h) + var(--stats-h) + var(--controls-h));
+  --sidebar-w:  192px;
+}
