@@ -414,6 +414,35 @@ body {
   .panel.full-width { grid-column: 1; }
 }
 
+/* ── Mobile (< 480px) ────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* Header: tighter spacing, prevent overflow */
+  .header { gap: 8px; padding: 6px 10px; }
+  .header-logo { font-size: 13px; }
+  .header-price .price-value { font-size: 15px; }
+  .header-stats { gap: 6px; }
+  .stat-item { min-width: 54px; }
+  .stat-label { font-size: 8px; }
+  .stat-value { font-size: 10px; }
+
+  /* Controls: smaller gaps, touch-friendly buttons */
+  .controls-bar { gap: 6px; padding: 5px 10px; }
+  .controls-label { display: none; }  /* hide labels on mobile to save space */
+  .btn-group button { padding: 5px 7px; font-size: 10px; min-height: 30px; }
+  .toggle-btn { padding: 5px 6px; font-size: 9px; min-height: 30px; gap: 3px; }
+  .toggle-btn .dot { display: none; }  /* hide color dots on mobile */
+
+  /* Chart panels */
+  .chart-panel { min-height: 160px; }
+  .chart-panel canvas { height: 130px; }
+
+  /* Signals bar */
+  .signals-bar { font-size: 10px; padding: 4px 10px; }
+
+  /* Pattern outcome card */
+  .pattern-outcome-card { padding: 8px; font-size: 10px; }
+}
+
 /* ── Tooltip ─────────────────────────────────────────────────────────── */
 .chart-tooltip {
   position: absolute;
