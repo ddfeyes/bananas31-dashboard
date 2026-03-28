@@ -466,25 +466,36 @@ async function updateFundingSeries() {
   const data = await fetchFundingSeries(86400, 300);
   if (!data || !data.per_source) return;
 
-  const mapFunding = arr => (arr || [])
+  const mapFunding8h = arr => (arr || [])
     .sort((a, b) => a.timestamp - b.timestamp)
     .map(p => ({ time: p.timestamp, value: p.rate_8h }));
+  const mapFunding1h = arr => (arr || [])
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map(p => ({ time: p.timestamp, value: p.rate_1h }));
 
-  const bnPts = mapFunding(data.per_source['binance-perp']);
-  const bbPts = mapFunding(data.per_source['bybit-perp']);
-  if (bnPts.length) bnFundingSeries.setData(bnPts);
-  if (bbPts.length) bbFundingSeries.setData(bbPts);
+  const bnPts8h = mapFunding8h(data.per_source['binance-perp']);
+  const bbPts8h = mapFunding8h(data.per_source['bybit-perp']);
+  const bnPts1h = mapFunding1h(data.per_source['binance-perp']);
+  const bbPts1h = mapFunding1h(data.per_source['bybit-perp']);
 
-  // Update live-funding label with current average
+  if (bnPts8h.length) bnFundingSeries.setData(bnPts8h);
+  if (bbPts8h.length) bbFundingSeries.setData(bbPts8h);
+  if (bnPts1h.length) bn1hFundingSeries.setData(bnPts1h);
+  if (bbPts1h.length) bb1hFundingSeries.setData(bbPts1h);
+
+  // Update live-funding label with current 8h + 1h rates
   const fundEl = document.getElementById('live-funding');
   if (fundEl) {
-    const lastBn = bnPts.length ? bnPts[bnPts.length - 1].value : null;
-    const lastBb = bbPts.length ? bbPts[bbPts.length - 1].value : null;
-    if (lastBn !== null) {
-      const avg = lastBb !== null ? (lastBn + lastBb) / 2 : lastBn;
-      const pct = (avg * 100).toFixed(5);
-      fundEl.textContent = (avg >= 0 ? '+' : '') + pct + '%';
-      fundEl.style.color = avg >= 0 ? '#00c97a' : '#ff3d5c';
+    const lastBn8h = bnPts8h.length ? bnPts8h[bnPts8h.length - 1].value : null;
+    const lastBb8h = bbPts8h.length ? bbPts8h[bbPts8h.length - 1].value : null;
+    const lastBn1h = bnPts1h.length ? bnPts1h[bnPts1h.length - 1].value : null;
+    const lastBb1h = bbPts1h.length ? bbPts1h[bbPts1h.length - 1].value : null;
+    if (lastBn8h !== null) {
+      const avg8h = lastBb8h !== null ? (lastBn8h + lastBb8h) / 2 : lastBn8h;
+      const pct8h = (avg8h * 100).toFixed(4);
+      const pct1h = lastBn1h !== null ? (lastBn1h * 100).toFixed(4) : null;
+      fundEl.textContent = (avg8h >= 0 ? '+' : '') + pct8h + '%' + (pct1h !== null ? ' (1h ' + (parseFloat(pct1h) >= 0 ? '+' : '') + pct1h + '%)' : '');
+      fundEl.style.color = avg8h >= 0 ? '#00c97a' : '#ff3d5c';
     }
   }
 }

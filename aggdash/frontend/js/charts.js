@@ -226,7 +226,7 @@ function initVolumeChart() {
 
 // ── Funding Rate Chart ───────────────────────────────────────────────
 
-let fundingChart, bnFundingSeries, bbFundingSeries;
+let fundingChart, bnFundingSeries, bbFundingSeries, bn1hFundingSeries, bb1hFundingSeries;
 
 function initFundingChart() {
   const container = document.getElementById('panel-funding');
@@ -242,7 +242,7 @@ function initFundingChart() {
     priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
     lastValueVisible: true,
     priceLineVisible: false,
-    title: 'BN',
+    title: 'BN 8H',
   });
 
   bbFundingSeries = fundingChart.addLineSeries({
@@ -251,7 +251,28 @@ function initFundingChart() {
     priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
     lastValueVisible: true,
     priceLineVisible: false,
-    title: 'BB',
+    title: 'BB 8H',
+  });
+
+  // 1h funding rate series (dashed lines)
+  bn1hFundingSeries = fundingChart.addLineSeries({
+    color: '#f0b90b',
+    lineWidth: 1,
+    lineStyle: 2, // dashed
+    priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
+    lastValueVisible: false,
+    priceLineVisible: false,
+    title: 'BN 1H',
+  });
+
+  bb1hFundingSeries = fundingChart.addLineSeries({
+    color: '#9d6fff',
+    lineWidth: 1,
+    lineStyle: 2, // dashed
+    priceFormat: { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' },
+    lastValueVisible: false,
+    priceLineVisible: false,
+    title: 'BB 1H',
   });
 }
 
