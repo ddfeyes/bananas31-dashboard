@@ -417,7 +417,10 @@ async def get_liquidations(limit: int = 100):
         SELECT timestamp, source, symbol, side, quantity, price
         FROM liquidations ORDER BY timestamp DESC LIMIT ?
         """, (limit,))
-        rows = [dict(r) for r in cursor.fetchall()]
+        rows = [
+            {**dict(r), "usd_value": r["quantity"] * r["price"]}
+            for r in cursor.fetchall()
+        ]
     finally:
         conn.close()
     return {"count": len(rows), "liquidations": rows}
