@@ -119,6 +119,17 @@ body {
 .stat-value.positive { color: var(--accent-green); }
 .stat-value.negative { color: var(--accent-red); }
 
+/* Price-change inline badges (next to stat-value) */
+.stat-change {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-left: 3px;
+  vertical-align: middle;
+}
+.stat-change.positive { color: var(--accent-green); }
+.stat-change.negative { color: var(--accent-red); }
+
 .header-right {
   margin-left: auto;
   display: flex;
@@ -424,6 +435,7 @@ body {
   .stat-item { min-width: 54px; }
   .stat-label { font-size: 8px; }
   .stat-value { font-size: 10px; }
+  .stat-change { display: none; }  /* hide price-change % on mobile to save space */
 
   /* Controls: smaller gaps, touch-friendly buttons */
   .controls-bar { gap: 6px; padding: 5px 10px; }
