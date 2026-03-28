@@ -32,6 +32,12 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8768/health')"]
       interval: 30s
@@ -53,6 +59,12 @@ services:
       options:
         max-size: "5m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
     depends_on:
       - aggdash-backend
 
