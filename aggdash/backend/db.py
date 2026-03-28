@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp DESC);
 
+CREATE TABLE IF NOT EXISTS signal_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   REAL NOT NULL,
+    signal_id   TEXT NOT NULL,
+    direction   TEXT,  -- 'short' | 'long' | null
+    severity    TEXT,
+    value       REAL,
+    message     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_history_timestamp ON signal_history(timestamp DESC);
+
 INSERT OR IGNORE INTO exchanges VALUES
     ('binance-spot',    'Binance Spot',        1),
     ('binance-perp',    'Binance Perp',        1),
@@ -109,6 +121,18 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+def record_signal_history(signal_id: str, direction: str | None, severity: str, value: float | None, message: str) -> None:
+    """Record a signal event to signal_history table."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO signal_history (timestamp, signal_id, direction, severity, value, message) VALUES (?, ?, ?, ?, ?, ?)",
+            (time.time(), signal_id, direction, severity, value, message)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def log_alert(

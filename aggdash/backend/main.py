@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import API_HOST, API_PORT, LOG_LEVEL, OHLCV_INTERVAL_SECS, DB_PATH
-from db import init_db, get_db, log_alert, get_last_alert_ts
+from db import init_db, get_db, log_alert, get_last_alert_ts, record_signal_history
 from ring_buffer import RingBuffer
 from ohlcv_aggregator import OHLCVAggregator
 from collectors import (
@@ -1023,7 +1023,42 @@ async def get_signals():
         return {"timestamp": 0, "signals": [], "count": 0}
     snap = await analytics_engine.snapshot()
     sigs = signal_engine.compute_signals(snap)
+    # Record to signal_history for timeline tracking
+    for s in sigs:
+        record_signal_history(
+            signal_id=s.get("id"),
+            direction=s.get("direction"),
+            severity=s.get("severity"),
+            value=s.get("value"),
+            message=s.get("message", "")
+        )
     return {"timestamp": snap.get("timestamp", 0), "signals": sigs, "count": len(sigs)}
+
+@app.get("/api/signals/history")
+async def get_signals_history(limit: int = 50):
+    """Get signal history timeline (most recent signals recorded)."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT timestamp, signal_id, direction, severity, value, message FROM signal_history ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "history": [
+            {
+                "timestamp": r["timestamp"],
+                "id": r["signal_id"],
+                "direction": r["direction"],
+                "severity": r["severity"],
+                "value": r["value"],
+                "message": r["message"]
+            }
+            for r in rows
+        ],
+        "count": len(rows)
+    }
 
 
 # ── /api/dex/price (Bug 2) ─────────────────────────────────────────────
