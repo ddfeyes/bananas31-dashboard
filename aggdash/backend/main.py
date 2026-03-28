@@ -1,5 +1,6 @@
 """Main FastAPI application for aggdash backend."""
 import asyncio
+import datetime
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -1467,7 +1468,7 @@ async def _telegram_signal_alert_loop():
                 severity = sig.get("severity", "info")
                 icon = {"alert": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(severity, "📊")
                 msg_text = sig.get("message", "")
-                ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
+                ts_str = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime("%H:%M UTC")
 
                 tg_text = (
                     f"{icon} <b>{sig_name}</b>\n"
@@ -1499,7 +1500,7 @@ async def _telegram_signal_alert_loop():
 
                     icon = "🔴" if sev == "high" else "🟡"
                     desc = pat.get("description", "")
-                    ts_str = __import__("datetime").datetime.utcfromtimestamp(now).strftime("%H:%M UTC")
+                    ts_str = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime("%H:%M UTC")
                     tg_text = (
                         f"{icon} <b>Pattern: {pat_name}</b>\n"
                         f"{desc}\n"
