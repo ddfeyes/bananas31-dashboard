@@ -83,6 +83,13 @@ class SignalEngine:
         except Exception as e:
             logger.warning("deleveraging error: %s", e)
 
+        try:
+            sig = self._negative_basis(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("negative_basis error: %s", e)
+
         return signals
 
     # ------------------------------------------------------------------ #
@@ -156,10 +163,39 @@ class SignalEngine:
             return {
                 "id": "squeeze_risk",
                 "name": "Squeeze Risk",
+                "direction": "short",
                 "severity": "alert",
-                "message": f"Basis {agg_basis*100:.2f}% + funding {avg_funding*100:.4f}% → longs stacking, squeeze risk",
+                "message": f"Basis {agg_basis*100:.2f}% + funding {avg_funding*100:.4f}% → SHORT (funding decay → liquidation cascade risk)",
                 "value": agg_basis,
                 "threshold": SQUEEZE_BASIS_THRESHOLD,
+            }
+        return None
+
+    def _negative_basis(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        Negative basis (perp below spot) → potential long opportunity.
+        Mechanism: perp trading below spot = underpriced relative to spot = mean reversion.
+        """
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        agg_basis = agg_basis_pct / 100.0
+
+        # Fire when basis is negative (perp below spot)
+        if agg_basis < -0.0005:  # < -0.05%
+            return {
+                "id": "negative_basis",
+                "name": "Negative Basis",
+                "direction": "long",
+                "severity": "info",
+                "message": f"Basis {agg_basis*100:.2f}% → LONG (perp underpriced vs spot, mean reversion)",
+                "value": agg_basis,
+                "threshold": -0.0005,
             }
         return None
 

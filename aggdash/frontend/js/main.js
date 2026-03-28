@@ -614,7 +614,8 @@ async function updateLiveLabels() {
 // ── Liquidation markers on price chart ──────────────────────────────
 
 const SIGNAL_CLASSES = {
-  squeeze_risk:     { cls: 'badge-squeeze',    icon: '🔴', label: 'SQUEEZE RISK' },
+  squeeze_risk:     { cls: 'badge-squeeze',    icon: '🔴', label: 'SHORT' },
+  negative_basis:    { cls: 'badge-accum',      icon: '🟢', label: 'LONG'  },
   arb_opportunity:  { cls: 'badge-arb',        icon: '🟡', label: 'ARB OPPTY'   },
   oi_accumulation:  { cls: 'badge-accum',      icon: '🔵', label: 'OI ACCUM'    },
   deleveraging:     { cls: 'badge-deleverage', icon: '🟠', label: 'DELEVERAGE'  },
