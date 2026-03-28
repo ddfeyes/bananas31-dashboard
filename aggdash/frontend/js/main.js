@@ -208,8 +208,10 @@ async function updateVol24h() {
   const oiEl = document.getElementById('stat-oi-24h');
   if (oiEl && data.oi_change_24h_pct != null) {
     const v = data.oi_change_24h_pct * 100; // fraction → percent
-    const sign = v >= 0 ? '+' : '';
-    oiEl.textContent = sign + v.toFixed(2) + '%';
+    const absV = Math.abs(v);
+    const sign = absV < 0.005 ? '' : (v >= 0 ? '+' : '-');
+    const displayV = absV < 0.005 ? '0.00' : Math.abs(v).toFixed(2);
+    oiEl.textContent = sign + displayV + '%';
     oiEl.className = 'stat-value ' + (v >= 0 ? 'positive' : 'negative');
   }
 
@@ -623,8 +625,8 @@ async function updateSignals() {
     return;
   }
   el.innerHTML = data.signals.map(s => {
-    const cfg = SIGNAL_CLASSES[s.type] || { cls: 'badge-accum', icon: '⚪', label: s.type };
-    const detail = s.value != null ? ` ${s.value > 0 ? '+' : ''}${s.value.toFixed(2)}%` : '';
+    const cfg = SIGNAL_CLASSES[s.id] || { cls: 'badge-accum', icon: '⚪', label: s.id };
+    const detail = s.value != null ? ` ${s.value * 100 >= 0 ? '+' : ''}${(s.value * 100).toFixed(2)}%` : '';
     return `<span class="alert-badge ${cfg.cls}">${cfg.icon} ${cfg.label}${detail}</span>`;
   }).join(' ');
 }
