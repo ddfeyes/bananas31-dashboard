@@ -132,3 +132,61 @@ def test_basis_squeeze_silent_below_threshold():
     """BASIS_SQUEEZE does NOT fire below threshold."""
     result = compute_basis_squeeze(basis_pct=0.05, funding_rate=0.0001, threshold_pct=0.1)
     assert result is None
+
+
+def test_squeeze_watch_signal():
+    """SQUEEZE_WATCH fires at 0.15% basis (0.1-0.2% zone) with positive funding."""
+    from signals import SignalEngine
+
+    engine = SignalEngine()
+    # Basis 0.15% = in the watch zone (0.1-0.2%)
+    snap = {
+        "basis": {"aggregated": {"basis_pct": 0.15}},
+        "funding": {"per_exchange": {"binance-perp": {"rate_8h": 0.0001}}}
+    }
+    sig = engine._squeeze_watch(snap)
+    assert sig is not None, "SQUEEZE_WATCH should fire at 0.15% basis"
+    assert sig["id"] == "squeeze_watch"
+    assert sig["severity"] == "info"
+    assert "0.150%" in sig["message"] or "0.15%" in sig["message"]
+
+
+def test_squeeze_watch_not_fire_below_threshold():
+    """SQUEEZE_WATCH does NOT fire below 0.1%."""
+    from signals import SignalEngine
+
+    engine = SignalEngine()
+    # Basis 0.05% — below watch threshold
+    snap = {
+        "basis": {"aggregated": {"basis_pct": 0.05}},
+        "funding": {"per_exchange": {"binance-perp": {"rate_8h": 0.0001}}}
+    }
+    sig = engine._squeeze_watch(snap)
+    assert sig is None, "SQUEEZE_WATCH should NOT fire at 0.05% basis"
+
+
+def test_squeeze_watch_not_fire_above_squeeze_threshold():
+    """SQUEEZE_WATCH does NOT fire above 0.2% (full squeeze_risk fires instead)."""
+    from signals import SignalEngine
+
+    engine = SignalEngine()
+    # Basis 0.3% — above full squeeze threshold
+    snap = {
+        "basis": {"aggregated": {"basis_pct": 0.3}},
+        "funding": {"per_exchange": {"binance-perp": {"rate_8h": 0.0001}}}
+    }
+    sig = engine._squeeze_watch(snap)
+    assert sig is None, "SQUEEZE_WATCH should NOT fire at 0.3% (squeeze_risk fires instead)"
+
+
+def test_squeeze_watch_requires_positive_funding():
+    """SQUEEZE_WATCH requires funding > 0."""
+    from signals import SignalEngine
+
+    engine = SignalEngine()
+    snap = {
+        "basis": {"aggregated": {"basis_pct": 0.15}},
+        "funding": {"per_exchange": {}}
+    }
+    sig = engine._squeeze_watch(snap)
+    assert sig is None, "SQUEEZE_WATCH should NOT fire without funding"

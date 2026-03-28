@@ -2,10 +2,11 @@
 signals.py — Real-time signal detection for bananas31-dashboard.
 
 Signals:
-  - squeeze_risk: basis > 2% AND funding > 0 → longs stacking, squeeze risk
-  - arb_opportunity: DEX price deviation > 1% from CEX avg → arbitrage opportunity
-  - oi_accumulation: OI delta > 5% AND price flat → accumulation
-  - deleveraging: OI delta < -5% AND price delta < -1% → deleveraging
+  - squeeze_watch: basis 0.1-0.2% + funding > 0 → early squeeze warning (ℹ️)
+  - squeeze_risk: basis > 0.2% AND funding > 0 → longs stacking, squeeze risk (🚨)
+  - arb_opportunity: DEX price deviation > 0.3% from CEX avg → arbitrage opportunity
+  - oi_accumulation: OI delta > 3% AND price flat → accumulation
+  - deleveraging: OI delta < -3% AND price delta < -0.5% → deleveraging
 """
 import logging
 import time
@@ -14,8 +15,9 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Thresholds — calibrated for BANANAS31 (low-cap, typical basis 0.03–0.3%)
-SQUEEZE_BASIS_THRESHOLD = 0.002      # 0.2% (was 2% — too high for BANANAS31)
-SQUEEZE_FUNDING_THRESHOLD = 0.0      # funding > 0
+SQUEEZE_WATCH_BASIS_THRESHOLD = 0.001  # 0.1% — early warning (pattern fires at 0.1%)
+SQUEEZE_BASIS_THRESHOLD = 0.002       # 0.2% — full squeeze risk (was 2% — too high)
+SQUEEZE_FUNDING_THRESHOLD = 0.0       # funding > 0
 ARB_DEVIATION_THRESHOLD = 0.003      # 0.3% (was 1% — DEX/CEX spread rarely exceeds 0.5%)
 OI_ACCUMULATION_THRESHOLD = 0.03     # 3% OI spike (was 5%)
 OI_DELEVERAGE_THRESHOLD = -0.03      # -3% OI drop (was -5%)
@@ -45,6 +47,13 @@ class SignalEngine:
             return []
 
         signals = []
+
+        try:
+            sig = self._squeeze_watch(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("squeeze_watch error: %s", e)
 
         try:
             sig = self._squeeze_risk(snapshot)
@@ -80,9 +89,45 @@ class SignalEngine:
     # Individual signals                                                   #
     # ------------------------------------------------------------------ #
 
+    def _squeeze_watch(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        basis > 0.1% AND funding > 0 → early squeeze warning (0.1-0.2% zone).
+        Fires before the full squeeze_risk signal (which triggers at 0.2%+).
+        """
+        basis_data = snapshot.get("basis", {})
+        funding_data = snapshot.get("funding", {})
+
+        agg_basis_pct = None
+        aggregated = basis_data.get("aggregated", {})
+        if aggregated:
+            agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        # Convert from percent to fraction
+        agg_basis = agg_basis_pct / 100.0
+        avg_funding = _extract_avg_funding(funding_data)
+
+        if avg_funding is None:
+            return None
+
+        # Watch fires in the 0.1-0.2% zone (above watch threshold, below full squeeze threshold)
+        if agg_basis > SQUEEZE_WATCH_BASIS_THRESHOLD and agg_basis <= SQUEEZE_BASIS_THRESHOLD and avg_funding > SQUEEZE_FUNDING_THRESHOLD:
+            return {
+                "id": "squeeze_watch",
+                "name": "Squeeze Watch",
+                "severity": "info",
+                "message": f"Basis {agg_basis*100:.3f}% + funding {avg_funding*100:.4f}% — early squeeze warning",
+                "value": agg_basis,
+                "threshold": SQUEEZE_WATCH_BASIS_THRESHOLD,
+            }
+        return None
+
     def _squeeze_risk(self, snapshot: Dict) -> Optional[Dict]:
         """
-        basis > 2% AND funding > 0 → squeeze risk signal.
+        basis > 0.2% AND funding > 0 → squeeze risk signal.
         Uses aggregated basis and average funding rate.
         """
         basis_data = snapshot.get("basis", {})
@@ -98,9 +143,7 @@ class SignalEngine:
             agg_basis_pct = basis_data.get("agg_basis_pct")
         if agg_basis_pct is None:
             return None
-        # Convert from percent (0.09%) to fraction (0.0009) for threshold comparison
-        agg_basis = agg_basis_pct / 100.0 if agg_basis_pct > 1 else agg_basis_pct / 100.0
-        # Note: basis_pct is already in % units (e.g. 0.09 means 0.09%), threshold is 2% = 0.02 fraction
+        # Convert from percent (e.g. 0.139%) to fraction (0.00139) for threshold comparison
         agg_basis = agg_basis_pct / 100.0
 
         # Average funding rate across exchanges
