@@ -34,7 +34,7 @@ function initWebSocket() {
   }
 
   _ws.onopen = () => {
-    console.log('WS: connected to', url);
+    console.debug('WS: connected to', url);
     _wsActive = true;
     _wsRetryDelay = 1000;  // reset backoff
     // Update connection indicator
@@ -59,7 +59,7 @@ function initWebSocket() {
   _ws.onclose = () => {
     _wsActive = false;
     _ws = null;
-    console.log(`WS: closed, reconnecting in ${_wsRetryDelay}ms`);
+    console.debug(`WS: closed, reconnecting in ${_wsRetryDelay}ms`);
     // Show polling fallback state — amber dot, not red (we still get data via polling)
     const dot = document.getElementById('conn-dot');
     const label = document.getElementById('conn-label');
