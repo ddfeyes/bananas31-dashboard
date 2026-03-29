@@ -67,6 +67,12 @@ services:
           memory: 32M
     depends_on:
       - aggdash-backend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   aggdash-data:
