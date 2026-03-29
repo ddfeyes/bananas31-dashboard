@@ -1,7 +1,6 @@
 """Tests for basis_flip and contango_flip signals."""
 import pytest
-import time
-from aggdash.backend.signals import SignalEngine, CONTANGO_BASIS_THRESHOLD, CONTANGO_OI_STABLE_THRESHOLD
+from aggdash.backend.signals import SignalEngine, CONTANGO_BASIS_THRESHOLD
 
 
 def make_snapshot(basis_pct, oi_delta_pct=0.0):
