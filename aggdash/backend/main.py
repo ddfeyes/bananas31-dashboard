@@ -123,6 +123,9 @@ async def lifespan(app: FastAPI):
     analytics_engine = AnalyticsEngine(ring_buffer, oi_funding_poller)
     signal_engine = SignalEngine(ring_buffer)
 
+    # Initialize signal engine (needs ring_buffer for future tick-level signals)
+    signal_engine = SignalEngine(ring_buffer)
+
     # Wire OI updates into analytics engine for delta tracking
     _orig_poll_oi = oi_funding_poller._poll_oi if hasattr(oi_funding_poller, '_poll_oi') else None
 
@@ -743,8 +746,11 @@ async def get_stats():
 
 @app.get("/api/analytics/snapshot")
 async def get_analytics_snapshot():
-    """Full analytics snapshot: CVD, basis, spread, OI delta, funding."""
-    return await analytics_engine.snapshot()
+    """Full analytics snapshot: CVD, basis, spread, OI delta, funding, and computed signals."""
+    snap = await analytics_engine.snapshot()
+    signals = signal_engine.compute_signals(snap)
+    snap["signals"] = signals
+    return snap
 
 
 @app.get("/api/snapshot")
