@@ -24,6 +24,8 @@ OI_DELEVERAGE_THRESHOLD = -0.03      # -3% OI drop (was -5%)
 PRICE_FLAT_THRESHOLD = 0.005         # price change < 0.5% = "flat"
 PRICE_DOWN_THRESHOLD = -0.005        # price change < -0.5% = "down" (was -1%)
 MIN_DATA_WINDOW_SECS = 60            # 60s minimum before firing signals (DB has enough history after restart)
+CONTANGO_BASIS_THRESHOLD = -0.001    # -0.1% — deep contango threshold for contango_flip
+OI_STABLE_THRESHOLD = 0.02           # ±2% OI change = stable for contango_flip
 
 
 class SignalEngine:
@@ -33,6 +35,8 @@ class SignalEngine:
         # ring_buffer reserved for future tick-level signal logic (e.g. CVD divergence)
         self._ring_buffer = ring_buffer
         self._start_time = time.time()
+        self._prev_agg_basis: Optional[float] = None   # basis from previous cycle (fraction)
+        self._prev_basis_sign: Optional[int] = None    # sign of previous basis: 1 positive, -1 negative, 0 zero
 
     def _has_enough_data(self) -> bool:
         """Require at least 5 minutes of data before emitting signals."""
@@ -89,6 +93,23 @@ class SignalEngine:
                 signals.append(sig)
         except Exception as e:
             logger.warning("negative_basis error: %s", e)
+
+        try:
+            sig = self._basis_flip(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("basis_flip error: %s", e)
+
+        try:
+            sig = self._contango_flip(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("contango_flip error: %s", e)
+
+        # Update previous basis state for next cycle
+        self._update_prev_basis(snapshot)
 
         return signals
 
@@ -290,6 +311,113 @@ class SignalEngine:
                 "threshold": OI_DELEVERAGE_THRESHOLD,
             }
         return None
+
+    def _basis_flip(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        Basis crosses zero → basis_flip signal.
+        Requires previous cycle history (_prev_agg_basis must be set).
+        Direction: 'long' when entering negative territory, 'short' when entering positive.
+        """
+        if self._prev_agg_basis is None:
+            return None  # no history yet
+
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        curr_basis = agg_basis_pct / 100.0  # fraction
+        prev_basis = self._prev_agg_basis
+
+        # Determine sign: 1 = positive, -1 = negative, 0 = zero
+        def sign(x):
+            if x > 0: return 1
+            if x < 0: return -1
+            return 0
+
+        prev_sign = sign(prev_basis)
+        curr_sign = sign(curr_basis)
+
+        # Fire only on sign change (crossing zero or switching between pos/neg)
+        if prev_sign == curr_sign:
+            return None
+
+        if curr_sign == -1:
+            return {
+                "id": "basis_flip",
+                "name": "Basis Flip",
+                "direction": "long",
+                "severity": "info",
+                "message": f"Basis flip: {prev_basis*100:.2f}% (positive) → {curr_basis*100:.2f}% (negative) — entering contango",
+                "value": curr_basis,
+                "threshold": 0.0,
+            }
+        else:  # curr_sign == 1 (from negative or zero)
+            return {
+                "id": "basis_flip",
+                "name": "Basis Flip",
+                "direction": "short",
+                "severity": "info",
+                "message": f"Basis flip: {prev_basis*100:.2f}% → {curr_basis*100:.2f}% (positive) — exiting contango",
+                "value": curr_basis,
+                "threshold": 0.0,
+            }
+
+    def _contango_flip(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        Contango flip: basis < -0.1% AND OI stable (±2%) → strong contango signal.
+        Meant to catch sustained deep contango where perp sellers are funding longs.
+        """
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        curr_basis = agg_basis_pct / 100.0  # fraction
+
+        # Basis must be below contango threshold
+        if curr_basis >= CONTANGO_BASIS_THRESHOLD:
+            return None
+
+        # OI must be stable (±2%)
+        oi_data = snapshot.get("oi_delta", {})
+        oi_delta_pct = oi_data.get("total_delta_pct")
+        if oi_delta_pct is None:
+            agg = oi_data.get("aggregated", {}) or {}
+            oi_delta_pct = agg.get("delta_pct")
+        if oi_delta_pct is None:
+            return None
+
+        if abs(oi_delta_pct) > OI_STABLE_THRESHOLD:
+            return None  # OI too volatile
+
+        return {
+            "id": "contango_flip",
+            "name": "Contango Flip",
+            "direction": "long",
+            "severity": "info",
+            "message": f"Contango {curr_basis*100:.2f}% + OI stable ({oi_delta_pct*100:.1f}%) → LONG contango position",
+            "value": curr_basis,
+            "threshold": CONTANGO_BASIS_THRESHOLD,
+        }
+
+    def _update_prev_basis(self, snapshot: Dict) -> None:
+        """Store current basis as previous for next cycle's flip detection."""
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return
+
+        self._prev_agg_basis = agg_basis_pct / 100.0  # store as fraction
 
 
 # ------------------------------------------------------------------ #
