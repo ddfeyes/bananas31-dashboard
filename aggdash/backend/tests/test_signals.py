@@ -189,3 +189,69 @@ def test_signal_structure():
         assert "severity" in s
         assert "message" in s
         assert s["severity"] in ("info", "warning", "alert")
+
+
+# ── basis_flip and contango_flip tests ──────────────────────────────────
+
+def test_basis_flip_positive_to_negative():
+    """basis_flip fires when basis crosses from positive to negative."""
+    engine = make_engine()
+    # First call with positive basis - should NOT fire (no prev value yet)
+    snap1 = make_snap(basis_pct=0.15)
+    sigs1 = engine.compute_signals(snap1)
+    ids1 = [s["id"] for s in sigs1]
+    assert "basis_flip" not in ids1, "basis_flip should NOT fire on first call (no prev)"
+    # Second call with negative basis - SHOULD fire
+    snap2 = make_snap(basis_pct=-0.15)
+    sigs2 = engine.compute_signals(snap2)
+    ids2 = [s["id"] for s in sigs2]
+    assert "basis_flip" in ids2, f"basis_flip should fire on positive→negative flip, got {ids2}"
+
+
+def test_basis_flip_negative_to_positive():
+    """basis_flip fires when basis crosses from negative to positive."""
+    engine = make_engine()
+    snap1 = make_snap(basis_pct=-0.15)
+    engine.compute_signals(snap1)  # init prev
+    snap2 = make_snap(basis_pct=0.15)
+    sigs2 = engine.compute_signals(snap2)
+    ids2 = [s["id"] for s in sigs2]
+    assert "basis_flip" in ids2, f"basis_flip should fire on negative→positive flip, got {ids2}"
+
+
+def test_basis_flip_no_fire_same_sign():
+    """basis_flip does NOT fire when basis stays same sign."""
+    engine = make_engine()
+    snap1 = make_snap(basis_pct=0.10)
+    engine.compute_signals(snap1)
+    snap2 = make_snap(basis_pct=0.15)
+    sigs2 = engine.compute_signals(snap2)
+    ids2 = [s["id"] for s in sigs2]
+    assert "basis_flip" not in ids2, f"basis_flip should NOT fire for same-sign change, got {ids2}"
+
+
+def test_contango_flip_fires():
+    """contango_flip fires when basis < -0.1% AND OI stable."""
+    engine = make_engine()
+    snap = make_snap(basis_pct=-0.15, oi_delta_frac=0.01)  # -0.15% basis, +1% OI (stable)
+    sigs = engine.compute_signals(snap)
+    ids = [s["id"] for s in sigs]
+    assert "contango_flip" in ids, f"contango_flip should fire for basis=-0.15%+OI=+1%, got {ids}"
+
+
+def test_contango_flip_no_fire_unstable_oi():
+    """contango_flip does NOT fire when OI moves > 2%."""
+    engine = make_engine()
+    snap = make_snap(basis_pct=-0.15, oi_delta_frac=0.03)  # OI too volatile
+    sigs = engine.compute_signals(snap)
+    ids = [s["id"] for s in sigs]
+    assert "contango_flip" not in ids, f"contango_flip should NOT fire with unstable OI, got {ids}"
+
+
+def test_contango_flip_no_fire_high_basis():
+    """contango_flip does NOT fire when basis > -0.1%."""
+    engine = make_engine()
+    snap = make_snap(basis_pct=-0.05, oi_delta_frac=0.005)  # basis not low enough
+    sigs = engine.compute_signals(snap)
+    ids = [s["id"] for s in sigs]
+    assert "contango_flip" not in ids, f"contango_flip should NOT fire when basis > -0.1%, got {ids}"

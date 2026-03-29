@@ -25,6 +25,11 @@ PRICE_FLAT_THRESHOLD = 0.005         # price change < 0.5% = "flat"
 PRICE_DOWN_THRESHOLD = -0.005        # price change < -0.5% = "down" (was -1%)
 MIN_DATA_WINDOW_SECS = 60            # 60s minimum before firing signals (DB has enough history after restart)
 
+# Thresholds for new signals
+BASIS_FLIP_THRESHOLD = None  # Any sign change fires; no numeric threshold
+CONTANGO_BASIS_THRESHOLD = -0.001  # -0.1%
+CONTANGO_OI_STABLE_THRESHOLD = 0.02  # ±2% OI change = "stable"
+
 
 class SignalEngine:
     """Compute real-time signals from analytics snapshot."""
@@ -33,6 +38,7 @@ class SignalEngine:
         # ring_buffer reserved for future tick-level signal logic (e.g. CVD divergence)
         self._ring_buffer = ring_buffer
         self._start_time = time.time()
+        self._prev_agg_basis: Optional[float] = None
 
     def _has_enough_data(self) -> bool:
         """Require at least 5 minutes of data before emitting signals."""
@@ -89,6 +95,20 @@ class SignalEngine:
                 signals.append(sig)
         except Exception as e:
             logger.warning("negative_basis error: %s", e)
+
+        try:
+            sig = self._basis_flip(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("basis_flip error: %s", e)
+
+        try:
+            sig = self._contango_flip(snapshot)
+            if sig:
+                signals.append(sig)
+        except Exception as e:
+            logger.warning("contango_flip error: %s", e)
 
         return signals
 
@@ -198,6 +218,81 @@ class SignalEngine:
                 "threshold": -0.0005,
             }
         return None
+
+    def _basis_flip(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        basis_flip: fires when agg_basis_pct changes sign (positive→negative or negative→positive).
+        Uses _prev_agg_basis to detect the transition. Updates _prev_agg_basis on each call.
+        """
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        # Convert % to fraction for comparison
+        current_basis = agg_basis_pct / 100.0
+
+        # Fire only if we have a previous value AND sign changed
+        if self._prev_agg_basis is not None:
+            prev_sign = 1 if self._prev_agg_basis >= 0 else -1
+            curr_sign = 1 if current_basis >= 0 else -1
+            if prev_sign != curr_sign:
+                direction = "positive→negative" if curr_sign < 0 else "negative→positive"
+                self._prev_agg_basis = current_basis
+                return {
+                    "id": "basis_flip",
+                    "name": "Basis Flip",
+                    "severity": "warning",
+                    "message": f"Basis flipped {direction} ({self._prev_agg_basis*100:.3f}%→{current_basis*100:.3f}%) — regime change",
+                    "value": current_basis,
+                    "prev_value": self._prev_agg_basis,
+                }
+
+        # Always update prev after first non-None value
+        self._prev_agg_basis = current_basis
+        return None
+
+    def _contango_flip(self, snapshot: Dict) -> Optional[Dict]:
+        """
+        contango_flip: fires when basis < -0.1% AND OI stable.
+        OI stability: |oi_delta_pct| < 2%.
+        """
+        basis_data = snapshot.get("basis", {})
+        aggregated = basis_data.get("aggregated", {})
+        agg_basis_pct = aggregated.get("basis_pct")
+        if agg_basis_pct is None:
+            agg_basis_pct = basis_data.get("agg_basis_pct")
+        if agg_basis_pct is None:
+            return None
+
+        current_basis = agg_basis_pct / 100.0
+
+        if current_basis >= CONTANGO_BASIS_THRESHOLD:
+            return None  # not in contango regime
+
+        # Check OI stability
+        oi_data = snapshot.get("oi_delta", {})
+        oi_delta_pct = oi_data.get("total_delta_pct")
+        if oi_delta_pct is None:
+            agg = oi_data.get("aggregated", {}) or {}
+            oi_delta_pct = agg.get("delta_pct")
+        if oi_delta_pct is None:
+            return None
+
+        if abs(oi_delta_pct) >= CONTANGO_OI_STABLE_THRESHOLD:
+            return None  # OI not stable
+
+        return {
+            "id": "contango_flip",
+            "name": "Contango Flip",
+            "severity": "info",
+            "message": f"Basis {current_basis*100:.2f}% + OI Δ {oi_delta_pct*100:.1f}% → contango regime (OI stable)",
+            "value": current_basis,
+            "threshold": CONTANGO_BASIS_THRESHOLD,
+        }
 
     def _arb_opportunity(self, snapshot: Dict) -> Optional[Dict]:
         """
