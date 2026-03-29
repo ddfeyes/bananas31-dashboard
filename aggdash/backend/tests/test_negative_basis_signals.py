@@ -1,5 +1,10 @@
 """Tests for basis_flip and contango_flip signals."""
-from aggdash.backend.signals import SignalEngine, CONTANGO_BASIS_THRESHOLD
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from signals import SignalEngine, CONTANGO_BASIS_THRESHOLD
 
 
 def make_snapshot(basis_pct, oi_delta_pct=0.0):
@@ -150,7 +155,7 @@ def test_squeeze_thresholds_calibrated_from_issue_162():
     real data from issue #162: Binance basis +0.1051%, Bybit -0.015%.
     Binance basis is right at the squeeze_watch boundary — correct.
     """
-    from aggdash.backend.signals import SQUEEZE_WATCH_BASIS_THRESHOLD, SQUEEZE_BASIS_THRESHOLD
+    from signals import SQUEEZE_WATCH_BASIS_THRESHOLD, SQUEEZE_BASIS_THRESHOLD
 
     # Binance basis 0.1051% → 0.001051 fraction → above 0.001 watch threshold
     binance_basis = 0.001051
