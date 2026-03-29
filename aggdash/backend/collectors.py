@@ -25,6 +25,8 @@ from ring_buffer import Tick
 logger = logging.getLogger(__name__)
 
 RECONNECT_DELAY = 3  # seconds between reconnect attempts
+RECONNECT_BASE = 2   # exponential backoff base (seconds)
+RECONNECT_MAX = 30   # max backoff delay (seconds)
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -49,11 +51,16 @@ class BinanceSpotCollector:
     """Streams BANANAS31USDT aggTrade from Binance spot."""
 
     WS_URL = "wss://stream.binance.com:9443/ws/bananas31usdt@aggTrade"
+    NAME = "binance_spot"
 
     def __init__(self, on_tick: Callable) -> None:
         self._on_tick = on_tick
         self._stop = asyncio.Event()
         self.running = False
+        self.status: str = "disconnected"
+        self.last_connected_at: Optional[float] = None
+        self.disconnected_at: Optional[float] = None
+        self._backoff = RECONNECT_BASE
 
     async def start(self) -> None:
         self.running = True
@@ -61,6 +68,10 @@ class BinanceSpotCollector:
             try:
                 async with websockets.connect(self.WS_URL, ping_interval=20) as ws:
                     logger.info("BinanceSpot connected")
+                    self.status = "connected"
+                    self.last_connected_at = time.time()
+                    self.disconnected_at = None
+                    self._backoff = RECONNECT_BASE
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -77,11 +88,15 @@ class BinanceSpotCollector:
                         except Exception as exc:
                             logger.debug("BinanceSpot parse error: %s", exc)
             except (ConnectionClosedError, WebSocketException, OSError) as exc:
-                logger.warning("BinanceSpot disconnected: %s — reconnecting in %ds", exc, RECONNECT_DELAY)
+                logger.warning("BinanceSpot disconnected: %s — reconnecting in %ds", exc, self._backoff)
             except Exception as exc:
                 logger.error("BinanceSpot unexpected error: %s", exc)
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.status = "disconnected"
+                if self.disconnected_at is None:
+                    self.disconnected_at = time.time()
+                await asyncio.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, RECONNECT_MAX)
         self.running = False
 
     async def stop(self) -> None:
@@ -97,12 +112,17 @@ class BinancePerpCollector:
         "wss://fstream.binance.com/stream?streams="
         "bananas31usdt@aggTrade/bananas31usdt@forceOrder"
     )
+    NAME = "binance_perp"
 
     def __init__(self, on_tick: Callable, on_liquidation: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
         self._on_liquidation = on_liquidation
         self._stop = asyncio.Event()
         self.running = False
+        self.status: str = "disconnected"
+        self.last_connected_at: Optional[float] = None
+        self.disconnected_at: Optional[float] = None
+        self._backoff = RECONNECT_BASE
 
     async def start(self) -> None:
         self.running = True
@@ -110,6 +130,10 @@ class BinancePerpCollector:
             try:
                 async with websockets.connect(self.WS_URL, ping_interval=20) as ws:
                     logger.info("BinancePerp connected")
+                    self.status = "connected"
+                    self.last_connected_at = time.time()
+                    self.disconnected_at = None
+                    self._backoff = RECONNECT_BASE
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -143,11 +167,15 @@ class BinancePerpCollector:
                         except Exception as exc:
                             logger.debug("BinancePerp parse error: %s", exc)
             except (ConnectionClosedError, WebSocketException, OSError) as exc:
-                logger.warning("BinancePerp disconnected: %s — reconnecting", exc)
+                logger.warning("BinancePerp disconnected: %s — reconnecting in %ds", exc, self._backoff)
             except Exception as exc:
                 logger.error("BinancePerp unexpected error: %s", exc)
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.status = "disconnected"
+                if self.disconnected_at is None:
+                    self.disconnected_at = time.time()
+                await asyncio.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, RECONNECT_MAX)
         self.running = False
 
     async def stop(self) -> None:
@@ -161,11 +189,16 @@ class BybitSpotCollector:
 
     WS_URL = "wss://stream.bybit.com/v5/public/spot"
     TOPIC = "publicTrade.BANANAS31USDT"
+    NAME = "bybit_spot"
 
     def __init__(self, on_tick: Callable) -> None:
         self._on_tick = on_tick
         self._stop = asyncio.Event()
         self.running = False
+        self.status: str = "disconnected"
+        self.last_connected_at: Optional[float] = None
+        self.disconnected_at: Optional[float] = None
+        self._backoff = RECONNECT_BASE
 
     async def start(self) -> None:
         self.running = True
@@ -174,6 +207,10 @@ class BybitSpotCollector:
                 async with websockets.connect(self.WS_URL, ping_interval=20) as ws:
                     await ws.send(json.dumps({"op": "subscribe", "args": [self.TOPIC]}))
                     logger.info("BybitSpot connected")
+                    self.status = "connected"
+                    self.last_connected_at = time.time()
+                    self.disconnected_at = None
+                    self._backoff = RECONNECT_BASE
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -192,11 +229,15 @@ class BybitSpotCollector:
                         except Exception as exc:
                             logger.debug("BybitSpot parse error: %s", exc)
             except (ConnectionClosedError, WebSocketException, OSError) as exc:
-                logger.warning("BybitSpot disconnected: %s — reconnecting", exc)
+                logger.warning("BybitSpot disconnected: %s — reconnecting in %ds", exc, self._backoff)
             except Exception as exc:
                 logger.error("BybitSpot unexpected error: %s", exc)
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.status = "disconnected"
+                if self.disconnected_at is None:
+                    self.disconnected_at = time.time()
+                await asyncio.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, RECONNECT_MAX)
         self.running = False
 
     async def stop(self) -> None:
@@ -219,12 +260,18 @@ class BybitPerpCollector:
     REST_POLL_INTERVAL = 10  # seconds
     STALE_THRESHOLD = 30     # seconds without WS tick → emit REST tick
 
+    NAME = "bybit_perp"
+
     def __init__(self, on_tick: Callable, on_liquidation: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
         self._on_liquidation = on_liquidation
         self._stop = asyncio.Event()
         self.running = False
         self._last_ws_tick_at: float = 0.0
+        self.status: str = "disconnected"
+        self.last_connected_at: Optional[float] = None
+        self.disconnected_at: Optional[float] = None
+        self._backoff = RECONNECT_BASE
 
     async def _rest_poll_loop(self) -> None:
         """Poll Bybit REST ticker and emit ticks when WS is silent."""
@@ -274,6 +321,10 @@ class BybitPerpCollector:
                         "args": [self.TRADE_TOPIC, self.LIQ_TOPIC],
                     }))
                     logger.info("BybitPerp connected")
+                    self.status = "connected"
+                    self.last_connected_at = time.time()
+                    self.disconnected_at = None
+                    self._backoff = RECONNECT_BASE
                     async for raw in ws:
                         if self._stop.is_set():
                             break
@@ -308,11 +359,15 @@ class BybitPerpCollector:
                         except Exception as exc:
                             logger.debug("BybitPerp parse error: %s", exc)
             except (ConnectionClosedError, WebSocketException, OSError) as exc:
-                logger.warning("BybitPerp disconnected: %s — reconnecting", exc)
+                logger.warning("BybitPerp disconnected: %s — reconnecting in %ds", exc, self._backoff)
             except Exception as exc:
                 logger.error("BybitPerp unexpected error: %s", exc)
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.status = "disconnected"
+                if self.disconnected_at is None:
+                    self.disconnected_at = time.time()
+                await asyncio.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, RECONNECT_MAX)
         rest_task.cancel()
         self.running = False
 
@@ -375,6 +430,8 @@ class BSCPancakeSwapCollector:
     # BANANAS31 token decimals (BEP-20 standard = 18)
     TOKEN0_DECIMALS = 18
 
+    NAME = "pancake"
+
     def __init__(self, on_tick: Callable, get_cex_spot: Optional[Callable] = None) -> None:
         self._on_tick = on_tick
         self._get_cex_spot = get_cex_spot  # optional callback to get CEX spot avg
@@ -385,9 +442,15 @@ class BSCPancakeSwapCollector:
         self.last_sqrt_price_x96: Optional[int] = None  # for liquidity_usd calc (#15)
         self.last_bnb_usd: Optional[float] = None
         self._last_log_block: Optional[int] = None  # last block scanned for swap events
+        self.status: str = "disconnected"
+        self.last_connected_at: Optional[float] = None
+        self.disconnected_at: Optional[float] = None
 
     async def start(self) -> None:
         self.running = True
+        self.status = "connected"
+        self.last_connected_at = time.time()
+        self.disconnected_at = None
         logger.info("BSCPancakeSwap poller started (poll every %ds)", self.POLL_INTERVAL)
         while not self._stop.is_set():
             try:
@@ -647,6 +710,8 @@ class BSCPancakeSwapCollector:
 
 class OIFundingPoller:
     """Polls Open Interest and Funding Rates from Binance and Bybit REST APIs."""
+
+    NAME = "oi_funding"
 
     def __init__(self, oi_interval_secs: int = 30, funding_interval_secs: int = 60) -> None:
         self._oi_interval = oi_interval_secs

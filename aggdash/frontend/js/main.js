@@ -938,6 +938,20 @@ function boot() {
   setInterval(updatePatterns, 30000);
   setInterval(updateLiveLabels, 5000);
   setInterval(updateSidebarAlerts, 30000);
+  updateCollectorHealth();
+  setInterval(updateCollectorHealth, 10000);
+}
+
+async function updateCollectorHealth() {
+  const data = await fetchHealth();
+  if (!data || !data.collectors) return;
+  for (const [name, status] of Object.entries(data.collectors)) {
+    const dot = document.getElementById('coll-dot-' + name);
+    if (dot) {
+      dot.className = 'coll-dot ' + (status === 'connected' ? 'ok' : 'err');
+      dot.title = name + ': ' + status;
+    }
+  }
 }
 
 if (document.readyState === 'loading') {

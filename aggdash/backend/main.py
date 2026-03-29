@@ -188,6 +188,33 @@ async def health():
         "ring_buffer_size": await ring_buffer.size(),
     }
 
+
+@app.get("/api/health")
+async def api_health():
+    """Per-collector health endpoint with alerts for prolonged disconnections."""
+    now = time.time()
+    collector_statuses = {}
+    alerts = []
+    for c in collectors:
+        name = getattr(c, "NAME", c.__class__.__name__)
+        status = getattr(c, "status", "unknown")
+        collector_statuses[name] = status
+        disconnected_at = getattr(c, "disconnected_at", None)
+        if status == "disconnected" and disconnected_at and (now - disconnected_at) > 60:
+            alerts.append({
+                "collector": name,
+                "disconnected_secs": round(now - disconnected_at),
+                "message": f"{name} disconnected for {round(now - disconnected_at)}s",
+            })
+    return {
+        "status": "ok",
+        "uptime_secs": round(now - _app_start_time),
+        "collectors": collector_statuses,
+        "alerts": alerts,
+        "ring_buffer_size": await ring_buffer.size(),
+    }
+
+
 @app.get("/api/prices")
 async def get_prices():
     """Get current prices from all sources."""

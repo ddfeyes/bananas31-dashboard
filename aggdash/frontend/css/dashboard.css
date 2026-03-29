@@ -89,7 +89,23 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.6px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
+
+/* Collector health status dots */
+.coll-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.coll-dot.ok { background: var(--green); box-shadow: 0 0 3px var(--green); }
+.coll-dot.err { background: var(--red); box-shadow: 0 0 3px var(--red); }
 
 .price-cell-value {
   font-family: var(--font-mono);

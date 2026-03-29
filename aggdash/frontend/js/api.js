@@ -169,6 +169,10 @@ async function fetchStats() {
   return apiGet('/api/stats');
 }
 
+async function fetchHealth() {
+  return apiGet('/api/health');
+}
+
 async function fetchAlertsHistory(limit = 5) {
   return apiGet(`/api/alerts/history?limit=${limit}`);
 }
