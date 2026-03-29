@@ -7,8 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-  <link rel="stylesheet" href="css/tokens.css">
-  <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/tokens.css?v=202603291200">
+  <link rel="stylesheet" href="css/dashboard.css?v=202603291200">
 </head>
 <body>
 
@@ -334,6 +334,13 @@
         </div>
       </div>
 
+      <div class="sidebar-section">
+        <div class="sidebar-label">Signal History</div>
+        <div id="signal-history-list" class="signal-history-list">
+          <span class="pattern-empty">No signals yet</span>
+        </div>
+      </div>
+
       <div class="sidebar-section" style="flex:1;overflow:hidden">
         <div class="sidebar-label">Recent Alerts</div>
         <div id="sidebar-alerts">
@@ -362,9 +369,9 @@
 
 </div><!-- /app -->
 
-<script src="js/api.js?v=202603282200"></script>
-<script src="js/charts.js?v=202603282200"></script>
-<script src="js/main.js?v=202603282200"></script>
+<script src="js/api.js?v=202603291200"></script>
+<script src="js/charts.js?v=202603291200"></script>
+<script src="js/main.js?v=202603291200"></script>
 
 <script>
 // Liq feed toggle

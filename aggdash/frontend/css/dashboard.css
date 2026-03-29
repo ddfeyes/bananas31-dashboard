@@ -440,10 +440,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.signal-name.squeeze { color: var(--red); }
-.signal-name.arb     { color: var(--yellow); }
-.signal-name.accum   { color: var(--blue); }
-.signal-name.quiet   { color: var(--text-ghost); font-size: 9px; font-weight: 400; }
+.signal-name.squeeze      { color: var(--red); }
+.signal-name.arb          { color: var(--yellow); }
+.signal-name.accum        { color: var(--blue); }
+.signal-name.badge-squeeze{ color: var(--red); }
+.signal-name.badge-watch  { color: #f59e0b; }
+.signal-name.badge-flip   { color: #a78bfa; }
+.signal-name.badge-arb    { color: var(--yellow); }
+.signal-name.badge-accum  { color: var(--blue); }
+.signal-name.badge-deleverage { color: #fb923c; }
+.signal-name.quiet        { color: var(--text-ghost); font-size: 9px; font-weight: 400; }
 
 .signal-value {
   font-family: var(--font-mono);
@@ -451,7 +457,13 @@ body {
   font-weight: 700;
   line-height: 1;
 }
-.signal-value.squeeze { color: var(--red); }
+.signal-value.squeeze       { color: var(--red); }
+.signal-value.badge-squeeze { color: var(--red); }
+.signal-value.badge-watch   { color: #f59e0b; }
+.signal-value.badge-flip    { color: #a78bfa; }
+.signal-value.badge-accum   { color: var(--blue); }
+.signal-value.badge-arb     { color: var(--yellow); }
+.signal-value.badge-deleverage { color: #fb923c; }
 
 /* Probability bars */
 .prob-row {
@@ -544,6 +556,50 @@ body {
 .pattern-dot.squeeze { background: var(--red); }
 .pattern-dot.arb     { background: var(--yellow); }
 .pattern-empty { color: var(--text-ghost); font-size: 9px; }
+
+/* ── Signal History Panel ────────────────────────────────────────── */
+.signal-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+.sh-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.4;
+}
+.sh-time {
+  color: var(--text-ghost);
+  flex-shrink: 0;
+  width: 32px;
+}
+.sh-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex: 1;
+}
+.sh-val {
+  font-size: 8px;
+  flex-shrink: 0;
+}
+.sh-label.badge-squeeze    { color: var(--red); }
+.sh-label.badge-watch      { color: #f59e0b; }
+.sh-label.badge-flip       { color: #a78bfa; }
+.sh-label.badge-arb        { color: var(--yellow); }
+.sh-label.badge-accum      { color: var(--blue); }
+.sh-label.badge-deleverage { color: #fb923c; }
+.sh-val.badge-squeeze      { color: var(--red); }
+.sh-val.badge-watch        { color: #f59e0b; }
+.sh-val.badge-flip         { color: #a78bfa; }
+.sh-val.badge-accum        { color: var(--blue); }
+.sh-val.badge-arb          { color: var(--yellow); }
+.sh-val.badge-deleverage   { color: #fb923c; }
 
 /* ════════════════════════════════════════════════════════════════════
    CHART PANELS

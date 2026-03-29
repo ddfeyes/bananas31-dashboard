@@ -619,12 +619,48 @@ async function updateLiveLabels() {
 // ── Liquidation markers on price chart ──────────────────────────────
 
 const SIGNAL_CLASSES = {
-  squeeze_risk:     { cls: 'badge-squeeze',    icon: '🔴', label: 'SHORT' },
-  negative_basis:    { cls: 'badge-accum',      icon: '🟢', label: 'LONG'  },
+  squeeze_risk:     { cls: 'badge-squeeze',    icon: '🔴', label: 'SHORT'       },
+  squeeze_watch:    { cls: 'badge-watch',      icon: '⚠️',  label: 'SQZ WATCH'  },
+  negative_basis:   { cls: 'badge-accum',      icon: '🟢', label: 'LONG'        },
+  basis_flip:       { cls: 'badge-flip',       icon: '🔄', label: 'BASIS FLIP'  },
+  contango_flip:    { cls: 'badge-flip',       icon: '↙️',  label: 'CONTANGO'   },
   arb_opportunity:  { cls: 'badge-arb',        icon: '🟡', label: 'ARB OPPTY'   },
   oi_accumulation:  { cls: 'badge-accum',      icon: '🔵', label: 'OI ACCUM'    },
   deleveraging:     { cls: 'badge-deleverage', icon: '🟠', label: 'DELEVERAGE'  },
 };
+
+// ── Signal history ring buffer (last 20 triggered signals) ───────────
+const SIGNAL_HISTORY_MAX = 20;
+const _signalHistory = [];   // [{ts, id, value, message}]
+
+function _recordSignals(signals) {
+  if (!signals || signals.length === 0) return;
+  const now = Date.now();
+  for (const s of signals) {
+    // Deduplicate: skip if same id fired within the last 60 seconds
+    const lastSame = _signalHistory.findLast ? _signalHistory.findLast(h => h.id === s.id) : [..._signalHistory].reverse().find(h => h.id === s.id);
+    if (lastSame && (now - lastSame.ts) < 60000) continue;
+    _signalHistory.push({ ts: now, id: s.id, value: s.value, message: s.message });
+    if (_signalHistory.length > SIGNAL_HISTORY_MAX) _signalHistory.shift();
+  }
+}
+
+function updateSignalHistory() {
+  const el = document.getElementById('signal-history-list');
+  if (!el) return;
+  if (_signalHistory.length === 0) {
+    el.innerHTML = '<span class="pattern-empty">No signals yet</span>';
+    return;
+  }
+  // Show newest first
+  el.innerHTML = [..._signalHistory].reverse().map(h => {
+    const cfg = SIGNAL_CLASSES[h.id] || { cls: 'badge-accum', icon: '●', label: h.id };
+    const valStr = h.value != null ? ` <span class="sh-val ${cfg.cls}">${h.value >= 0 ? '+' : ''}${(h.value * 100).toFixed(2)}%</span>` : '';
+    const t = new Date(h.ts);
+    const timeStr = t.toTimeString().slice(0, 5);
+    return `<div class="sh-row"><span class="sh-time">${timeStr}</span><span class="sh-label ${cfg.cls}">${cfg.icon} ${cfg.label}</span>${valStr}</div>`;
+  }).join('');
+}
 
 const PATTERN_LABELS = {
   OI_ACCUMULATION:    '📈 OI ACCUM',
@@ -675,6 +711,12 @@ async function updateSignals() {
   if (basisPanel && data && data.signals) {
     const hasSqueezeSignal = data.signals.some(s => s.id === 'squeeze_risk');
     basisPanel.style.background = hasSqueezeSignal ? 'rgba(255,61,92,0.04)' : '';
+  }
+
+  // Record active signals → history ring buffer, then refresh panel
+  if (data && data.signals) {
+    _recordSignals(data.signals);
+    updateSignalHistory();
   }
 }
 
