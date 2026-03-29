@@ -1,5 +1,4 @@
 """Tests for basis_flip and contango_flip signals."""
-import pytest
 from aggdash.backend.signals import SignalEngine, CONTANGO_BASIS_THRESHOLD
 
 
