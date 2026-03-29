@@ -4,8 +4,6 @@ signals.py — Real-time signal detection for bananas31-dashboard.
 Signals:
   - squeeze_watch: basis 0.1-0.2% + funding > 0 → early squeeze warning (ℹ️)
   - squeeze_risk: basis > 0.2% AND funding > 0 → longs stacking, squeeze risk (🚨)
-  - basis_flip: basis transitions between positive↔negative regime (🚨)
-  - contango_flip: basis < -0.1% AND OI stable → unusual spot premium expectation
   - arb_opportunity: DEX price deviation > 0.3% from CEX avg → arbitrage opportunity
   - oi_accumulation: OI delta > 3% AND price flat → accumulation
   - deleveraging: OI delta < -3% AND price delta < -0.5% → deleveraging
@@ -26,8 +24,6 @@ OI_DELEVERAGE_THRESHOLD = -0.03      # -3% OI drop (was -5%)
 PRICE_FLAT_THRESHOLD = 0.005         # price change < 0.5% = "flat"
 PRICE_DOWN_THRESHOLD = -0.005        # price change < -0.5% = "down" (was -1%)
 MIN_DATA_WINDOW_SECS = 60            # 60s minimum before firing signals (DB has enough history after restart)
-CONTANGO_BASIS_THRESHOLD = -0.001   # -0.1% — contango regime
-CONTANGO_OI_STABLE_THRESHOLD = 0.02 # ±2% OI change = "stable"
 
 
 class SignalEngine:
@@ -37,7 +33,6 @@ class SignalEngine:
         # ring_buffer reserved for future tick-level signal logic (e.g. CVD divergence)
         self._ring_buffer = ring_buffer
         self._start_time = time.time()
-        self._prev_agg_basis: Optional[float] = None  # track for basis_flip detection
 
     def _has_enough_data(self) -> bool:
         """Require at least 5 minutes of data before emitting signals."""
@@ -94,23 +89,6 @@ class SignalEngine:
                 signals.append(sig)
         except Exception as e:
             logger.warning("negative_basis error: %s", e)
-
-        try:
-            sig = self._basis_flip(snapshot)
-            if sig:
-                signals.append(sig)
-        except Exception as e:
-            logger.warning("basis_flip error: %s", e)
-
-        try:
-            sig = self._contango_flip(snapshot)
-            if sig:
-                signals.append(sig)
-        except Exception as e:
-            logger.warning("contango_flip error: %s", e)
-
-        # Update basis history for next flip detection
-        self._update_prev_basis(snapshot)
 
         return signals
 
@@ -312,97 +290,6 @@ class SignalEngine:
                 "threshold": OI_DELEVERAGE_THRESHOLD,
             }
         return None
-
-    # ------------------------------------------------------------------ #
-    # Negative-basis & flip signals                                        #
-    # ------------------------------------------------------------------ #
-
-    def _get_agg_basis(self, snapshot: Dict) -> Optional[float]:
-        """Extract aggregated basis as fraction (e.g. 0.00105 = 0.105%)."""
-        basis_data = snapshot.get("basis", {})
-        aggregated = basis_data.get("aggregated", {})
-        agg_basis_pct = aggregated.get("basis_pct")
-        if agg_basis_pct is None:
-            agg_basis_pct = basis_data.get("agg_basis_pct")
-        if agg_basis_pct is None:
-            return None
-        return float(agg_basis_pct) / 100.0
-
-    def _update_prev_basis(self, snapshot: Dict) -> None:
-        """Store current basis for next-cycle flip detection."""
-        current = self._get_agg_basis(snapshot)
-        if current is not None:
-            self._prev_agg_basis = current
-
-    def _basis_flip(self, snapshot: Dict) -> Optional[Dict]:
-        """
-        Basis transitions between positive↔negative regime.
-        Tracks previous cycle's basis sign and fires when sign flips.
-        """
-        if self._prev_agg_basis is None:
-            return None  # need at least 2 cycles
-
-        current = self._get_agg_basis(snapshot)
-        if current is None:
-            return None
-
-        prev_sign = 1 if self._prev_agg_basis >= 0 else -1
-        curr_sign = 1 if current >= 0 else -1
-
-        if prev_sign != curr_sign:
-            direction = "LONG" if curr_sign < 0 else "SHORT"
-            return {
-                "id": "basis_flip",
-                "name": "Basis Regime Flip",
-                "direction": direction.lower(),
-                "severity": "alert",
-                "message": (
-                    f"Basis flipped from {'positive' if prev_sign > 0 else 'negative'} "
-                    f"({self._prev_agg_basis*100:.3f}%) → "
-                    f"{'positive' if curr_sign > 0 else 'negative'} ({current*100:.3f}%)"
-                ),
-                "value": current,
-                "prev_value": self._prev_agg_basis,
-            }
-        return None
-
-    def _contango_flip(self, snapshot: Dict) -> Optional[Dict]:
-        """
-        Basis < -0.1% AND OI is stable (±2%) → unusual spot premium expectation.
-        Calibrated from issue #162: Bybit basis hit -0.015%, aggregate was +0.045%.
-        """
-        current = self._get_agg_basis(snapshot)
-        if current is None:
-            return None
-
-        # Check basis is deeply negative
-        if current >= CONTANGO_BASIS_THRESHOLD:
-            return None
-
-        # Check OI stability
-        oi_data = snapshot.get("oi_delta", {})
-        oi_delta_pct = oi_data.get("total_delta_pct")
-        if oi_delta_pct is None:
-            agg = oi_data.get("aggregated", {}) or {}
-            oi_delta_pct = agg.get("delta_pct")
-        if oi_delta_pct is None:
-            return None  # can't determine OI stability
-
-        if abs(oi_delta_pct) > CONTANGO_OI_STABLE_THRESHOLD:
-            return None  # OI too volatile
-
-        return {
-            "id": "contango_flip",
-            "name": "Contango Regime",
-            "direction": "long",
-            "severity": "warning",
-            "message": (
-                f"Basis {current*100:.2f}% + OI stable ({oi_delta_pct*100:+.1f}%) "
-                "→ perp well below spot, unusual premium expectation"
-            ),
-            "value": current,
-            "threshold": CONTANGO_BASIS_THRESHOLD,
-        }
 
 
 # ------------------------------------------------------------------ #

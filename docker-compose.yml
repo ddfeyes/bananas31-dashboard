@@ -1,0 +1,72 @@
+services:
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: aggdash-autoheal
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=60
+      - AUTOHEAL_START_PERIOD=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  aggdash-backend:
+    build:
+      context: ./aggdash/backend
+      dockerfile: Dockerfile
+    container_name: aggdash-backend
+    restart: unless-stopped
+    expose:
+      - "8768"
+    volumes:
+      - aggdash-data:/app/data
+    environment:
+      - API_PORT=8768
+      - DB_PATH=/app/data/aggdash.db
+      - BSC_HTTP_RPC=${BSC_HTTP_RPC:-https://bsc-mainnet.nodereal.io/v1/4138a0b4c2044d54aca77d92d0bc7947}
+      - BSC_WSS_RPC=${BSC_WSS_RPC:-wss://bsc-mainnet.nodereal.io/ws/v1/4138a0b4c2044d54aca77d92d0bc7947}
+      - BSC_POOL=${BSC_POOL:-0x7f51bbf34156ba802deb0e38b7671dc4fa32041d}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8768/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  aggdash-frontend:
+    image: nginx:alpine
+    container_name: aggdash-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8769}:80"
+    volumes:
+      - ./aggdash/frontend:/usr/share/nginx/html:ro
+      - ./aggdash/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+    depends_on:
+      - aggdash-backend
+
+volumes:
+  aggdash-data:

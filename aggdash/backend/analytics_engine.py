@@ -15,20 +15,25 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from ring_buffer import RingBuffer, Tick
+import db as _db
 
 logger = logging.getLogger(__name__)
 
+# Sources for which we persist OHLCV to price_feed (DB fallback for CVD)
+_OHLCV_SOURCES = ["binance-spot", "binance-perp", "bybit-perp", "bsc-pancakeswap"]
+
 # Source classification
-SPOT_SOURCES = ["binance-spot", "bybit-spot"]
+SPOT_SOURCES = ["binance-spot"]
 PERP_SOURCES = ["binance-perp", "bybit-perp"]
 DEX_SOURCES = ["bsc-pancakeswap"]
-ALL_CEX_SPOT = ["binance-spot", "bybit-spot"]
+ALL_CEX_SPOT = ["binance-spot"]
 ALL_CEX_PERP = ["binance-perp", "bybit-perp"]
 
 # Exchange mapping (exchange name → spot source, perp source)
+# Bybit has no spot for BANANAS31 — use Binance spot as reference for cross-exchange basis
 EXCHANGE_MAP = {
     "binance": ("binance-spot", "binance-perp"),
-    "bybit": ("bybit-spot", "bybit-perp"),
+    "bybit": ("binance-spot", "bybit-perp"),   # cross-exchange: bybit perp vs binance spot
 }
 
 
@@ -111,10 +116,27 @@ class AnalyticsEngine:
         """
         Compute CVD as a time-series (cumulative sum of per-bar VD).
         Returns {source: [{timestamp, cvd}, ...], aggregated: [...]}
+
+        Strategy:
+        1. Try ring buffer (in-memory ticks). If it covers >= 80% of requested window → use it.
+        2. Fallback: compute approximate CVD from price_feed DB bars (sign(close-open)*volume).
+           Less accurate than tick-level CVD but covers historical windows (1D, 7D).
         """
         all_ticks = await self.ring_buffer.get_ticks(source)
         cutoff = time.time() - window_secs
         ticks = [t for t in all_ticks if t.timestamp >= cutoff]
+
+        # Check ring buffer coverage — use DB fallback if < 80% covered
+        oldest_tick_ts = ticks[0].timestamp if ticks else None
+        ring_coverage = ((time.time() - oldest_tick_ts) / window_secs) if oldest_tick_ts else 0
+        use_db_fallback = ring_coverage < 0.80
+
+        if use_db_fallback:
+            return await self._compute_cvd_series_from_db(
+                interval_secs=interval_secs,
+                window_secs=window_secs,
+                source=source,
+            )
 
         if not ticks:
             return {"per_source": {}, "aggregated": []}
@@ -160,6 +182,80 @@ class AnalyticsEngine:
             "aggregated": agg_series,
             "interval_secs": interval_secs,
             "window_secs": window_secs,
+        }
+
+    async def _compute_cvd_series_from_db(
+        self,
+        interval_secs: int = 300,
+        window_secs: int = 86400,
+        source: Optional[str] = None,
+    ) -> Dict:
+        """
+        Approximate CVD from price_feed OHLCV bars in DB.
+        CVD bar delta = sign(close - open) * volume (standard OHLCV approximation).
+        Groups bars by interval_secs buckets.
+        """
+        srcs = [source] if source else _OHLCV_SOURCES
+        minutes = int(window_secs / 60) + 1
+
+        per_source_series: Dict[str, List[dict]] = {}
+        all_bar_keys: set = set()
+        bars_by_src: Dict[str, Dict[int, dict]] = {}
+
+        for src in srcs:
+            try:
+                ohlcv = await asyncio.get_event_loop().run_in_executor(
+                    None, _db.get_latest_ohlcv, src, minutes
+                )
+            except Exception as e:
+                logger.warning("DB CVD fallback error for %s: %s", src, e)
+                ohlcv = []
+
+            bucketed: Dict[int, dict] = {}
+            for bar in ohlcv:
+                bk = int(bar["timestamp"] // interval_secs) * interval_secs
+                if bk not in bucketed:
+                    bucketed[bk] = {"vol_buy": 0.0, "vol_sell": 0.0}
+                vol = bar.get("volume") or 0.0
+                if bar.get("close", 0) >= bar.get("open", 0):
+                    bucketed[bk]["vol_buy"] += vol
+                else:
+                    bucketed[bk]["vol_sell"] += vol
+                all_bar_keys.add(bk)
+            bars_by_src[src] = bucketed
+
+        sorted_keys = sorted(all_bar_keys)
+        aggregated_delta: Dict[int, float] = defaultdict(float)
+
+        for src in srcs:
+            bucketed = bars_by_src.get(src, {})
+            if not bucketed:
+                continue
+            series = []
+            cumulative = 0.0
+            for bk in sorted_keys:
+                b = bucketed.get(bk)
+                if b:
+                    delta = b["vol_buy"] - b["vol_sell"]
+                else:
+                    delta = 0.0
+                cumulative += delta
+                series.append({"timestamp": bk, "cvd": cumulative, "delta": delta})
+                aggregated_delta[bk] += delta
+            per_source_series[src] = series
+
+        agg_series = []
+        agg_cum = 0.0
+        for bk in sorted_keys:
+            agg_cum += aggregated_delta[bk]
+            agg_series.append({"timestamp": bk, "cvd": agg_cum, "delta": aggregated_delta[bk]})
+
+        return {
+            "per_source": per_source_series,
+            "aggregated": agg_series,
+            "interval_secs": interval_secs,
+            "window_secs": window_secs,
+            "source": "db_ohlcv_approx",
         }
 
     # ------------------------------------------------------------------ #
@@ -217,18 +313,20 @@ class AnalyticsEngine:
         self,
         interval_secs: int = 60,
         window_secs: int = 3600,
+        interval: str = "1m",
     ) -> Dict:
         """
         Compute basis as time-series from OHLCV bars.
         Returns per-exchange + aggregated [{timestamp, basis, basis_pct}]
+        interval: candle interval ('1m','5m','15m','1h','4h','1d')
         """
         from db import get_latest_ohlcv
         cutoff_minutes = window_secs // 60
 
-        # Fetch OHLCV close prices per source
+        # Fetch OHLCV close prices per source with correct interval
         source_bars: Dict[str, Dict[int, float]] = {}
         for src in ALL_CEX_SPOT + ALL_CEX_PERP:
-            bars = get_latest_ohlcv(src, minutes=cutoff_minutes)
+            bars = get_latest_ohlcv(src, minutes=cutoff_minutes, interval=interval)
             source_bars[src] = {b["timestamp"]: b["close"] for b in bars}
 
         # Collect all timestamps
@@ -351,50 +449,70 @@ class AnalyticsEngine:
     # OI delta                                                             #
     # ------------------------------------------------------------------ #
 
-    async def compute_oi_delta(self) -> Dict:
+    async def compute_oi_delta(self, window_secs: int = 300) -> Dict:
         """
-        Compute OI delta = current OI - OI 1 minute ago, per source and aggregated.
-        Uses in-memory OI history tracked by update_oi_history().
+        Compute OI delta = current OI vs OI ``window_secs`` ago, per source and aggregated.
+        Reads from DB (oi table) so it works even on a fresh restart.
+        Previously relied on an in-memory dict that was never populated.
         """
-        async with self.lock:
-            result = {}
-            agg_current = 0.0
-            agg_prev = 0.0
-            has_agg = False
+        from db import get_latest_oi_history
 
-            for source, history in self._oi_history.items():
-                if len(history) < 2:
-                    result[source] = {"oi": history[-1][1] if history else None, "delta": None, "delta_pct": None}
-                    continue
+        # Fetch enough history to cover the window (poller runs every 30s → ~10+ entries for 5 min)
+        limit = max(int(window_secs / 30) + 10, 20)
+        sources = ["binance-perp", "bybit-perp"]
+        result = {}
+        agg_current = 0.0
+        agg_prev = 0.0
+        has_agg = False
 
-                current_ts, current_oi = history[-1]
-                # Find entry ~60s ago
-                target_ts = current_ts - 60
-                prev = min(history[:-1], key=lambda x: abs(x[0] - target_ts))
-                prev_oi = prev[1]
+        now = time.time()
+        cutoff = now - window_secs
 
-                delta = current_oi - prev_oi
-                delta_pct = (delta / prev_oi * 100) if prev_oi else None
-                result[source] = {
-                    "oi": current_oi,
-                    "delta": delta,
-                    "delta_pct": delta_pct,
-                }
-                agg_current += current_oi
-                agg_prev += prev_oi
-                has_agg = True
+        for source in sources:
+            history = get_latest_oi_history(source, limit=limit)
+            if not history:
+                result[source] = {"oi": None, "delta": None, "delta_pct": None}
+                continue
 
-            agg_delta = agg_current - agg_prev if has_agg else None
-            agg_delta_pct = (agg_delta / agg_prev * 100) if (agg_prev and agg_delta is not None) else None
+            # Latest entry
+            current_oi = history[-1]["oi"]
+            if current_oi is None:
+                result[source] = {"oi": None, "delta": None, "delta_pct": None}
+                continue
 
-            return {
-                "per_source": result,
-                "aggregated": {
-                    "oi": agg_current if has_agg else None,
-                    "delta": agg_delta,
-                    "delta_pct": agg_delta_pct,
-                },
+            # Find entry closest to cutoff
+            prev_entry = min(
+                history, key=lambda x: abs(x["timestamp"] - cutoff)
+            )
+            prev_oi = prev_entry["oi"]
+
+            if prev_oi is None or prev_oi == 0:
+                result[source] = {"oi": current_oi, "delta": None, "delta_pct": None}
+                continue
+
+            delta = current_oi - prev_oi
+            # delta_pct is a fraction (0.05 = 5%) to match signal thresholds
+            delta_pct = (delta / prev_oi)
+            result[source] = {
+                "oi": current_oi,
+                "delta": delta,
+                "delta_pct": delta_pct,
             }
+            agg_current += current_oi
+            agg_prev += prev_oi
+            has_agg = True
+
+        agg_delta = agg_current - agg_prev if has_agg else None
+        agg_delta_pct = (agg_delta / agg_prev) if (agg_prev and agg_delta is not None) else None
+
+        return {
+            "per_source": result,
+            "aggregated": {
+                "oi": agg_current if has_agg else None,
+                "delta": agg_delta,
+                "delta_pct": agg_delta_pct,
+            },
+        }
 
     async def update_oi_history(self, source: str, oi: float):
         """Record a new OI snapshot into the internal history (called by poller)."""
@@ -412,6 +530,7 @@ class AnalyticsEngine:
 
         per_source: Dict[str, List[dict]] = {}
         agg_by_ts: Dict[int, float] = defaultdict(float)
+        agg_oi_by_ts: Dict[int, float] = defaultdict(float)  # absolute OI per bucket
 
         for src in ["binance-perp", "bybit-perp"]:
             history = get_latest_oi_history(src, limit=int(window_secs / 30) + 10)
@@ -432,10 +551,14 @@ class AnalyticsEngine:
                     "delta": delta,
                 })
                 agg_by_ts[bar_ts] += delta
+                agg_oi_by_ts[bar_ts] += curr["oi"]  # sum OI across exchanges
 
             per_source[src] = series
 
-        agg_series = [{"timestamp": ts, "delta": delta} for ts, delta in sorted(agg_by_ts.items())]
+        agg_series = [
+            {"timestamp": ts, "oi": agg_oi_by_ts.get(ts, 0.0), "delta": delta}
+            for ts, delta in sorted(agg_by_ts.items())
+        ]
         return {"per_source": per_source, "aggregated": agg_series, "window_secs": window_secs}
 
     # ------------------------------------------------------------------ #
@@ -448,7 +571,8 @@ class AnalyticsEngine:
             return {"error": "OI/funding poller not available"}
 
         rates = self.oi_funding_poller.get_latest_funding()
-        values = [v for v in rates.values() if v is not None]
+        # rates values are dicts like {"rate_8h": 0.0002, "rate_1h": ...} — extract rate_8h
+        values = [v["rate_8h"] for v in rates.values() if v is not None and isinstance(v, dict) and "rate_8h" in v]
         avg_rate = sum(values) / len(values) if values else None
         annualized = avg_rate * 3 * 365 * 100 if avg_rate is not None else None  # 3 periods/day
 

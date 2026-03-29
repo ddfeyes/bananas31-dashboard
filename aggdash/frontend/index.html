@@ -1,249 +1,382 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>aggdash — BANANAS31 Multi-Exchange Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css" />
-  <!-- Chart.js with date-fns adapter -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BANANAS31 Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/dashboard.css">
 </head>
 <body>
+
 <div class="app">
 
-  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <!-- ════════════════════════════════════════
+       HEADER — primary prices
+  ════════════════════════════════════════ -->
   <header class="header">
-    <div class="header-logo">agg<span>dash</span></div>
-
-    <div class="header-price">
-      <div class="price-value" id="header-price-val">–</div>
-      <div class="price-change" id="header-price-change">BANANAS31USDT</div>
+    <div class="header-logo">
+      <span class="logo-name">BANANAS31</span>
+      <span class="logo-sub">Real-Time Terminal</span>
     </div>
 
-    <div class="header-stats">
-      <div class="stat-item">
-        <span class="stat-label">BN Spot</span>
-        <span class="stat-value" id="stat-bn-spot" style="color:#f0b90b">–</span>
+    <div class="header-sep"></div>
+
+    <div class="header-prices">
+      <div class="price-cell">
+        <span class="price-cell-label">BN-SPOT</span>
+        <span class="price-cell-value" id="hdr-bn-spot">—</span>
+        <span class="price-cell-change" id="hdr-bn-spot-chg"></span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BN Perp</span>
-        <span class="stat-value" id="stat-bn-perp" style="color:#f0d060">–</span>
+      <div class="header-sep"></div>
+      <div class="price-cell">
+        <span class="price-cell-label">BN-PERP</span>
+        <span class="price-cell-value" id="hdr-bn-perp">—</span>
+        <span class="price-cell-change" id="hdr-bn-perp-chg"></span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BB Spot</span>
-        <span class="stat-value" id="stat-bb-spot" style="color:#ff6b2b">–</span>
+      <div class="header-sep"></div>
+      <div class="price-cell">
+        <span class="price-cell-label">BB-PERP</span>
+        <span class="price-cell-value" id="hdr-bb-perp">—</span>
+        <span class="price-cell-change" id="hdr-bb-perp-chg"></span>
       </div>
-      <div class="stat-item">
-        <span class="stat-label">BB Perp</span>
-        <span class="stat-value" id="stat-bb-perp" style="color:#ffaa80">–</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">DEX</span>
-        <span class="stat-value" id="stat-dex" style="color:#00d4ff">–</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Basis</span>
-        <span class="stat-value" id="stat-basis">–</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Agg OI</span>
-        <span class="stat-value" id="stat-oi" style="color:#3d87ff">–</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Funding</span>
-        <span class="stat-value" id="stat-funding">–</span>
+      <div class="header-sep"></div>
+      <div class="price-cell">
+        <span class="price-cell-label">DEX</span>
+        <span class="price-cell-value" id="hdr-dex">—</span>
+        <span class="price-cell-change" id="hdr-dex-chg"></span>
       </div>
     </div>
 
-    <div class="header-right">
-      <div class="connection-badge">
-        <div class="connection-dot" id="conn-dot"></div>
-        <span id="conn-label">Connecting…</span>
-      </div>
+    <div class="header-conn">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span class="conn-label" id="conn-label">—</span>
+      <span class="conn-ts" id="conn-ts"></span>
     </div>
   </header>
 
-  <!-- ── Controls ────────────────────────────────────────────────────── -->
-  <div class="controls-bar">
-    <div class="controls-section">
-      <span class="controls-label">Timeframe</span>
-      <div class="btn-group">
-        <button data-tf="1m">1m</button>
-        <button data-tf="5m" class="active">5m</button>
-        <button data-tf="15m">15m</button>
-        <button data-tf="1h">1h</button>
-      </div>
+  <!-- ════════════════════════════════════════
+       STATS STRIP — secondary metrics
+  ════════════════════════════════════════ -->
+  <div class="stats-strip">
+    <div class="stat-cell">
+      <span class="stat-label">BN-FUND</span>
+      <span class="stat-value" id="stat-bn-fund">—</span>
     </div>
-
-    <div class="controls-section">
-      <span class="controls-label">Sources</span>
-      <button class="toggle-btn binance-spot active" data-source="binance-spot">
-        <span class="dot"></span>BN Spot
-      </button>
-      <button class="toggle-btn binance-perp active" data-source="binance-perp">
-        <span class="dot"></span>BN Perp
-      </button>
-      <button class="toggle-btn bybit-spot active" data-source="bybit-spot">
-        <span class="dot"></span>BB Spot
-      </button>
-      <button class="toggle-btn bybit-perp active" data-source="bybit-perp">
-        <span class="dot"></span>BB Perp
-      </button>
-      <button class="toggle-btn dex active" data-source="bsc-pancakeswap">
-        <span class="dot"></span>DEX
-      </button>
+    <div class="stat-cell">
+      <span class="stat-label">BB-FUND</span>
+      <span class="stat-value" id="stat-bb-fund">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">OI</span>
+      <span class="stat-value" id="stat-oi">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">OI-TOT</span>
+      <span class="stat-value" id="stat-oi-total">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">OI/24H</span>
+      <span class="stat-value" id="stat-oi-24h">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">DEX-SPREAD</span>
+      <span class="stat-value" id="stat-dex-spread">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">DEX-TVL</span>
+      <span class="stat-value" id="stat-dex-tvl">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">VOL-24H</span>
+      <span class="stat-value" id="stat-vol-24h">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">24H-H</span>
+      <span class="stat-value up" id="stat-24h-high">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">24H-L</span>
+      <span class="stat-value dn" id="stat-24h-low">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">LIQ-1H</span>
+      <span class="stat-value" id="stat-liq-1h">—</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-label">PERP/S</span>
+      <span class="stat-value" id="stat-perp-spot-ratio">—</span>
     </div>
   </div>
 
-  <!-- ── Dashboard Grid ──────────────────────────────────────────────── -->
-  <div class="dashboard">
+  <!-- ════════════════════════════════════════
+       CONTROLS BAR
+  ════════════════════════════════════════ -->
+  <div class="controls-bar">
+    <!-- Timeframe -->
+    <div class="tf-group">
+      <button class="tf-btn" data-interval="1m">1m</button>
+      <button class="tf-btn" data-interval="5m">5m</button>
+      <button class="tf-btn" data-interval="15m">15m</button>
+      <button class="tf-btn" data-interval="1h">1H</button>
+      <button class="tf-btn active" data-interval="4h">4H</button>
+      <button class="tf-btn" data-interval="1d">1D</button>
+      <button class="tf-btn" data-interval="1w">1W</button>
+    </div>
 
-    <!-- Chart 1: Price -->
-    <div class="panel full-width" style="min-height:240px">
-      <div class="panel-header">
-        <span class="panel-title">Price</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg Spot</span>
-            <span class="panel-stat-value" id="ps-agg-spot">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg Perp</span>
-            <span class="panel-stat-value" id="ps-agg-perp">–</span>
+    <div class="controls-sep"></div>
+
+    <!-- Exchange toggles -->
+    <div class="exc-group">
+      <button class="exc-btn bn-s active" data-exc="binance-spot">
+        <span class="exc-dot"></span>BN-S
+      </button>
+      <button class="exc-btn bn-p active" data-exc="binance-perp">
+        <span class="exc-dot"></span>BN-P
+      </button>
+      <button class="exc-btn bb-p active" data-exc="bybit-perp">
+        <span class="exc-dot"></span>BB-P
+      </button>
+      <button class="exc-btn dex active" data-exc="dex">
+        <span class="exc-dot"></span>DEX
+      </button>
+    </div>
+
+    <div class="controls-sep"></div>
+
+    <!-- Live signals summary -->
+    <div id="signals-summary">
+      <span class="signal-badge-mini quiet">No active signals</span>
+    </div>
+
+    <!-- Liq feed toggle -->
+    <button class="liq-toggle-btn" id="liq-toggle-btn" onclick="toggleLiqFeed()">
+      LIQ FEED ▾
+    </button>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       MAIN CONTENT AREA
+  ════════════════════════════════════════ -->
+  <div class="content-area">
+
+    <!-- Chart column -->
+    <div class="charts-col">
+
+      <!-- Price + Volume -->
+      <div class="chart-panel" id="panel-price">
+        <div class="panel-header">
+          <span class="panel-label">Price + Volume</span>
+          <span class="panel-live-val" id="live-price">—</span>
+          <div class="panel-legend">
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#f0b90b"></span>BN-S
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#f0d060"></span>BN-P
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#ff9d6b"></span>BB-P
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#00c8f5"></span>DEX
+            </span>
           </div>
         </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-price"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 2: Basis -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Basis (Perp − Spot)</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">BN</span>
-            <span class="panel-stat-value" id="ps-basis-bn">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">BB</span>
-            <span class="panel-stat-value" id="ps-basis-bb">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg</span>
-            <span class="panel-stat-value" id="ps-basis-agg">–</span>
-          </div>
+        <div class="chart-body" id="chart-price-body">
+          <div class="panel-skeleton visible" id="skel-price"></div>
+          <div id="price-tooltip"></div>
         </div>
       </div>
-      <div class="chart-container">
-        <canvas id="chart-basis"></canvas>
-      </div>
-    </div>
 
-    <!-- Chart 3: Volume -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Volume</span>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-volume"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 4: OI -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Open Interest + OI Delta</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Total OI</span>
-            <span class="panel-stat-value" id="ps-oi">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">Δ 1m</span>
-            <span class="panel-stat-value" id="ps-oi-delta">–</span>
+      <!-- Basis % -->
+      <div class="chart-panel" id="panel-basis">
+        <div class="panel-header">
+          <span class="panel-label">Basis %</span>
+          <span class="panel-live-val" id="live-basis">—</span>
+          <div class="panel-legend">
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#f0b90b"></span>BN
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#9d6fff"></span>BB
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#4a8fff"></span>AGG
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch dashed" style="color:rgba(200,210,230,0.6)"></span>MA7D
+            </span>
           </div>
         </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-oi"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 5: CVD -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">Cumulative Volume Delta (CVD)</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Agg CVD</span>
-            <span class="panel-stat-value" id="ps-cvd-agg">–</span>
-          </div>
+        <div class="chart-body" id="chart-basis-body">
+          <div class="panel-skeleton visible" id="skel-basis"></div>
         </div>
       </div>
-      <div class="chart-container">
-        <canvas id="chart-cvd"></canvas>
-      </div>
-    </div>
 
-    <!-- Chart 6: DEX Spread -->
-    <div class="panel" style="min-height:200px">
-      <div class="panel-header">
-        <span class="panel-title">DEX vs CEX Spread</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Spread</span>
-            <span class="panel-stat-value" id="ps-spread">–</span>
-          </div>
-          <div class="panel-stat">
-            <span class="panel-stat-label">%</span>
-            <span class="panel-stat-value" id="ps-spread-pct">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="chart-container">
-        <canvas id="chart-spread"></canvas>
-      </div>
-    </div>
-
-    <!-- Chart 7: Liquidations -->
-    <div class="panel full-width" style="min-height:220px">
-      <div class="panel-header">
-        <span class="panel-title">Liquidations</span>
-        <div class="panel-stats">
-          <div class="panel-stat">
-            <span class="panel-stat-label">Feed (live)</span>
+      <!-- Open Interest -->
+      <div class="chart-panel" id="panel-oi">
+        <div class="panel-header">
+          <span class="panel-label">Open Interest</span>
+          <span class="panel-live-val" id="live-oi">—</span>
+          <div class="panel-legend">
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#4a8fff"></span>AGG
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#f0b90b"></span>BN
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background:#9d6fff"></span>BB
+            </span>
           </div>
         </div>
+        <div class="chart-body" id="chart-oi-body">
+          <div class="panel-skeleton visible" id="skel-oi"></div>
+        </div>
       </div>
-      <div class="liq-panel">
-        <div class="liq-feed" id="liq-feed"></div>
-        <div class="liq-heatmap" id="liq-heatmap"></div>
+
+      <!-- Bottom 4-panel row -->
+      <div class="bottom-panels">
+
+        <!-- CVD -->
+        <div class="bottom-panel" id="panel-cvd">
+          <div class="panel-header">
+            <span class="panel-label">CVD</span>
+            <span class="panel-live-val" id="live-cvd">—</span>
+          </div>
+          <div class="chart-body" id="chart-cvd-body">
+            <div class="panel-skeleton visible" id="skel-cvd"></div>
+          </div>
+        </div>
+
+        <!-- Volume -->
+        <div class="bottom-panel" id="panel-volume">
+          <div class="panel-header">
+            <span class="panel-label">Volume</span>
+            <span class="panel-live-val" id="live-vol">—</span>
+          </div>
+          <div class="chart-body" id="chart-volume-body">
+            <div class="panel-skeleton visible" id="skel-vol"></div>
+          </div>
+        </div>
+
+        <!-- Funding -->
+        <div class="bottom-panel" id="panel-funding">
+          <div class="panel-header">
+            <span class="panel-label">Funding Rate</span>
+            <span class="panel-live-val" id="live-funding">—</span>
+          </div>
+          <div class="chart-body" id="chart-funding-body">
+            <div class="panel-skeleton visible" id="skel-fund"></div>
+          </div>
+        </div>
+
+        <!-- Liquidations chart -->
+        <div class="bottom-panel" id="panel-liq-chart">
+          <div class="panel-header">
+            <span class="panel-label">Liquidations</span>
+            <span class="panel-live-val" id="live-liq">—</span>
+            <div class="panel-legend">
+              <span class="legend-item"><span class="legend-swatch" style="background:#ff3d5c"></span>LONG</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#00c97a"></span>SHORT</span>
+            </div>
+          </div>
+          <div class="chart-body" id="chart-liq-body">
+            <div class="panel-skeleton visible" id="skel-liq"></div>
+          </div>
+        </div>
+
+      </div><!-- /bottom-panels -->
+
+    </div><!-- /charts-col -->
+
+    <!-- Signal sidebar -->
+    <aside class="signal-sidebar" id="signal-sidebar">
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Active Signal</div>
+        <div class="sidebar-signal-main" id="sidebar-signal-main">
+          <span class="signal-name quiet">No active signals</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section" id="prob-section" style="display:none">
+        <div class="sidebar-label">Basis Squeeze Outcomes</div>
+        <div class="prob-row">
+          <span class="prob-label">30m</span>
+          <div class="prob-bar-track"><div class="prob-bar-fill" id="prob-bar-30" style="width:0%"></div></div>
+          <span class="prob-pct" id="prob-pct-30">—</span>
+          <span class="prob-avg" id="prob-avg-30">—</span>
+        </div>
+        <div class="prob-row">
+          <span class="prob-label">1h</span>
+          <div class="prob-bar-track"><div class="prob-bar-fill" id="prob-bar-60" style="width:0%"></div></div>
+          <span class="prob-pct" id="prob-pct-60">—</span>
+          <span class="prob-avg" id="prob-avg-60">—</span>
+        </div>
+        <div class="prob-row">
+          <span class="prob-label">2h</span>
+          <div class="prob-bar-track"><div class="prob-bar-fill" id="prob-bar-120" style="width:0%"></div></div>
+          <span class="prob-pct" id="prob-pct-120">—</span>
+          <span class="prob-avg" id="prob-avg-120">—</span>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-ghost);margin-top:6px" id="prob-sample">—</div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Patterns</div>
+        <div id="sidebar-patterns">
+          <span class="pattern-empty">—</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section" style="flex:1;overflow:hidden">
+        <div class="sidebar-label">Recent Alerts</div>
+        <div id="sidebar-alerts">
+          <span class="pattern-empty">—</span>
+        </div>
+      </div>
+
+    </aside>
+
+  </div><!-- /content-area -->
+
+  <!-- ════════════════════════════════════════
+       LIQUIDATION FEED (collapsible)
+  ════════════════════════════════════════ -->
+  <div class="liq-feed-section" id="liq-feed-section">
+    <div class="liq-feed-inner">
+      <div class="liq-feed-table" id="liq-feed-table">
+        <div class="liq-feed-empty">Waiting for liquidations…</div>
+      </div>
+      <div class="liq-heatmap" id="liq-heatmap">
+        <div class="liq-heatmap-title">24H by Exchange</div>
+        <div id="liq-hm-rows"></div>
       </div>
     </div>
+  </div>
 
-    <!-- Chart 8: Funding -->
-    <div class="panel full-width" style="min-height:140px">
-      <div class="panel-header">
-        <span class="panel-title">Funding Rates</span>
-      </div>
-      <div class="funding-grid" id="funding-grid">
-        <!-- Populated by JS -->
-      </div>
-    </div>
-
-  </div><!-- /dashboard -->
 </div><!-- /app -->
 
-<script src="js/api.js"></script>
-<script src="js/charts.js"></script>
-<script src="js/main.js"></script>
+<script src="js/api.js?v=202603282200"></script>
+<script src="js/charts.js?v=202603282200"></script>
+<script src="js/main.js?v=202603282200"></script>
+
+<script>
+// Liq feed toggle
+function toggleLiqFeed() {
+  const section = document.getElementById('liq-feed-section');
+  const btn = document.getElementById('liq-toggle-btn');
+  const isOpen = section.classList.contains('open');
+  section.classList.toggle('open', !isOpen);
+  btn.classList.toggle('active', !isOpen);
+  btn.textContent = isOpen ? 'LIQ FEED ▾' : 'LIQ FEED ▴';
+}
+</script>
+
 </body>
 </html>

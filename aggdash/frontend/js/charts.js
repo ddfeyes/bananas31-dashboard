@@ -1,631 +1,498 @@
 /**
- * aggdash chart management — Chart.js powered
+ * BANANAS31 charts v2.0 — TradingView Lightweight Charts v4
+ * Updated for redesigned layout (chart-body containers, new theme)
  */
 
-const COLORS = {
-  'binance-spot':  '#f0b90b',
-  'binance-perp':  '#f0d060',
-  'bybit-spot':    '#ff6b2b',
-  'bybit-perp':    '#ffaa80',
-  'bsc-pancakeswap': '#00d4ff',
-  'agg-spot':      '#00d084',
-  'agg-perp':      '#80e8c0',
-  basis_binance:   '#3d87ff',
-  basis_bybit:     '#a855f7',
-  basis_agg:       '#ffd24d',
-  oi_total:        '#3d87ff',
-  oi_delta:        '#ff4d6a',
-  spread:          '#00d4ff',
-};
-
-const LABEL_MAP = {
-  'binance-spot':  'BN Spot',
-  'binance-perp':  'BN Perp',
-  'bybit-spot':    'BB Spot',
-  'bybit-perp':    'BB Perp',
-  'bsc-pancakeswap': 'DEX',
-  'agg-spot':      'Agg Spot',
-  'agg-perp':      'Agg Perp',
-};
-
-const CHART_DEFAULTS = {
-  animation: false,
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: 'index', intersect: false },
-  plugins: {
-    legend: {
-      display: true,
-      position: 'top',
-      align: 'end',
-      labels: {
-        color: '#8892a4',
-        font: { size: 10, family: "'JetBrains Mono', monospace" },
-        boxWidth: 10,
-        boxHeight: 2,
-        padding: 8,
-      }
-    },
-    tooltip: {
-      backgroundColor: 'rgba(17,19,24,0.95)',
-      borderColor: '#2a3047',
-      borderWidth: 1,
-      titleColor: '#8892a4',
-      bodyColor: '#e8eaf0',
-      titleFont: { size: 10, family: "'JetBrains Mono', monospace" },
-      bodyFont: { size: 10, family: "'JetBrains Mono', monospace" },
-      padding: 8,
-    }
+const CHART_THEME = {
+  layout: {
+    background:  { color: '#090c14' },
+    textColor:   '#3d4a60',
+    fontFamily:  "'JetBrains Mono', monospace",
+    fontSize:    9,
   },
-  scales: {
-    x: {
-      type: 'time',
-      time: { unit: 'minute', tooltipFormat: 'HH:mm', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
-      grid: { color: '#1f2433', drawBorder: false },
-      ticks: { color: '#4d566a', font: { size: 9 }, maxRotation: 0, autoSkipPadding: 20 },
+  grid: {
+    vertLines:  { color: 'rgba(255,255,255,0.025)' },
+    horzLines:  { color: 'rgba(255,255,255,0.04)' },
+  },
+  crosshair: {
+    mode: LightweightCharts.CrosshairMode.Normal,
+    vertLine: { color: 'rgba(120,150,200,0.3)', labelBackgroundColor: '#111828' },
+    horzLine: { color: 'rgba(120,150,200,0.3)', labelBackgroundColor: '#111828' },
+  },
+  rightPriceScale: {
+    borderColor:   'rgba(255,255,255,0.06)',
+    textColor:     '#3d4a60',
+    scaleMargins:  { top: 0.08, bottom: 0.08 },
+  },
+  timeScale: {
+    borderColor:              'rgba(255,255,255,0.06)',
+    timeVisible:              true,
+    secondsVisible:           false,
+    rightOffset:              8,
+    barSpacing:               6,
+    fixRightEdge:             false,
+    fixLeftEdge:              false,
+    lockVisibleTimeRangeOnResize: true,
+    tickMarkFormatter: (time) => {
+      const d = new Date(time * 1000);
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
     },
-    y: {
-      position: 'right',
-      grid: { color: '#1f2433', drawBorder: false },
-      ticks: { color: '#8892a4', font: { size: 9, family: "'JetBrains Mono', monospace" } },
-    }
-  }
+  },
+  handleScroll: {
+    mouseWheel:      true,
+    pressedMouseMove: true,
+    horzTouchDrag:   true,
+    vertTouchDrag:   false,
+  },
+  handleScale: {
+    mouseWheel:  true,
+    pinch:       true,
+    axisPressedMouseMove: { time: true, price: true },
+  },
 };
 
-function makeChartConfig(type, datasets, yFormat, extraScales) {
-  const cfg = JSON.parse(JSON.stringify(CHART_DEFAULTS));
-  cfg.type = type || 'line';
-  cfg.data = { datasets: [] };
-  cfg.options = {
-    ...cfg,
-    plugins: CHART_DEFAULTS.plugins,
-    scales: {
-      ...CHART_DEFAULTS.scales,
-      ...(extraScales || {}),
-    }
-  };
-  if (yFormat) {
-    cfg.options.scales.y = {
-      ...CHART_DEFAULTS.scales.y,
-      ticks: {
-        ...CHART_DEFAULTS.scales.y.ticks,
-        callback: yFormat,
-      }
-    };
-  }
-  return cfg;
+// Sub-panel theme — no time scale (shown only on price panel)
+const SUB_CHART_THEME = {
+  ...CHART_THEME,
+  timeScale: { ...CHART_THEME.timeScale, visible: false },
+};
+
+const PRICE_FMT = { type: 'price', precision: 6, minMove: 0.000001 };
+
+// ── Price + Volume Panel ─────────────────────────────────────────────
+
+let priceChart, candleSeries, volumeSeries, bnPerpLine, bbPerpLine, dexLine;
+
+function initPriceChart() {
+  const container = document.getElementById('chart-price-body');
+  priceChart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    autoSize: true,
+  });
+
+  candleSeries = priceChart.addCandlestickSeries({
+    upColor:       '#00c97a',
+    downColor:     '#ff3d5c',
+    borderUpColor: '#00c97a',
+    borderDownColor: '#ff3d5c',
+    wickUpColor:   '#00c97a',
+    wickDownColor: '#ff3d5c',
+    priceFormat:   PRICE_FMT,
+  });
+
+  volumeSeries = priceChart.addHistogramSeries({
+    color:       'rgba(74,143,255,0.35)',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'volume',
+  });
+  priceChart.priceScale('volume').applyOptions({
+    scaleMargins: { top: 0.82, bottom: 0 },
+    drawTicks: false,
+    visible: false,
+  });
+
+  // Binance perp line — lighter gold
+  bnPerpLine = priceChart.addLineSeries({
+    color: 'rgba(240,208,96,0.7)',
+    lineWidth: 1,
+    priceFormat: PRICE_FMT,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  // Bybit perp line — light orange
+  bbPerpLine = priceChart.addLineSeries({
+    color: 'rgba(255,157,107,0.7)',
+    lineWidth: 1,
+    priceFormat: PRICE_FMT,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  // DEX line — cyan
+  dexLine = priceChart.addLineSeries({
+    color: 'rgba(0,200,245,0.7)',
+    lineWidth: 1,
+    priceFormat: PRICE_FMT,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  // Tooltip
+  priceChart.subscribeCrosshairMove(param => {
+    updatePriceTooltip(param, container);
+  });
+
+  // Clear skeleton when chart has data
+  priceChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-price');
+  });
 }
 
-// ── Chart: Price Panel ────────────────────────────────────────────────
+function updatePriceTooltip(param, container) {
+  const tooltip = document.getElementById('price-tooltip');
+  if (!tooltip) return;
 
-class PriceChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        plugins: {
-          ...CHART_DEFAULTS.plugins,
-          tooltip: {
-            ...CHART_DEFAULTS.plugins.tooltip,
-            callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${fmtPrice(ctx.parsed.y)}`
-            }
-          }
-        },
-        scales: {
-          x: CHART_DEFAULTS.scales.x,
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            ticks: {
-              ...CHART_DEFAULTS.scales.y.ticks,
-              callback: v => fmtPrice(v),
-            }
-          }
+  if (!param || !param.time || !param.seriesData || param.seriesData.size === 0) {
+    tooltip.style.display = 'none';
+    return;
+  }
+
+  const candle = param.seriesData.get(candleSeries);
+  if (!candle) { tooltip.style.display = 'none'; return; }
+
+  const d = new Date(param.time * 1000);
+  const ts = d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+
+  const oc = candle.close >= candle.open ? 'up' : 'dn';
+
+  tooltip.innerHTML = `
+    <div class="tt-time">${ts}</div>
+    <div class="tt-row"><span class="tt-label">O</span><span class="tt-val ${oc}">${candle.open.toFixed(6)}</span></div>
+    <div class="tt-row"><span class="tt-label">H</span><span class="tt-val up">${candle.high.toFixed(6)}</span></div>
+    <div class="tt-row"><span class="tt-label">L</span><span class="tt-val dn">${candle.low.toFixed(6)}</span></div>
+    <div class="tt-row"><span class="tt-label">C</span><span class="tt-val ${oc}">${candle.close.toFixed(6)}</span></div>
+  `;
+
+  const rect = container.getBoundingClientRect();
+  let x = param.point.x + 12;
+  let y = param.point.y - 10;
+  const ttW = 170, ttH = 100;
+  if (x + ttW > rect.width) x = param.point.x - ttW - 8;
+  if (y + ttH > rect.height) y = rect.height - ttH - 10;
+
+  tooltip.style.left = x + 'px';
+  tooltip.style.top  = y + 'px';
+  tooltip.style.display = 'block';
+}
+
+// ── Basis Panel ──────────────────────────────────────────────────────
+
+let basisChart, bnBasisLine, bbBasisLine, aggBasisLine, ma7dBasisLine;
+
+function initBasisChart() {
+  const container = document.getElementById('chart-basis-body');
+  basisChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  const BASIS_FMT = { type: 'price', precision: 4, minMove: 0.0001 };
+
+  // Zero reference line
+  const zeroLine = basisChart.addLineSeries({
+    color: 'rgba(255,255,255,0.07)',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+    crosshairMarkerVisible: false,
+  });
+  // Store for later use when we know time range
+  window._basisZeroLine = zeroLine;
+
+  bnBasisLine = basisChart.addLineSeries({
+    color: 'rgba(240,185,11,0.7)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+  });
+
+  bbBasisLine = basisChart.addLineSeries({
+    color: 'rgba(157,111,255,0.7)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+  });
+
+  aggBasisLine = basisChart.addLineSeries({
+    color: '#4a8fff',
+    lineWidth: 2,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+  });
+
+  ma7dBasisLine = basisChart.addLineSeries({
+    color: 'rgba(200,210,230,0.45)',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    priceFormat: BASIS_FMT,
+    title: 'MA7D',
+  });
+
+  basisChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-basis');
+  });
+}
+
+// ── OI Panel ─────────────────────────────────────────────────────────
+
+let oiChart, aggOISeries, bnOISeries, bbOISeries;
+
+function initOIChart() {
+  const container = document.getElementById('chart-oi-body');
+  oiChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  aggOISeries = oiChart.addAreaSeries({
+    topColor:    'rgba(74,143,255,0.18)',
+    bottomColor: 'rgba(74,143,255,0.0)',
+    lineColor:   '#4a8fff',
+    lineWidth:   2,
+    lastValueVisible: true,
+    priceLineVisible: false,
+  });
+
+  bnOISeries = oiChart.addLineSeries({
+    color: 'rgba(240,185,11,0.7)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  bbOISeries = oiChart.addLineSeries({
+    color: 'rgba(157,111,255,0.7)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+
+  oiChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-oi');
+  });
+}
+
+// ── CVD Panel ─────────────────────────────────────────────────────────
+
+let cvdChart, aggCVDLine, bnPerpCVDLine, bbPerpCVDLine;
+
+function initCVDChart() {
+  const container = document.getElementById('chart-cvd-body');
+  if (!container) return;
+  cvdChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  const VOL_FMT = { type: 'volume', precision: 0, minMove: 1 };
+
+  aggCVDLine = cvdChart.addAreaSeries({
+    topColor:    'rgba(0,201,122,0.15)',
+    bottomColor: 'rgba(255,61,92,0.10)',
+    lineColor:   '#00c97a',
+    lineWidth:   2,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+
+  bnPerpCVDLine = cvdChart.addLineSeries({
+    color: 'rgba(240,185,11,0.6)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+
+  bbPerpCVDLine = cvdChart.addLineSeries({
+    color: 'rgba(157,111,255,0.6)',
+    lineWidth: 1,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: VOL_FMT,
+  });
+
+  cvdChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-cvd');
+  });
+}
+
+// ── Volume Panel ─────────────────────────────────────────────────────
+
+let volChart, bnSpotVolSeries, bnPerpVolSeries, bbPerpVolSeries;
+
+function initVolumeChart() {
+  const container = document.getElementById('chart-volume-body');
+  if (!container) return;
+  volChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  bnSpotVolSeries = volChart.addHistogramSeries({
+    color:        'rgba(240,185,11,0.55)',
+    priceFormat:  { type: 'volume' },
+    priceScaleId: 'left',
+    lastValueVisible: false,
+  });
+  volChart.priceScale('left').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0 },
+    drawTicks: false,
+  });
+
+  bnPerpVolSeries = volChart.addHistogramSeries({
+    color:        'rgba(255,122,53,0.55)',
+    priceFormat:  { type: 'volume' },
+    priceScaleId: 'right',
+    lastValueVisible: false,
+  });
+
+  bbPerpVolSeries = volChart.addHistogramSeries({
+    color:        'rgba(157,111,255,0.55)',
+    priceFormat:  { type: 'volume' },
+    priceScaleId: 'right',
+    lastValueVisible: false,
+  });
+  volChart.priceScale('right').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0 },
+    drawTicks: false,
+  });
+
+  volChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-vol');
+  });
+}
+
+// ── Funding Rate Chart ───────────────────────────────────────────────
+
+let fundingChart, bnFundingSeries, bbFundingSeries, bn1hFundingSeries, bb1hFundingSeries;
+
+function initFundingChart() {
+  const container = document.getElementById('chart-funding-body');
+  if (!container) return;
+  fundingChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  const FUND_FMT = { type: 'custom', formatter: v => (v * 100).toFixed(5) + '%' };
+
+  bnFundingSeries = fundingChart.addLineSeries({
+    color: '#f0b90b',
+    lineWidth: 1,
+    priceFormat: FUND_FMT,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    title: 'BN 8H',
+  });
+
+  bbFundingSeries = fundingChart.addLineSeries({
+    color: '#9d6fff',
+    lineWidth: 1,
+    priceFormat: FUND_FMT,
+    lastValueVisible: true,
+    priceLineVisible: false,
+    title: 'BB 8H',
+  });
+
+  bn1hFundingSeries = fundingChart.addLineSeries({
+    color: 'rgba(240,185,11,0.5)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceFormat: FUND_FMT,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    title: 'BN 1H',
+  });
+
+  bb1hFundingSeries = fundingChart.addLineSeries({
+    color: 'rgba(157,111,255,0.5)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceFormat: FUND_FMT,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    title: 'BB 1H',
+  });
+
+  fundingChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-fund');
+  });
+}
+
+// ── Liquidations Panel ────────────────────────────────────────────────
+
+let liqChart, liqSellSeries, liqBuySeries;
+
+function initLiquidationsChart() {
+  const container = document.getElementById('chart-liq-body');
+  if (!container) return;
+  liqChart = LightweightCharts.createChart(container, {
+    ...SUB_CHART_THEME,
+    autoSize: true,
+  });
+
+  liqSellSeries = liqChart.addHistogramSeries({
+    color: '#ff3d5c',
+    priceFormat: { type: 'custom', formatter: v => fmtLarge(v) },
+    priceScaleId: 'liq',
+  });
+
+  liqBuySeries = liqChart.addHistogramSeries({
+    color: '#00c97a',
+    priceFormat: { type: 'custom', formatter: v => fmtLarge(v) },
+    priceScaleId: 'liq',
+  });
+
+  liqChart.priceScale('liq').applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0.1 },
+  });
+
+  liqChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    hideSkeleton('skel-liq');
+  });
+}
+
+// ── Skeleton helpers ─────────────────────────────────────────────────
+
+function hideSkeleton(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('visible');
+}
+
+function showSkeleton(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.add('visible');
+}
+
+// ── Sync visible range across all charts ─────────────────────────────
+
+window._suppressSync = false;
+
+function syncTimeScales() {
+  const otherCharts = [basisChart, oiChart, cvdChart, volChart, fundingChart, liqChart].filter(Boolean);
+  let _syncing = false;
+  if (priceChart) {
+    priceChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+      if (!range || _syncing) return;
+      _syncing = true;
+      otherCharts.forEach(dst => {
+        if (dst !== priceChart) {
+          try { dst.timeScale().setVisibleRange(range); } catch (_) {}
         }
-      }
-    });
-    this.dataBySrc = {};
-  }
-
-  update(ohlcvBySource, activeFilters) {
-    const sources = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bsc-pancakeswap', 'agg-spot', 'agg-perp'];
-    const datasets = [];
-
-    for (const src of sources) {
-      if (!activeFilters.includes(src)) continue;
-      const bars = ohlcvBySource[src];
-      if (!bars || !bars.length) continue;
-      const isAgg = src.startsWith('agg-');
-      const isDex = src === 'bsc-pancakeswap';
-      datasets.push({
-        label: LABEL_MAP[src] || src,
-        data: bars.map(b => ({ x: b.timestamp * 1000, y: b.close })),
-        borderColor: COLORS[src],
-        backgroundColor: 'transparent',
-        borderWidth: isAgg ? 2.5 : 1.5,
-        borderDash: src.endsWith('-perp') && isAgg ? [4, 2] : [],
-        pointRadius: 0,
-        tension: 0.1,
-        order: isAgg ? 1 : 2,
       });
-    }
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
-}
-
-// ── Chart: Basis Panel ────────────────────────────────────────────────
-
-class BasisChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        scales: {
-          x: CHART_DEFAULTS.scales.x,
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => fmtBasis(v) }
-          }
-        }
-      }
+      _syncing = false;
     });
   }
-
-  update(basisSeries) {
-    if (!basisSeries) return;
-    const datasets = [];
-
-    for (const [exchange, series] of Object.entries(basisSeries.per_exchange || {})) {
-      if (!series.length) continue;
-      const key = 'basis_' + exchange;
-      datasets.push({
-        label: exchange.charAt(0).toUpperCase() + exchange.slice(1) + ' Basis',
-        data: series.map(p => ({ x: p.timestamp * 1000, y: p.basis })),
-        borderColor: COLORS[key] || '#888',
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.1,
-      });
-    }
-
-    if (basisSeries.aggregated && basisSeries.aggregated.length) {
-      datasets.push({
-        label: 'Agg Basis',
-        data: basisSeries.aggregated.map(p => ({ x: p.timestamp * 1000, y: p.basis })),
-        borderColor: COLORS.basis_agg,
-        backgroundColor: 'transparent',
-        borderWidth: 2.5,
-        pointRadius: 0,
-        tension: 0.1,
-        order: 1,
-      });
-    }
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
 }
 
-// ── Chart: Volume Panel ───────────────────────────────────────────────
+// ── Init all ─────────────────────────────────────────────────────────
 
-class VolumeChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'bar',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        plugins: {
-          ...CHART_DEFAULTS.plugins,
-          legend: { ...CHART_DEFAULTS.plugins.legend },
-        },
-        scales: {
-          x: { ...CHART_DEFAULTS.scales.x, stacked: false },
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            stacked: false,
-            ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => fmtVolume(v) }
-          }
-        }
-      }
-    });
-  }
-
-  update(ohlcvBySource, activeFilters) {
-    const spotSrcs = ['binance-spot', 'bybit-spot', 'bsc-pancakeswap'];
-    const perpSrcs = ['binance-perp', 'bybit-perp'];
-    const datasets = [];
-
-    for (const src of [...spotSrcs, ...perpSrcs]) {
-      if (!activeFilters.includes(src)) continue;
-      const bars = ohlcvBySource[src];
-      if (!bars || !bars.length) continue;
-      datasets.push({
-        label: LABEL_MAP[src] || src,
-        data: bars.map(b => ({ x: b.timestamp * 1000, y: b.volume })),
-        backgroundColor: hexAlpha(COLORS[src], 0.65),
-        borderColor: COLORS[src],
-        borderWidth: 0.5,
-        barPercentage: 0.7,
-        categoryPercentage: 0.8,
-      });
-    }
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
+function initAllCharts() {
+  initPriceChart();
+  initBasisChart();
+  initOIChart();
+  initCVDChart();
+  initVolumeChart();
+  initFundingChart();
+  initLiquidationsChart();
+  syncTimeScales();
 }
-
-// ── Chart: OI Panel ───────────────────────────────────────────────────
-
-class OIChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        scales: {
-          x: CHART_DEFAULTS.scales.x,
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            id: 'oi',
-            ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => fmtLarge(v) }
-          },
-          yDelta: {
-            position: 'left',
-            grid: { display: false },
-            ticks: { color: COLORS.oi_delta, font: { size: 9, family: "'JetBrains Mono', monospace" }, callback: v => fmtLarge(v) }
-          }
-        }
-      }
-    });
-  }
-
-  update(oiSeries) {
-    if (!oiSeries) return;
-    const datasets = [];
-    const agg = oiSeries.aggregated || [];
-
-    if (agg.length) {
-      datasets.push({
-        label: 'Total OI',
-        data: agg.map(p => ({ x: p.timestamp * 1000, y: p.oi || 0 })),
-        borderColor: COLORS.oi_total,
-        backgroundColor: hexAlpha(COLORS.oi_total, 0.08),
-        fill: true,
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.2,
-        yAxisID: 'y',
-        order: 1,
-      });
-
-      datasets.push({
-        label: 'OI Delta',
-        data: agg.map(p => ({ x: p.timestamp * 1000, y: p.delta || 0 })),
-        type: 'bar',
-        backgroundColor: agg.map(p => (p.delta >= 0 ? hexAlpha(COLORS.oi_total, 0.6) : hexAlpha(COLORS.oi_delta, 0.6))),
-        borderWidth: 0,
-        yAxisID: 'yDelta',
-        order: 2,
-      });
-    }
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
-}
-
-// ── Chart: CVD Panel ──────────────────────────────────────────────────
-
-class CVDChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        scales: {
-          x: CHART_DEFAULTS.scales.x,
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => fmtLarge(v) }
-          }
-        }
-      }
-    });
-  }
-
-  update(cvdSeries, activeFilters) {
-    if (!cvdSeries) return;
-    const datasets = [];
-    const perSrc = cvdSeries.per_source || {};
-
-    for (const [src, series] of Object.entries(perSrc)) {
-      if (!activeFilters.includes(src)) continue;
-      if (!series || !series.length) continue;
-      datasets.push({
-        label: LABEL_MAP[src] || src,
-        data: series.map(p => ({ x: p.timestamp * 1000, y: p.cvd })),
-        borderColor: COLORS[src] || '#888',
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.1,
-      });
-    }
-
-    if (cvdSeries.aggregated && cvdSeries.aggregated.length) {
-      datasets.push({
-        label: 'Agg CVD',
-        data: cvdSeries.aggregated.map(p => ({ x: p.timestamp * 1000, y: p.cvd })),
-        borderColor: COLORS['agg-spot'],
-        backgroundColor: 'transparent',
-        borderWidth: 2.5,
-        pointRadius: 0,
-        tension: 0.1,
-        order: 1,
-      });
-    }
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
-}
-
-// ── Chart: DEX Spread Panel ───────────────────────────────────────────
-
-class SpreadChart {
-  constructor(canvas) {
-    this.chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { datasets: [] },
-      options: {
-        ...deepMerge({}, CHART_DEFAULTS),
-        scales: {
-          x: CHART_DEFAULTS.scales.x,
-          y: {
-            ...CHART_DEFAULTS.scales.y,
-            ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => fmtBasis(v) }
-          }
-        }
-      }
-    });
-  }
-
-  update(spreadSeries) {
-    if (!spreadSeries || !spreadSeries.length) return;
-    const datasets = [
-      {
-        label: 'DEX Price',
-        data: spreadSeries.map(p => ({ x: p.timestamp * 1000, y: p.dex_price })),
-        borderColor: COLORS['bsc-pancakeswap'],
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.1,
-      },
-      {
-        label: 'CEX Spot Avg',
-        data: spreadSeries.map(p => ({ x: p.timestamp * 1000, y: p.cex_spot_avg })),
-        borderColor: COLORS['agg-spot'],
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.1,
-      },
-      {
-        label: 'Spread',
-        data: spreadSeries.map(p => ({ x: p.timestamp * 1000, y: p.spread })),
-        borderColor: COLORS.spread,
-        backgroundColor: hexAlpha(COLORS.spread, 0.08),
-        fill: true,
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.1,
-        yAxisID: 'ySpread',
-        order: 1,
-      }
-    ];
-
-    this.chart.options.scales.ySpread = {
-      position: 'left',
-      grid: { display: false },
-      ticks: { color: COLORS.spread, font: { size: 9, family: "'JetBrains Mono', monospace" }, callback: v => fmtBasis(v) }
-    };
-
-    this.chart.data.datasets = datasets;
-    this.chart.update('none');
-  }
-}
-
-// ── Liquidation Feed ──────────────────────────────────────────────────
-
-class LiqFeed {
-  constructor(feedEl, heatmapEl) {
-    this.feedEl = feedEl;
-    this.heatmapEl = heatmapEl;
-    this.seen = new Set();
-    this.heatmapData = {};
-  }
-
-  update(liqs) {
-    if (!liqs || !liqs.liquidations) return;
-    const items = liqs.liquidations.slice(0, 50);
-    let newCount = 0;
-
-    for (const liq of items.slice(0, 20)) {
-      const key = `${liq.timestamp}-${liq.source}-${liq.side}-${liq.price}`;
-      if (this.seen.has(key)) continue;
-      this.seen.add(key);
-      newCount++;
-
-      const div = document.createElement('div');
-      div.className = 'liq-item';
-      const side = liq.side === 'buy' ? 'LONG' : 'SHORT'; // liquidated longs = buy orders
-      div.innerHTML = `
-        <span class="liq-side ${liq.side === 'sell' ? 'long' : 'short'}">${side}</span>
-        <span class="liq-exchange">${liq.source.replace('-perp','').replace('-spot','')}</span>
-        <span class="liq-price">${fmtPrice(liq.price)}</span>
-        <span class="liq-qty">${fmtLarge(liq.quantity)}</span>
-        <span class="liq-time">${fmtTime(liq.timestamp)}</span>
-      `;
-      this.feedEl.insertBefore(div, this.feedEl.firstChild);
-    }
-
-    // Trim feed
-    while (this.feedEl.children.length > 60) {
-      this.feedEl.removeChild(this.feedEl.lastChild);
-    }
-
-    // Heatmap: aggregate by exchange+side in last 100 events
-    const counts = {};
-    for (const liq of items) {
-      const key = `${liq.source}|${liq.side}`;
-      counts[key] = (counts[key] || 0) + 1;
-    }
-    this.renderHeatmap(counts, items.length);
-  }
-
-  renderHeatmap(counts, total) {
-    if (!total) return;
-    const sources = ['binance-perp', 'bybit-perp'];
-    let html = '<div class="liq-heatmap-title">Liq Distribution</div>';
-    for (const src of sources) {
-      const longs = counts[`${src}|sell`] || 0;  // sell = long liquidated
-      const shorts = counts[`${src}|buy`] || 0;
-      const name = src.replace('-perp','');
-      html += `
-        <div style="margin-bottom:8px">
-          <div class="liq-bar-label" style="margin-bottom:3px">${name}</div>
-          <div class="liq-bar-item">
-            <div class="liq-bar-label" style="color:#ff4d6a;font-size:9px">LONG</div>
-            <div class="liq-bar-track"><div class="liq-bar-fill long" style="width:${(longs/Math.max(total,1)*100).toFixed(0)}%"></div></div>
-            <span style="font-family:monospace;font-size:9px;color:#8892a4;width:20px;text-align:right">${longs}</span>
-          </div>
-          <div class="liq-bar-item" style="margin-top:2px">
-            <div class="liq-bar-label" style="color:#00d084;font-size:9px">SHORT</div>
-            <div class="liq-bar-track"><div class="liq-bar-fill short" style="width:${(shorts/Math.max(total,1)*100).toFixed(0)}%"></div></div>
-            <span style="font-family:monospace;font-size:9px;color:#8892a4;width:20px;text-align:right">${shorts}</span>
-          </div>
-        </div>
-      `;
-    }
-    this.heatmapEl.innerHTML = html;
-  }
-}
-
-// ── Funding Panel ─────────────────────────────────────────────────────
-
-class FundingPanel {
-  constructor(el) {
-    this.el = el;
-  }
-
-  update(funding) {
-    if (!funding) return;
-    const rates = funding.per_source || {};
-    const cells = {
-      'binance-perp': { label: 'Binance Perp', rate: rates['binance-perp'] },
-      'bybit-perp':   { label: 'Bybit Perp',   rate: rates['bybit-perp'] },
-    };
-
-    let html = '';
-    for (const [src, info] of Object.entries(cells)) {
-      const r = info.rate;
-      const cls = r === null ? '' : (r >= 0 ? 'positive' : 'negative');
-      const annual = r !== null ? (r * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
-      html += `
-        <div class="funding-cell">
-          <div class="funding-exchange">${info.label}</div>
-          <div class="funding-rate ${cls}">${r !== null ? (r * 100).toFixed(4) + '%' : '–'}</div>
-          <div class="funding-annual">${annual}</div>
-        </div>
-      `;
-    }
-
-    // Avg
-    const avg = funding.average_rate;
-    const avgCls = avg === null ? '' : (avg >= 0 ? 'positive' : 'negative');
-    const avgAnnual = avg !== null ? (avg * 3 * 365 * 100).toFixed(1) + '% p.a.' : '–';
-    html += `
-      <div class="funding-cell" style="grid-column:1/-1;background:#111318">
-        <div class="funding-exchange">Average</div>
-        <div class="funding-rate ${avgCls}">${avg !== null ? (avg * 100).toFixed(4) + '%' : '–'}</div>
-        <div class="funding-annual">${avgAnnual}</div>
-      </div>
-    `;
-
-    this.el.innerHTML = html;
-  }
-}
-
-// ── Utilities ─────────────────────────────────────────────────────────
-
-function fmtPrice(v) {
-  if (v === null || v === undefined) return '–';
-  return v.toFixed(4);
-}
-
-function fmtBasis(v) {
-  if (v === null || v === undefined) return '–';
-  const s = v.toFixed(4);
-  return v >= 0 ? '+' + s : s;
-}
-
-function fmtLarge(v) {
-  if (v === null || v === undefined) return '–';
-  const abs = Math.abs(v);
-  const sign = v < 0 ? '-' : '';
-  if (abs >= 1e9) return sign + (abs / 1e9).toFixed(2) + 'B';
-  if (abs >= 1e6) return sign + (abs / 1e6).toFixed(2) + 'M';
-  if (abs >= 1e3) return sign + (abs / 1e3).toFixed(1) + 'K';
-  return sign + abs.toFixed(2);
-}
-
-function fmtVolume(v) { return fmtLarge(v); }
-
-function fmtTime(ts) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function hexAlpha(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function deepMerge(target, source) {
-  for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      target[key] = deepMerge(target[key] || {}, source[key]);
-    } else {
-      target[key] = source[key];
-    }
-  }
-  return target;
-}
-
-// Export for use in main.js
-window.PriceChart = PriceChart;
-window.BasisChart = BasisChart;
-window.VolumeChart = VolumeChart;
-window.OIChart = OIChart;
-window.CVDChart = CVDChart;
-window.SpreadChart = SpreadChart;
-window.LiqFeed = LiqFeed;
-window.FundingPanel = FundingPanel;
-window.COLORS = COLORS;
-window.fmtPrice = fmtPrice;
-window.fmtBasis = fmtBasis;
-window.fmtLarge = fmtLarge;
