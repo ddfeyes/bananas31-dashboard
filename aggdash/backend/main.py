@@ -747,6 +747,21 @@ async def get_analytics_snapshot():
     return await analytics_engine.snapshot()
 
 
+@app.get("/api/snapshot")
+async def get_snapshot():
+    """Alias for /api/analytics/snapshot — returns latest prices, OI, funding, basis."""
+    prices_data = await get_prices()
+    oi_data = await get_oi()
+    funding_data = await get_funding()
+    analytics = await analytics_engine.snapshot()
+    return {
+        "prices": prices_data.get("prices", {}),
+        "oi": oi_data,
+        "funding": funding_data,
+        "analytics": analytics,
+    }
+
+
 @app.get("/api/analytics/cvd")
 async def get_cvd(source: str = None, window_secs: int = 3600):
     """Current CVD per source and aggregated."""
