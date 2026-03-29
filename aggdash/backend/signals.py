@@ -241,14 +241,15 @@ class SignalEngine:
             curr_sign = 1 if current_basis >= 0 else -1
             if prev_sign != curr_sign:
                 direction = "positive→negative" if curr_sign < 0 else "negative→positive"
+                prev_basis = self._prev_agg_basis  # capture before overwriting
                 self._prev_agg_basis = current_basis
                 return {
                     "id": "basis_flip",
                     "name": "Basis Flip",
                     "severity": "warning",
-                    "message": f"Basis flipped {direction} ({self._prev_agg_basis*100:.3f}%→{current_basis*100:.3f}%) — regime change",
+                    "message": f"Basis flipped {direction} ({prev_basis*100:.3f}%→{current_basis*100:.3f}%) — regime change",
                     "value": current_basis,
-                    "prev_value": self._prev_agg_basis,
+                    "prev_value": prev_basis,
                 }
 
         # Always update prev after first non-None value
