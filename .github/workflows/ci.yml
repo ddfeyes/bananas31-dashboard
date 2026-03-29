@@ -33,7 +33,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/ -v --tb=short 2>/dev/null || echo "No tests found, skipping"
+          pytest tests/ -v --tb=short
 
   frontend-check:
     runs-on: ubuntu-latest
