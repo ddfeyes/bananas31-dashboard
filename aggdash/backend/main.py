@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(flush_ohlcv_periodically())
 
     # Start Telegram signal alert task (SPEC §4: post to topic 7135 every 5 min)
-    asyncio.create_task(_telegram_signal_alert_loop())
+    # asyncio.create_task(_telegram_signal_alert_loop())  # DISABLED: Telegram alerts off
     asyncio.create_task(_db_prune_loop())
 
     logger.info("All collectors started")
